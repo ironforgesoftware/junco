@@ -183,7 +183,7 @@ the agent minutes of confused exploration:
 - **Behavior (EARS)** — `WHEN <trigger> THE SYSTEM SHALL <response>`. The behavioral counterpart to Verification: triggers are spelled out so commands and assertions map 1:1. Distinct from Done-when (structural) — Behavior is what the system _does_, Done-when is what _exists_.
 - **Verification block** — exact commands, not "make sure it builds". The agent runs them; it doesn't narrate.
 - **Done when** — observable outcomes, not "looks good". Gives the agent a clear stop condition.
-- **No Notes section** — the anti-loop discipline lives in the worker's own prompt preamble since 0.13; plans carry only ticket-specific content.
+- **No Notes section** — the anti-loop discipline lives in the worker's own prompt preamble; plans carry only ticket-specific content.
 
 ## Template values — guidance
 

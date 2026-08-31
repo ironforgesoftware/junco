@@ -322,7 +322,6 @@ surfaces results in the PR body. Don't run them yourself.
 - **`amends_pr: 42`** is the only metadata that matters for routing. Everything else (branch_name, base_branch, pr_title, labels) is derived from the PR or left unchanged.
 - **H1 references the PR number** so filenames + PR pages can be cross-referenced at a glance.
 - **"What needs fixing" section** replaces "Why / Scope" for amend mode — the PR already has context; what we need is the delta.
-- **Amend-mode Notes block is different** from fresh-ticket Notes (item 2 — "no force-pushes" — is amend-specific). Don't copy the fresh-ticket notes block into an amend ticket.
 
 ## Calibration notes for the skill
 
