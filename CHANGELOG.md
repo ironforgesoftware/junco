@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-30
+
 ### Added
 
 - `junco lint <file>` validates a ticket — plan-lint plus repo/branch preflight (repo path exists and is a git repo, origin remote exists and is GitHub, the derived branch is not already on origin, frontmatter labels exist on the repo) — without submitting it.
