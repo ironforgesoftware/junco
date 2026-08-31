@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { environmentChecks, runLint, ticketSlug } from "../src/submitPreflight.js";
+import { join } from "node:path";
+import {
+  environmentChecks,
+  runLint,
+  ticketSlug,
+  decideRoute,
+  runSubmitDryRun,
+} from "../src/submitPreflight.js";
+import { inboxPath } from "../src/dispatch.js";
 import { makeConfig } from "./helpers/config.js";
+import type { Config } from "../src/types.js";
 
 const REPO = "/sbxroot/repos/acme-api";
 
@@ -63,6 +72,106 @@ function cfg() {
     removeWorktreeOnSuccess: false,
   });
 }
+
+// --- decideRoute / runSubmitDryRun fixtures ---
+// Mirrors tests/submitAsIssue.test.ts's DEFAULT_GITHUB fixture: acme/api
+// watched at REPO, bot account enabled.
+const DEFAULT_GITHUB: Config["github"] = {
+  enabled: true,
+  triggerLabel: "junco",
+  askLabel: "junco:ask",
+  pollIntervalSeconds: 60,
+  repos: [{ nwo: "acme/api", path: REPO }],
+  requireApproval: true,
+  plannerModelId: null,
+  externalReposRoot: "/sbxroot/external",
+};
+const DEFAULT_BOT_ACCOUNT: Config["botAccount"] = {
+  enabled: true,
+  configDir: "/sbxroot/junco-gh",
+};
+
+/** cfg() plus a watched-and-bot-enabled github/botAccount, toggleable per test. */
+function ghCfg(opts: { githubEnabled?: boolean; botEnabled?: boolean } = {}) {
+  return makeConfig(
+    {
+      dataDir: "/sbxroot/data",
+      queueRoot: "/sbxroot/data/queue",
+      worktreeRoot: "/sbxroot/worktrees",
+      tools: ["read", "bash"],
+      criticEnabled: false,
+      planLintEnabled: true,
+      verifyEnabled: false,
+      supervisorEnabled: false,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: false,
+    },
+    {
+      github: { ...DEFAULT_GITHUB, enabled: opts.githubEnabled ?? true },
+      botAccount: { ...DEFAULT_BOT_ACCOUNT, enabled: opts.botEnabled ?? true },
+    },
+  );
+}
+
+/** fakeGit with defaults suited to decideRoute: a GitHub origin resolving to
+ * acme/api, and origin/main as the resolved default branch — overridable
+ * per-call via the same `answers` shape fakeGit takes. */
+function routeDeps(answers: Parameters<typeof fakeGit>[0] = {}) {
+  return {
+    gitFn: fakeGit({
+      origin: { code: 0, stdout: "git@github.com:acme/api.git\n" },
+      head: { code: 0, stdout: "origin/main\n" },
+      ...answers,
+    }).fn,
+  };
+}
+
+const TICKET_WITH_TIMEOUT = `---
+id: add-x-2026-08-31
+repo: ${JSON.stringify(REPO)}
+pr_title: "Add X"
+timeout_minutes: 60
+draft: true
+---
+
+# Add X
+
+## Steps
+
+### Step 1: do it
+
+Make the change.
+
+\`\`\`bash
+git commit -m "feat: x"
+\`\`\`
+
+## Notes for the agent (strict)
+
+Do not loop.
+`;
+
+const TICKET_LOCAL = `---
+id: add-y-2026-08-31
+repo: ${JSON.stringify(REPO)}
+---
+
+# Add Y
+
+## Steps
+
+### Step 1: do it
+
+Make the change.
+
+\`\`\`bash
+git commit -m "feat: y"
+\`\`\`
+
+## Notes for the agent (strict)
+
+Do not loop.
+`;
 
 describe("ticketSlug", () => {
   it("mirrors dispatch.ts slugging", () => {
@@ -201,5 +310,115 @@ describe("runLint", () => {
     });
     expect(code).toBe(0);
     expect(out.join("")).toContain("[warning] branch_check_failed");
+  });
+});
+
+describe("decideRoute", () => {
+  it("routes a plain fresh ticket on a watched repo to the issue destination", async () => {
+    const d = await decideRoute(
+      ghCfg(),
+      { repo: REPO, timeout_minutes: 60, draft: true },
+      routeDeps(),
+    );
+    expect(d.destination).toBe("issue");
+    expect(d.watchedNwo).toBe("acme/api");
+    expect(d.carriedTimeout).toBe(60);
+    expect(d.discarded).toContain("draft");
+    expect(d.discarded).not.toContain("timeout_minutes");
+  });
+
+  it("shape exclusions force the inbox with a reason each", async () => {
+    for (const fm of [
+      { repo: REPO, amends_pr: 7 },
+      { repo: REPO, depends_on: ["other"] },
+      { repo: REPO, branch_name: "custom" },
+      { repo: REPO, tools: ["read"] },
+      { repo: REPO, workdir: "sub/" },
+    ]) {
+      const d = await decideRoute(ghCfg(), fm, routeDeps());
+      expect(d.destination).toBe("inbox");
+      expect(d.reasons.length).toBeGreaterThan(0);
+    }
+    // empty depends_on is NOT exclusionary
+    const ok = await decideRoute(ghCfg(), { repo: REPO, depends_on: [] }, routeDeps());
+    expect(ok.destination).toBe("issue");
+  });
+
+  it("base_branch equal to the origin default is not exclusionary; different or unresolvable is", async () => {
+    const same = await decideRoute(ghCfg(), { repo: REPO, base_branch: "main" }, routeDeps());
+    expect(same.destination).toBe("issue");
+    const diff = await decideRoute(ghCfg(), { repo: REPO, base_branch: "develop" }, routeDeps());
+    expect(diff.destination).toBe("inbox");
+    const unresolved = await decideRoute(
+      ghCfg(),
+      { repo: REPO, base_branch: "main" },
+      routeDeps({ head: { code: 1, stdout: "" } }),
+    );
+    expect(unresolved.destination).toBe("inbox");
+  });
+
+  it("disabled github/bot or an unwatched repo routes to the inbox with the failed leg as reason", async () => {
+    const noGh = await decideRoute(ghCfg({ githubEnabled: false }), { repo: REPO }, routeDeps());
+    expect(noGh.destination).toBe("inbox");
+    expect(noGh.reasons.join(" ")).toContain("github.enabled");
+    const noBot = await decideRoute(ghCfg({ botEnabled: false }), { repo: REPO }, routeDeps());
+    expect(noBot.reasons.join(" ")).toContain("botAccount.enabled");
+    const unwatched = await decideRoute(
+      ghCfg(),
+      { repo: "/sbxroot/repos/other" },
+      routeDeps({ origin: { code: 0, stdout: "git@github.com:other/repo.git\n" } }),
+    );
+    expect(unwatched.destination).toBe("inbox");
+  });
+});
+
+describe("runSubmitDryRun", () => {
+  it("prints the issue verdict with carried/discard/timeout lines and submits nothing", async () => {
+    const out: string[] = [];
+    const code = await runSubmitDryRun(ghCfg(), "t.md", TICKET_WITH_TIMEOUT, {
+      ...routeDeps(),
+      existsFn: (p) => p === REPO, // repo exists; inbox dest does not
+      fetchLabels: () => new Set(["bug"]),
+      printFn: (s) => out.push(s),
+    });
+    const text = out.join("");
+    expect(code).toBe(0);
+    expect(text).toContain("destination: issue");
+    expect(text).toContain("watched: acme/api");
+    expect(text).toContain("carried: timeout_minutes=60");
+    expect(text).toMatch(/would discard: .*draft/);
+    expect(text).toContain("timeout: 60 minutes (carried)");
+    expect(text).toContain("dry run — nothing submitted");
+  });
+
+  it("prints the inbox verdict with the would-submit path and exits 1 on lint errors", async () => {
+    const out: string[] = [];
+    const bad = TICKET_LOCAL.replace("## Notes for the agent (strict)", "## Notes"); // lint error
+    const code = await runSubmitDryRun(ghCfg({ githubEnabled: false }), "t.md", bad, {
+      ...routeDeps(),
+      existsFn: (p) => p === REPO,
+      fetchLabels: () => new Set(),
+      printFn: (s) => out.push(s),
+    });
+    const text = out.join("");
+    expect(code).toBe(1);
+    expect(text).toContain("destination: inbox");
+    expect(text).toContain("would submit: ");
+    expect(text).toContain("[error] notes_block_present");
+  });
+
+  it("warns when the inbox destination is already queued", async () => {
+    const localCfg = ghCfg({ githubEnabled: false });
+    const dest = join(inboxPath(localCfg), `${ticketSlug("add-y-2026-08-31")}.md`);
+    const out: string[] = [];
+    const code = await runSubmitDryRun(localCfg, "t.md", TICKET_LOCAL, {
+      ...routeDeps(),
+      existsFn: (p) => p === REPO || p === dest, // repo AND the computed inbox path both exist
+      fetchLabels: () => new Set(["bug"]),
+      printFn: (s) => out.push(s),
+    });
+    const text = out.join("");
+    expect(code).toBe(0);
+    expect(text).toContain("already queued");
   });
 });

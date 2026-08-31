@@ -1805,6 +1805,33 @@ describe("run(['submit']) — missing file argument", () => {
   });
 });
 
+// --- submit --dry-run: CLI-owned routing verdict (submitPreflight.ts) ---
+
+describe("run(['submit', '--dry-run', ...])", () => {
+  it("submit --dry-run routes to runSubmitDryRunFn; --plan and stdin are usage errors", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "junco-dry-"));
+    const file = join(dir, "t.md");
+    writeFileSync(file, "---\nid: x\nrepo: /sbxroot/r\n---\n\n# T\n", "utf8");
+    // NOTE: the submit block reads stdin BEFORE the --dry-run branch when
+    // fileArg is "-", so the stdin case MUST inject readStdinFn or the test
+    // hangs on real stdin (same pre-existing shape as --as-issue's stdin check).
+    const deps = { loadConfigFn: () => stubConfig(), readStdinFn: async () => "" };
+    expect(await run(["submit", "--dry-run", "--plan", file], deps)).toBe(2);
+    expect(await run(["submit", "--dry-run", "-"], deps)).toBe(2);
+    let called = 0;
+    const code = await run(["submit", "--dry-run", file], {
+      ...deps,
+      runSubmitDryRunFn: async () => {
+        called++;
+        return 0;
+      },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(code).toBe(0);
+    expect(called).toBe(1);
+  });
+});
+
 // --- submit --plan (Task 12, spec 2026-08-20 Layer 2): the local CLI door
 // that compiles an approved junco-plan fence into child tickets. ---
 
