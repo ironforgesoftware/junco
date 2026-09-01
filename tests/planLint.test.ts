@@ -849,9 +849,35 @@ index 1111111..2222222 100644
   });
 
   it("errors on a junco-patch fence that is not a well-formed series", () => {
-    const bad = "## Why\n\nx\n\n```junco-patch\nnot a patch\n```\n";
+    // Prose-shaped ON PURPOSE: a Files table and a commit-less Step would both
+    // trip the prose rules if the mode gate keyed on "the series PARSES"
+    // instead of "a patch fence is PRESENT". A malformed series must report
+    // exactly one thing — patch_parses — not a pile of irrelevant prose
+    // errors, so this fixture is what makes the gate's condition observable.
+    const bad = [
+      "## Why",
+      "",
+      "x",
+      "",
+      "## Files",
+      "",
+      "| `src/a.ts` | modify |",
+      "| --- | --- |",
+      "",
+      "### Step 1: do a thing",
+      "",
+      "no commit here",
+      "",
+      "```junco-patch",
+      "not a patch",
+      "```",
+      "",
+    ].join("\n");
     const r = lintTicket(bad, {}, { checkLabels: false });
-    expect(r.violations.map((v) => v.rule)).toContain("patch_parses");
+    const rules = r.violations.map((v) => v.rule);
+    expect(rules).toContain("patch_parses");
+    expect(rules).not.toContain("steps_have_commits");
+    expect(rules).not.toContain("files_table_referenced");
     expect(r.ok).toBe(false);
   });
 
