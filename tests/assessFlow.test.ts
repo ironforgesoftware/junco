@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAssessFlow } from "../src/assessFlow.js";
+import { resolveSandbox, type SessionOverrides } from "../src/agent/session.js";
+import { assertWriteAllowed, SandboxViolation } from "../src/agent/sandbox/pathJail.js";
 import { listPending, writePending, assessReviewPaths } from "../src/assessReview.js";
 import { listHistory, readHistory, recordRun } from "../src/assessHistory.js";
 import { parseTicket } from "../src/ticket.js";
@@ -233,6 +235,56 @@ describe("runAssessFlow", () => {
     expect(body).toContain("awaiting review");
     expect(body).toContain("junco audit file assess-1");
     expect(body).toContain("Parked for review: 2");
+  });
+
+  // #346: an audit runs in the operator's LIVE checkout, and a ticket-level
+  // `tools:` is used verbatim — so one that adds bash/write must not turn a
+  // "read-only audit" into write access to the checkout or its .git. The
+  // sandbox policy has to enforce that on its own, allowlist or not.
+  it("builds the sandbox policy with scratch as the only writable root — the checkout stays unwritable even when the ticket opts into write tools (#346)", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    mkdirSync(join(repo, ".git"));
+    const { path } = claim(j, ticketContent(repo, "tools:\n  - read\n  - write\n  - bash\n"));
+    const ticket = parseTicket(path, readFileSync(path, "utf8"), 1);
+
+    let captured: { cfg: Config; cwd: string; overrides?: SessionOverrides } | undefined;
+    const gh = ghDedupEmpty();
+    await runAssessFlow(cfg(root), ticket, path, {
+      ghFn: gh.ghFn,
+      gitFn: fakeGit(originHttps),
+      runCmdFn: fakeRunCmd("{}"),
+      sessionFactoryFor: (passedCfg, cwd, overrides) => {
+        captured = { cfg: passedCfg, cwd, overrides };
+        return fakeSession("no findings");
+      },
+    });
+    if (!captured) throw new Error("the audit session factory was never called");
+    expect(captured.cwd).toBe(repo);
+    expect(captured.cfg.tools).toEqual(["read", "write", "bash"]);
+
+    // The policy the flow's overrides produce, with the sandbox on.
+    const sbx = await resolveSandbox(
+      { ...captured.cfg, sandbox: { ...captured.cfg.sandbox, enabled: true, backend: "none" } },
+      captured.cwd,
+      captured.overrides,
+      {
+        probe: async () => ({ code: 0 }),
+        makeScratch: () => "/sbxroot/scratch",
+        platform: "linux",
+        home: "/sbxroot/home/x",
+        gitDirs: async () => null,
+        pathExists: () => true,
+        ensureDir: () => {},
+      },
+    );
+    const policy = sbx?.policy;
+    if (!policy) throw new Error("expected a sandbox policy");
+    expect(policy.writableRoots).toEqual(["/sbxroot/scratch"]);
+    expect(() => assertWriteAllowed(join(repo, ".git", "HEAD"), repo, policy)).toThrow(
+      SandboxViolation,
+    );
+    expect(() => assertWriteAllowed("src/index.ts", repo, policy)).toThrow(SandboxViolation);
   });
 
   it("threads the ticket's scoping issue into the parked batch", async () => {

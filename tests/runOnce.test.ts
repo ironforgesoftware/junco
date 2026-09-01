@@ -14,6 +14,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { runOnce, claimNextTask } from "../src/runOnce.js";
+import { resolveSandbox, type SessionOverrides } from "../src/agent/session.js";
+import { assertWriteAllowed, SandboxViolation } from "../src/agent/sandbox/pathJail.js";
 import type { Config, Ticket, TicketGithub } from "../src/types.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import type { AssessFlowResult } from "../src/assessFlow.js";
@@ -178,6 +180,59 @@ describe("runOnce", () => {
       },
     });
     expect(receivedTools).toEqual(["read", "grep", "find", "ls"]);
+  });
+
+  // #346: the Q&A cwd is the operator's LIVE checkout (a validated `workdir:`),
+  // and a ticket-level `tools:` is used verbatim — so one that adds bash/write
+  // must not turn the session into write access to the checkout or its .git.
+  // The sandbox policy has to enforce that on its own, allowlist or not.
+  it("Q&A: the sandbox policy keeps the live checkout unwritable even when the ticket opts into write tools (#346)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing", "done", "failed"].forEach((d) =>
+      mkdirSync(join(j, d), { recursive: true }),
+    );
+    const checkout = mkdtempSync(join(tmpdir(), "junco-live-checkout-"));
+    mkdirSync(join(checkout, ".git"));
+    writeFileSync(
+      join(j, "inbox", "q1.md"),
+      `---\nid: q1\nworkdir: ${JSON.stringify(checkout)}\ntools:\n  - read\n  - write\n  - bash\n---\n# Q\nask\n`,
+      "utf8",
+    );
+
+    let captured: { cfg: Config; cwd: string; overrides?: SessionOverrides } | undefined;
+    await runOnce(cfg(root), {
+      sessionFactoryFor: (passedCfg, cwd, overrides) => {
+        captured = { cfg: passedCfg, cwd, overrides };
+        return fakeFactory();
+      },
+    });
+    if (!captured) throw new Error("the Q&A session factory was never called");
+    expect(captured.cwd).toBe(checkout);
+    expect(captured.cfg.tools).toEqual(["read", "write", "bash"]);
+
+    // The policy the flow's overrides produce, with the sandbox on.
+    const sbx = await resolveSandbox(
+      { ...captured.cfg, sandbox: { ...captured.cfg.sandbox, enabled: true, backend: "none" } },
+      captured.cwd,
+      captured.overrides,
+      {
+        probe: async () => ({ code: 0 }),
+        makeScratch: () => "/sbxroot/scratch",
+        platform: "linux",
+        home: "/sbxroot/home/x",
+        gitDirs: async () => null,
+        pathExists: () => true,
+        ensureDir: () => {},
+      },
+    );
+    const policy = sbx?.policy;
+    if (!policy) throw new Error("expected a sandbox policy");
+    expect(policy.writableRoots).toEqual(["/sbxroot/scratch"]);
+    expect(() => assertWriteAllowed(join(checkout, ".git", "HEAD"), checkout, policy)).toThrow(
+      SandboxViolation,
+    );
+    expect(() => assertWriteAllowed("README.md", checkout, policy)).toThrow(SandboxViolation);
   });
 
   it("skips tickets whose not_before is in the future", async () => {

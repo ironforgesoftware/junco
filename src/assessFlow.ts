@@ -22,7 +22,12 @@ import type { Config, Ticket, RunResult } from "./types.js";
 import type { SpendLedger } from "./spendLedger.js";
 import { queuePaths, expandHome } from "./config.js";
 import { gh, git, runCmd, GitOpError, isNetworkError } from "./git.js";
-import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
+import {
+  runAgent,
+  makePiSessionFactory,
+  type AgentSessionLike,
+  type SessionOverrides,
+} from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
@@ -46,7 +51,11 @@ export interface AssessDeps {
   ghFn?: typeof gh;
   gitFn?: typeof git;
   runCmdFn?: typeof runCmd;
-  sessionFactoryFor?: (cfg: Config, cwd: string) => () => Promise<AgentSessionLike>;
+  sessionFactoryFor?: (
+    cfg: Config,
+    cwd: string,
+    overrides?: SessionOverrides,
+  ) => () => Promise<AgentSessionLike>;
   abortSignal?: AbortSignal;
   onProgress?: Parameters<typeof runAgent>[0]["onProgress"] extends infer T ? T : never;
   /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
@@ -266,10 +275,14 @@ export async function runAssessFlow(
 
   // --- Phase 4: Agent audit. Mirror the Q&A agent block (runOnce.ts:201-257):
   // read-only tool default, cwd = repoPath, supervisor gated the same way,
-  // same transcript convention, timeout from the ticket, abortSignal threaded. ---
+  // same transcript convention, timeout from the ticket, abortSignal threaded.
+  // `readOnly` (#346): repoPath is the operator's live checkout, so the sandbox
+  // keeps scratch as the only writable root whatever `tools:` the ticket names. ---
   const assessTools = ticket.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
   const assessCfg: Config = { ...cfg, tools: assessTools };
-  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(assessCfg, repoPath);
+  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(assessCfg, repoPath, {
+    readOnly: true,
+  });
   // Spend is recorded immediately by the envelope, BEFORE any requeue/finalize
   // branching below — mirrors runOnce.ts's Q&A wire and prFlow's main-session
   // record: the dollars were spent regardless of what the ticket does next

@@ -144,6 +144,25 @@ describe("buildPolicy", () => {
     ]);
   });
 
+  // #346: the read-only flows run in the operator's LIVE checkout, and the
+  // read-only guarantee must not rest on the tool allowlist alone — the policy
+  // itself has to refuse writes there, .git included.
+  it("readOnly: scratch is the only writable root — cwd, git metadata and the extras are dropped (#346)", () => {
+    const pol = buildPolicy({ ...base, readOnly: true, gitWritePaths: ["/sbxroot/repo/.git"] });
+    expect(pol.writableRoots).toEqual(["/sbxroot/nowhere/scratch1"]);
+    const cwd = "/sbxroot/work/tree";
+    expect(() => assertWriteAllowed("src/a.ts", cwd, pol)).toThrow(SandboxViolation);
+    expect(() => assertWriteAllowed(`${cwd}/.git/HEAD`, cwd, pol)).toThrow(SandboxViolation);
+    expect(() => assertWriteAllowed("/sbxroot/extra/writable/x", cwd, pol)).toThrow(
+      SandboxViolation,
+    );
+    expect(assertWriteAllowed("/sbxroot/nowhere/scratch1/note", cwd, pol)).toBe(
+      "/sbxroot/nowhere/scratch1/note",
+    );
+    // Reads of the checkout are unaffected.
+    expect(assertReadAllowed("src/a.ts", cwd, pol)).toBe(`${cwd}/src/a.ts`);
+  });
+
   it("read denials = builtins + sensitive data subtrees + extras; data files land in readDenyFiles", () => {
     const pol = buildPolicy(base);
     expect(pol.readDenyPaths).toContain("/sbxroot/home/x/.ssh");
