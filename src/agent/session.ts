@@ -61,6 +61,21 @@ export interface AgentSessionLike {
 }
 
 /**
+ * The chat seam (spec 2026-09-01 §2.1): the interactive subset of the SDK
+ * session the dashboard chat drives. Extends — never mutates — AgentSessionLike
+ * so every existing fake keeps compiling. Verified against SDK 0.84.2
+ * `dist/core/agent-session.d.ts`: steer(text) line 371; isStreaming line 291,
+ * isIdle line 293; messages getter line 318. (queueMessage is declared there
+ * too but is `undefined` on the runtime object — deliberately not used.)
+ */
+export interface ChatSessionLike extends AgentSessionLike {
+  steer(text: string): Promise<void>;
+  readonly isStreaming: boolean;
+  readonly isIdle: boolean;
+  readonly messages: unknown[];
+}
+
+/**
  * Sink for the per-ticket transcript. `runAgent` writes one already-serialized
  * JSON line per non-delta event (plus synthetic guard-decision records) through
  * this seam — injectable so the fs writes sit behind a deps boundary like every
@@ -432,6 +447,10 @@ export interface SessionOverrides {
   thinkingLevel?: ThinkingLevel | string;
   /** Per-ticket egress opt-in; overrides cfg.sandbox.network for this session. */
   network?: boolean;
+  /** Chat (spec 2026-09-01 §2.1): a file-backed SDK SessionManager built by
+   *  makeSessionManager. Absent → SessionManager.inMemory(cwd), unchanged for
+   *  every other caller. Opaque here; typed at the SDK boundary only. */
+  sessionManager?: unknown;
 }
 
 export interface ResolveSandboxDeps {
@@ -796,7 +815,7 @@ export function makePiSessionFactory(
       // The critic passes `[]` (no tools — diff-vs-spec review needs none);
       // default is the configured worker allowlist.
       tools: overrides?.tools ?? cfg.tools,
-      sessionManager: SessionManager.inMemory(cwd),
+      sessionManager: (overrides?.sessionManager as never) ?? SessionManager.inMemory(cwd),
       // Never read ~/.pi/agent/settings.json or the target repo's
       // .pi/settings.json (trusted by default by the SDK — a repo-controlled
       // injection surface for a queue worker). Retry knobs come from config;
@@ -820,4 +839,66 @@ export function makePiSessionFactory(
     });
     return session;
   };
+}
+
+export type SessionManagerMode =
+  | { create: { cwd: string; dir: string } }
+  | { open: { file: string; dir: string; cwd: string } };
+
+/**
+ * Paths this process has handed out via makeSessionManager's "create" branch,
+ * kept only to bridge the SDK's lazy first flush: SessionManager.create()
+ * reports a getSessionFile() path immediately, but session-manager.js's
+ * _persist() (its write path) writes nothing to disk until the first
+ * ASSISTANT reply lands — so a session with zero completed turns leaves no
+ * file on disk at all. Worse, SessionManager.open() never throws for a
+ * missing path when a cwdOverride is given (session-manager.js ~1190: the
+ * only existsSync+header-read guard is skipped whenever cwdOverride is
+ * defined, which makeSessionManager's "open" branch always supplies) — it
+ * silently builds an unrelated fresh session at that path instead. An
+ * existsSync() check alone therefore can't tell "this process created it but
+ * nothing was ever flushed" from "no one ever created this" — both read as
+ * absent. This registry closes that gap: a path handed out by "create" this
+ * process is trusted even before its first flush; a path this process never
+ * created (e.g. a data-tree record surviving a crash that happened before the
+ * first flush) still throws so the caller (chatSession.ts) archives and
+ * recreates. Entries are cheap (a string) and rare (once per new chat
+ * session), so this is never evicted.
+ */
+const createdSessionFiles = new Set<string>();
+
+/**
+ * Chat sessions persist under a junco-owned dir (spec 2026-09-01 §2.1) —
+ * never ~/.pi. SDK 0.84.2 `dist/core/session-manager.d.ts`: create(cwd,
+ * sessionDir) line 318, open(path, sessionDir, cwdOverride) line 325,
+ * getSessionFile() line 208. Throws on an unreadable file; the caller
+ * (chatSession.ts) archives it and recreates.
+ */
+export async function makeSessionManager(
+  mode: SessionManagerMode,
+): Promise<{ manager: unknown; file: string }> {
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  if ("open" in mode && !existsSync(mode.open.file) && !createdSessionFiles.has(mode.open.file)) {
+    throw new Error(`session file not found: ${mode.open.file}`);
+  }
+  const manager =
+    "create" in mode
+      ? SessionManager.create(mode.create.cwd, mode.create.dir)
+      : SessionManager.open(mode.open.file, mode.open.dir, mode.open.cwd);
+  const file = (manager as { getSessionFile(): string | undefined }).getSessionFile();
+  if (!file) throw new Error("SDK SessionManager reported no session file (not persisting)");
+  if ("create" in mode) createdSessionFiles.add(file);
+  return { manager, file };
+}
+
+/** Same build as makePiSessionFactory; the real SDK session structurally
+ * satisfies the wider ChatSessionLike, so the widening is one cast at the
+ * SDK boundary. */
+export function makeChatSessionFactory(
+  cfg: Config,
+  cwd: string,
+  overrides: SessionOverrides,
+): () => Promise<ChatSessionLike> {
+  const inner = makePiSessionFactory(cfg, cwd, overrides);
+  return async () => (await inner()) as unknown as ChatSessionLike;
 }
