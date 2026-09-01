@@ -63,7 +63,11 @@ export function runConfigCommand(
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const err = deps.errFn ?? ((s: string) => process.stderr.write(s));
   const readFile = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
-  const writeFile = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
+  // 0600 (#343): config.json may hold a literal model.apiKey. The mode rides
+  // the tmp file through `set`'s rename, so a rewrite tightens a loose file too.
+  const writeFile =
+    deps.writeFileFn ??
+    ((p: string, s: string) => writeFileSync(p, s, { encoding: "utf8", mode: 0o600 }));
   const exists = deps.existsFn ?? existsSync;
   const [sub, ...rest] = argv;
 
@@ -138,7 +142,10 @@ export function runConfigCommand(
     // Headless scaffold — the old `junco init --yes` contract verbatim:
     // fresh → default config + queue dirs; existing → ensure dirs, NEVER
     // overwrite. (The interactive walkthrough lives in `junco dashboard`.)
-    const mkdir = deps.mkdirFn ?? ((p: string) => mkdirSync(p, { recursive: true }));
+    // 0700 (#343): the config's parent dir is the data root by default, and
+    // this runs before the daemon's ensureDataTree — whoever creates the root
+    // first fixes its mode.
+    const mkdir = deps.mkdirFn ?? ((p: string) => mkdirSync(p, { recursive: true, mode: 0o700 }));
     const loadConfigFn = deps.loadConfigFn ?? loadConfig;
     const resolved = resolve(configPath);
     const ensureDirs = (cfg: Config): string => {

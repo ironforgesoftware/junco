@@ -127,6 +127,12 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
         : (() => {
             throw new Error("ENOENT");
           })(),
+    // Default statFn: ENOENT for everything — the data-tree-modes check (#343)
+    // skips absent paths, so every pre-existing test's verdict is unchanged
+    // (ok, no warn). A test exercising a loose mode overrides this.
+    statFn: () => {
+      throw new Error("ENOENT");
+    },
     ...over,
   };
 }
@@ -2111,4 +2117,65 @@ describe("runDoctor version check", () => {
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
+});
+
+// #343: config.json may hold a literal model.apiKey and transcripts hold
+// verbatim private-repo file contents. Fresh trees are created owner-only; an
+// EXISTING tree is never re-moded by the daemon, so doctor is where a loose
+// one gets surfaced — warn (never fail) with the exact chmod to run.
+describe("runDoctor data tree modes check (#343)", () => {
+  const onWin32 = process.platform === "win32";
+
+  it.skipIf(onWin32)(
+    "warns with the chmod to run when the config or a tree dir is group/other-readable",
+    async () => {
+      const lines: string[] = [];
+      const code = await runDoctor(
+        "/x/config.json",
+        deps({
+          statFn: (p: string) => {
+            if (p === "/x/config.json") return { mode: 0o100644 };
+            if (p === "/sbxroot/junco-doc-state") return { mode: 0o40755 };
+            if (p === "/sbxroot/junco-doc-state/transcripts") return { mode: 0o40750 };
+            throw new Error("ENOENT");
+          },
+          printFn: (s) => lines.push(s),
+        }),
+      );
+      const text = lines.join("");
+      expect(code).toBe(0); // warn only — a loose mode is not a broken install
+      expect(text).toMatch(/⚠ data tree modes/);
+      expect(text).toContain("chmod 600 /x/config.json");
+      expect(text).toContain("chmod 700 /sbxroot/junco-doc-state");
+      expect(text).toContain("chmod 700 /sbxroot/junco-doc-state/transcripts");
+    },
+  );
+
+  it.skipIf(onWin32)("reports ok when every checked path is owner-only", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        statFn: (p: string) => ({ mode: p === "/x/config.json" ? 0o100600 : 0o40700 }),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const text = lines.join("");
+    expect(code).toBe(0);
+    expect(text).toMatch(/✓ data tree modes/);
+    expect(text).not.toMatch(/⚠ data tree modes/);
+    expect(text).not.toContain("chmod");
+  });
+
+  it.skipIf(onWin32)(
+    "ignores paths that do not exist yet (a fresh tree has no transcripts dir)",
+    async () => {
+      const lines: string[] = [];
+      const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
+      const text = lines.join("");
+      expect(code).toBe(0);
+      expect(text).toMatch(/✓ data tree modes/);
+      expect(text).not.toContain("chmod");
+    },
+  );
 });

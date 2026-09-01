@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
 import { dataTreePaths, ensureDataTree, sandboxDenyPaths } from "../src/dataTree.js";
@@ -685,4 +687,43 @@ describe("ensureDataTree", () => {
     expect(made).toContain("/sbxroot/elsewhere/Junco/inbox"); // queue is still ensured (daemon needs it)
     expect(made.some((d) => d.startsWith("/sbxroot/data/queue"))).toBe(false); // but not a phantom default queue
   });
+
+  // #343: transcripts hold verbatim private-repo file contents and the root
+  // may hold config.json with a literal apiKey — on a shared host every local
+  // user could read them under the default umask. Real fs: the default mkdir
+  // seam is what carries the mode, so a fake mkdirFn cannot pin this.
+  it.skipIf(process.platform === "win32")(
+    "materializes the root and every subdir owner-only (0700) on the real fs (#343)",
+    () => {
+      const tmp = mkdtempSync(join(tmpdir(), "junco-tree-mode-"));
+      const root = join(tmp, "home", ".junco");
+      const cfg = makeConfig({
+        dataDir: root,
+        queueRoot: join(root, "queue"),
+        worktreeRoot: join(root, "worktrees"),
+        dataLayout: "v2",
+      });
+      try {
+        ensureDataTree(cfg);
+        const p = dataTreePaths(cfg);
+        for (const d of [
+          root,
+          p.queue.inbox,
+          p.reviewAssess,
+          p.outbox,
+          p.mirror,
+          p.githubCache,
+          p.assessHistory,
+          p.history,
+          p.transcripts,
+          p.plans,
+          p.logsDir,
+        ]) {
+          expect(statSync(d).mode & 0o777, d).toBe(0o700);
+        }
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 });

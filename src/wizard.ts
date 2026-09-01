@@ -80,8 +80,12 @@ export type WizardIoResult =
 export function buildWizardIO(configPath: string, deps: WizardDeps = {}): WizardIoResult {
   const resolved = resolve(configPath);
   const existsFn = deps.existsFn ?? existsSync;
-  const mkdirFn = deps.mkdirFn ?? ((p) => mkdirSync(p, { recursive: true }));
-  const writeFileFn = deps.writeFileFn ?? ((p, c) => writeFileSync(p, c, "utf8"));
+  // Owner-only (#343), same as configCmd: the config may hold a literal
+  // apiKey, and its parent dir is the data root by default — created here,
+  // before the daemon's ensureDataTree, so the mode has to be right here.
+  const mkdirFn = deps.mkdirFn ?? ((p) => mkdirSync(p, { recursive: true, mode: 0o700 }));
+  const writeFileFn =
+    deps.writeFileFn ?? ((p, c) => writeFileSync(p, c, { encoding: "utf8", mode: 0o600 }));
   const readFileFn = deps.readFileFn ?? ((p) => readFileSync(p, "utf8"));
   const renameFn = deps.renameFn ?? renameSync;
   const unlinkFn = deps.unlinkFn ?? unlinkSync;

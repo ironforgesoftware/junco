@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { EventEmitter } from "node:events";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { runAgent, apiBaseUrl, splitModelId, defaultTranscriptSink } from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
 import { inMemoryCredentialStore } from "../src/agent/credentialStore.js";
 import { resolveModelViaRegistries, type RegistryOps } from "../src/agent/modelSetup.js";
 import { makeConfig } from "./helpers/config.js";
+import { until } from "./helpers/until.js";
 
 // Overridable createWriteStream so the transcript stream can be stubbed
 // (issue #26: fs.createWriteStream opens ASYNCHRONOUSLY — open/write failures
@@ -501,6 +502,28 @@ describe("runAgent (guard manager)", () => {
     expect(result.errorMessage).toContain("supervisor kill");
     rmSync(dir, { recursive: true, force: true });
   });
+});
+
+describe("defaultTranscriptSink", () => {
+  // #343: a transcript is the full event stream — every `read` tool result,
+  // i.e. verbatim private-repo file contents — so neither the file nor the dir
+  // the sink creates may be readable by other local users. createWriteStream
+  // opens asynchronously, so poll for the file rather than stat it at once.
+  it.skipIf(process.platform === "win32")(
+    "creates the transcript dir 0700 and the file 0600 (#343)",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "junco-tx-mode-"));
+      const txPath = join(dir, "transcripts", "t-1.jsonl");
+      const sink = defaultTranscriptSink(txPath);
+      if (sink === null) throw new Error("expected a sink");
+      sink.write("{}\n");
+      sink.end();
+      await until(() => existsSync(txPath));
+      expect(statSync(dirname(txPath)).mode & 0o777).toBe(0o700);
+      expect(statSync(txPath).mode & 0o777).toBe(0o600);
+      rmSync(dir, { recursive: true, force: true });
+    },
+  );
 });
 
 describe("apiBaseUrl", () => {
