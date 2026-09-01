@@ -1,0 +1,15 @@
+# https://editorconfig.org — prettier owns src/ and tests/ (see .prettierrc.json);
+# this covers what editors do to everything else: md, yml, json, sh.
+# Prettier also reads this file, so max_line_length stays unset (printWidth wins).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = true
+
+[*.md]
+trim_trailing_whitespace = false
