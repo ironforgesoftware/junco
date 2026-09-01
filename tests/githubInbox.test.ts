@@ -10,6 +10,7 @@ import {
   issueToTicket,
   pollGithubInbox,
   newBridgeState,
+  labelSwapArgs,
   extractPlanBody,
   extractPlanSetBody,
   extractPatchBody,
@@ -80,6 +81,55 @@ describe("lifecycleLabels", () => {
       planReady: "bot:plan-ready",
       approved: "bot:approved",
     });
+  });
+});
+
+describe("labelSwapArgs", () => {
+  // Every transition that takes an issue OUT of plan-ready (#357): the
+  // lingering-label cleanup, the plan-set compile failure, and the two
+  // dispatch doors (single plan + plan set).
+  const planReadyExits: Array<{ add?: string; remove: string }> = [
+    { remove: "junco:plan-ready" },
+    { add: "junco:failed", remove: "junco:plan-ready" },
+    { add: "junco:queued", remove: "junco:plan-ready" },
+  ];
+
+  it("every plan-ready exit also removes approved iff requireApproval is on", () => {
+    const off = { ...cfg, github: { ...cfg.github, requireApproval: false } } as Config;
+    for (const swap of planReadyExits) {
+      const on = labelSwapArgs(cfg, "acme/api", 42, swap);
+      expect(on.slice(0, 5)).toEqual(["issue", "edit", "42", "--repo", "acme/api"]);
+      expect(on.slice(-2)).toEqual(["--remove-label", "junco:approved"]);
+      expect(labelSwapArgs(off, "acme/api", 42, swap)).not.toContain("junco:approved");
+    }
+    // An add-only edit never leaves plan-ready, so it never touches approved.
+    expect(labelSwapArgs(cfg, "acme/api", 42, { add: "junco:denied" })).toEqual([
+      "issue",
+      "edit",
+      "42",
+      "--repo",
+      "acme/api",
+      "--add-label",
+      "junco:denied",
+    ]);
+  });
+
+  it("orders argv add-then-remove, matching the hand-built sites it replaced", () => {
+    expect(
+      labelSwapArgs(cfg, "acme/api", 42, { add: "junco:queued", remove: "junco:plan-ready" }),
+    ).toEqual([
+      "issue",
+      "edit",
+      "42",
+      "--repo",
+      "acme/api",
+      "--add-label",
+      "junco:queued",
+      "--remove-label",
+      "junco:plan-ready",
+      "--remove-label",
+      "junco:approved",
+    ]);
   });
 });
 
