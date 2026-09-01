@@ -4,7 +4,7 @@
 
 ## Dev setup
 
-**Requirements:** Node ≥ 22.19, npm.
+**Requirements:** Node ≥ 22.19, npm. `.nvmrc` pins the exact engines floor (`nvm use` picks it up).
 
 ```bash
 npm install          # install dependencies
