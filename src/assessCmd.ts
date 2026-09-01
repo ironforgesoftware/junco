@@ -53,15 +53,15 @@ function isDirectory(p: string): boolean {
 
 /**
  * Build a machine-owned assessment ticket for `repoPath` (already resolved
- * by the caller). Frontmatter carries only `id`, `repo`, and `assess` —
- * nothing an agent session could widen; the body is the read-only audit
- * prompt. The nwo is unknown at authoring time for a plain path/nwo target
- * (it's resolved from the repo's origin remote when the ticket actually
- * runs), so the prompt gets `nwo: null` in that case. When `issueContext`
- * is set (an issue-ref target, `junco audit owner/repo#N`), the nwo is
- * already known from the resolved issue, and the `assess:` block also
- * carries `issue`/`issue_title` so the daemon's assessFlow.ts can scope the
- * audit and filed findings can reference the issue.
+ * by the caller). Frontmatter carries only `id`, `repo`, and the canonical
+ * `audit:` key — nothing an agent session could widen; the body is the
+ * read-only audit prompt. The nwo is unknown at authoring time for a plain
+ * path/nwo target (it's resolved from the repo's origin remote when the
+ * ticket actually runs), so the prompt gets `nwo: null` in that case. When
+ * `issueContext` is set (an issue-ref target, `junco audit owner/repo#N`),
+ * the nwo is already known from the resolved issue, and the `audit:` block
+ * also carries `issue`/`issue_title` so the daemon's assessFlow.ts can scope
+ * the audit and filed findings can reference the issue.
  */
 export function buildAssessTicket(
   repoPath: string,
@@ -78,7 +78,7 @@ export function buildAssessTicket(
     assessLines.push(`  issue: ${opts.issueContext.issue}`);
     assessLines.push(`  issue_title: ${JSON.stringify(opts.issueContext.title)}`);
   }
-  const assessYaml = assessLines.length > 0 ? `assess:\n${assessLines.join("\n")}` : "assess: {}";
+  const assessYaml = assessLines.length > 0 ? `audit:\n${assessLines.join("\n")}` : "audit: {}";
   const body = opts.issueContext
     ? buildAssessPrompt({ nwo: opts.issueContext.nwo, repoPath, issueContext: opts.issueContext })
     : buildAssessPrompt({ nwo: null, repoPath });

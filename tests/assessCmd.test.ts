@@ -81,9 +81,10 @@ describe("buildAssessTicket", () => {
     expect(content).toContain("junco-findings");
   });
 
-  it("autoPlan: false emits `assess: {}` and parses to autoPlan: false", () => {
+  it("autoPlan: false emits `audit: {}` (canonical key) and parses to autoPlan: false", () => {
     const { content } = buildAssessTicket("/tmp/x/my-repo", { autoPlan: false }, FIXED);
-    expect(content).toContain("assess: {}");
+    expect(content).toContain("audit: {}");
+    expect(content).not.toContain("assess:");
 
     const t = parseTicket("submitted.md", content);
     expect(t.assess).toEqual({ autoPlan: false });

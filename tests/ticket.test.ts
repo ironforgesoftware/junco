@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { parseTicket } from "../src/ticket.js";
 
 const QA = `---\nid: q1\npriority: high\ntimeout_minutes: 5\n---\n# Title\nHello body\n`;
@@ -238,6 +238,92 @@ describe("parseTicket", () => {
   it("defaults analyze.title to empty string when omitted", () => {
     const t = parseTicket("/q/a.md", `---\nid: x\nanalyze:\n  issue: 3\n---\nbody`);
     expect(t.analyze).toEqual({ issue: 3, title: "" });
+  });
+
+  // --- audit:/investigate: canonical keys (legacy assess:/analyze: kept forever) ---
+
+  it("parses audit: {} to the same internal Ticket.assess field as assess: {}", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\naudit: {}\n---\nbody`);
+    expect(t.assess).toEqual({ autoPlan: false });
+  });
+
+  it("parses audit with auto_plan: true and issue, same as assess", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: x\naudit:\n  auto_plan: true\n  issue: 7\n---\nbody`,
+    );
+    expect(t.assess).toEqual({ autoPlan: true, issue: 7 });
+  });
+
+  it("rejects audit as scalar or array, same validation as assess", () => {
+    expect(parseTicket("/q/a.md", `---\nid: x\naudit: "yes"\n---\nbody`).assess).toBeNull();
+    expect(parseTicket("/q/a.md", `---\nid: x\naudit: [1]\n---\nbody`).assess).toBeNull();
+  });
+
+  it("parses investigate: { issue, title } to the same internal Ticket.analyze field as analyze:", () => {
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: x\ninvestigate:\n  issue: 7\n  title: "Bug in x"\n---\nbody`,
+    );
+    expect(t.analyze).toEqual({ issue: 7, title: "Bug in x" });
+  });
+
+  it("defaults investigate.title to empty string when omitted, same as analyze", () => {
+    const t = parseTicket("/q/a.md", `---\nid: x\ninvestigate:\n  issue: 3\n---\nbody`);
+    expect(t.analyze).toEqual({ issue: 3, title: "" });
+  });
+
+  it("both audit: and legacy assess: present: audit wins and a warning fires", () => {
+    const warn = vi.fn();
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: x\naudit:\n  auto_plan: true\nassess:\n  auto_plan: false\n---\nbody`,
+      30,
+      warn,
+    );
+    expect(t.assess).toEqual({ autoPlan: true });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/audit/);
+    expect(warn.mock.calls[0][0]).toMatch(/assess/);
+  });
+
+  it("both investigate: and legacy analyze: present: investigate wins and a warning fires", () => {
+    const warn = vi.fn();
+    const t = parseTicket(
+      "/q/a.md",
+      `---\nid: x\ninvestigate:\n  issue: 1\n  title: "New"\nanalyze:\n  issue: 2\n  title: "Old"\n---\nbody`,
+      30,
+      warn,
+    );
+    expect(t.analyze).toEqual({ issue: 1, title: "New" });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/investigate/);
+    expect(warn.mock.calls[0][0]).toMatch(/analyze/);
+  });
+
+  it("only assess: present (no audit:) does not warn", () => {
+    const warn = vi.fn();
+    parseTicket("/q/a.md", `---\nid: x\nassess: {}\n---\nbody`, 30, warn);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("only investigate: present (no analyze:) does not warn", () => {
+    const warn = vi.fn();
+    parseTicket("/q/a.md", `---\nid: x\ninvestigate:\n  issue: 1\n---\nbody`, 30, warn);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("defaults the warn hook to console.warn when both audit: and assess: are present", () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      parseTicket(
+        "/q/a.md",
+        `---\nid: x\naudit:\n  auto_plan: true\nassess:\n  auto_plan: false\n---\nbody`,
+      );
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("parses github_request.create_issue: true", () => {

@@ -282,13 +282,19 @@ export interface Ticket {
    * the worker fulfills it and stamps `github:` provenance itself, keeping
    * that block worker-managed (githubIssueRequest.ts). Null = no request. */
   githubRequest: { createIssue: boolean } | null;
-  /** Assessment flavor options (null = regular PR/Q&A flow). `issue` scopes the
-   * audit to a single GitHub issue when set by `junco assess owner/repo#N`.
+  /** Assessment flavor options (null = regular PR/Q&A flow), normalized from
+   * either the canonical `audit:` frontmatter key or the permanently accepted
+   * legacy `assess:` key (parseTicket picks `audit:` when both are present).
+   * `issue` scopes the audit to a single GitHub issue when set by
+   * `junco audit owner/repo#N` (or the legacy `junco assess owner/repo#N`).
    * The frontmatter also carries `issue_title` (self-documentation for anyone
    * reading the ticket file), but it is intentionally NOT parsed through here:
    * nothing renders it, so there is nothing to keep sanitized (#104). */
   assess: { autoPlan: boolean; issue?: number } | null;
-  /** Analysis flavor options (null = regular PR/Q&A flow). */
+  /** Analysis flavor options (null = regular PR/Q&A flow), normalized from
+   * either the canonical `investigate:` frontmatter key or the permanently
+   * accepted legacy `analyze:` key (parseTicket picks `investigate:` when
+   * both are present). */
   analyze: { issue: number; title: string } | null;
   /** Q&A only: directory the session runs in (read-only tools). Null = default. */
   workdir: string | null;

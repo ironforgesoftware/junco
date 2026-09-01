@@ -40,12 +40,13 @@ function slugify(s: string): string {
 
 /**
  * Build a machine-owned analysis ticket for a resolved issue target.
- * Frontmatter carries only `id`, `repo`, and `analyze` — deliberately NO
- * `github:` block: the reporter's comment/label lifecycle keys off that
- * block, and an analyze ticket must produce no un-gated outward write (the
- * only outward write is the human-confirmed `junco investigate post`). The id
- * carries no timestamp, so a queued duplicate fails loud and a re-run
- * overwrites the parked draft (the review store is keyed by id).
+ * Frontmatter carries only `id`, `repo`, and the canonical `investigate:` key
+ * — deliberately NO `github:` block: the reporter's comment/label lifecycle
+ * keys off that block, and an investigate ticket must produce no un-gated
+ * outward write (the only outward write is the human-confirmed `junco
+ * investigate post`). The id carries no timestamp, so a queued duplicate
+ * fails loud and a re-run overwrites the parked draft (the review store is
+ * keyed by id).
  */
 export function buildAnalyzeTicket(t: IssueTarget): { id: string; content: string } {
   const [owner, name] = t.nwo.split("/");
@@ -56,7 +57,7 @@ export function buildAnalyzeTicket(t: IssueTarget): { id: string; content: strin
     `---\n` +
     `id: ${id}\n` +
     `repo: ${JSON.stringify(t.clonePath)}\n` +
-    `analyze:\n` +
+    `investigate:\n` +
     `  issue: ${t.issue}\n` +
     `  title: ${JSON.stringify(t.title)}\n` +
     `---\n\n${body}`;

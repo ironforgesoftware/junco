@@ -139,7 +139,8 @@ describe("runAnalyzeCommand", () => {
     expect(code).toBe(0);
     expect(submittedCfg).toBe(c);
     expect(submittedIdHint).toBe("analyze-up-stream-7");
-    expect(submittedContent).toContain("analyze:\n  issue: 7");
+    expect(submittedContent).toContain("investigate:\n  issue: 7");
+    expect(submittedContent).not.toContain("analyze:");
     expect(out.join("")).toContain("queued: /inbox/analyze-up-stream-7.md");
     expect(out.join("")).toMatch(/junco investigate review/);
   });

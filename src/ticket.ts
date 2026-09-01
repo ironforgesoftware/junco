@@ -4,7 +4,12 @@ import type { Ticket } from "./types.js";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/;
 
-export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 30): Ticket {
+export function parseTicket(
+  path: string,
+  raw: string,
+  defaultTimeoutMinutes = 30,
+  warnFn: (msg: string) => void = (msg) => console.warn(msg),
+): Ticket {
   let frontmatter: Record<string, unknown> = {};
   let body = raw;
   const m = FRONTMATTER_RE.exec(raw);
@@ -49,7 +54,16 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       github = { nwo: g.nwo, issue: g.issue, kind: g.kind, external: g.external === true };
     }
   }
-  const assessRaw = frontmatter.assess;
+  // `audit:` is the canonical key (junco audit); `assess:` is a permanently
+  // accepted legacy alias (pre-rename dispatchers, existing parked tickets).
+  // When a ticket carries both, `audit:` wins — pinned precedence, warned so
+  // a dispatcher emitting both notices the collision.
+  const hasAudit = Object.prototype.hasOwnProperty.call(frontmatter, "audit");
+  const hasAssessLegacy = Object.prototype.hasOwnProperty.call(frontmatter, "assess");
+  if (hasAudit && hasAssessLegacy) {
+    warnFn(`ticket ${id}: both \`audit:\` and legacy \`assess:\` present — \`audit:\` wins`);
+  }
+  const assessRaw = hasAudit ? frontmatter.audit : frontmatter.assess;
   let assess: Ticket["assess"] = null;
   if (assessRaw !== null && typeof assessRaw === "object" && !Array.isArray(assessRaw)) {
     const a = assessRaw as Record<string, unknown>;
@@ -65,7 +79,16 @@ export function parseTicket(path: string, raw: string, defaultTimeoutMinutes = 3
       assess.issue = a.issue;
     }
   }
-  const analyzeRaw = frontmatter.analyze;
+  // `investigate:` is the canonical key (junco investigate); `analyze:` is a
+  // permanently accepted legacy alias. Same both-keys precedence as above.
+  const hasInvestigate = Object.prototype.hasOwnProperty.call(frontmatter, "investigate");
+  const hasAnalyzeLegacy = Object.prototype.hasOwnProperty.call(frontmatter, "analyze");
+  if (hasInvestigate && hasAnalyzeLegacy) {
+    warnFn(
+      `ticket ${id}: both \`investigate:\` and legacy \`analyze:\` present — \`investigate:\` wins`,
+    );
+  }
+  const analyzeRaw = hasInvestigate ? frontmatter.investigate : frontmatter.analyze;
   let analyze: Ticket["analyze"] = null;
   if (analyzeRaw !== null && typeof analyzeRaw === "object" && !Array.isArray(analyzeRaw)) {
     const a = analyzeRaw as Record<string, unknown>;

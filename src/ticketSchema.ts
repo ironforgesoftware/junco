@@ -123,7 +123,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
     github_request: {
       type: "object",
       description:
-        "Dispatcher-settable request: ask the worker to create a GitHub tracking issue for this ticket at claim time and link the resulting pull request to it (the PR body gains `Closes owner/repo#N`, so merging closes the issue). The worker creates the issue on the clone's origin repo under its own gh identity (the bot account when configured) and then stamps the worker-managed `github:` provenance block itself — dispatchers never write `github:` by hand. Best-effort: if the issue cannot be created (offline, no permission, non-GitHub origin) the ticket still runs, unlinked. Ignored on fork-push tickets (`push_remote: fork`), on amend tickets (`amends_pr` — the existing PR body is never edited, so the issue could never auto-close), and on Q&A/assess/analyze tickets.",
+        "Dispatcher-settable request: ask the worker to create a GitHub tracking issue for this ticket at claim time and link the resulting pull request to it (the PR body gains `Closes owner/repo#N`, so merging closes the issue). The worker creates the issue on the clone's origin repo under its own gh identity (the bot account when configured) and then stamps the worker-managed `github:` provenance block itself — dispatchers never write `github:` by hand. Best-effort: if the issue cannot be created (offline, no permission, non-GitHub origin) the ticket still runs, unlinked. Ignored on fork-push tickets (`push_remote: fork`), on amend tickets (`amends_pr` — the existing PR body is never edited, so the issue could never auto-close), and on Q&A/audit/investigate tickets.",
       properties: {
         create_issue: {
           type: "boolean",
@@ -131,10 +131,10 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
         },
       },
     },
-    assess: {
+    audit: {
       type: "object",
       description:
-        "Presence of this mapping selects the assessment flavor: junco audits the repository named in `repo:` (read-only agent session plus a dependency scan) and parks the findings for review instead of opening a pull request — nothing is filed until a human confirms the batch (`junco assess review` then `junco assess file`). Authored by `junco assess`.",
+        "Presence of this mapping selects the assessment flavor: junco audits the repository named in `repo:` (read-only agent session plus a dependency scan) and parks the findings for review instead of opening a pull request — nothing is filed until a human confirms the batch (`junco audit review` then `junco audit file`). Authored by `junco audit`. `assess:` is a permanently accepted legacy alias for this same mapping; when a ticket carries both, `audit:` wins.",
       properties: {
         auto_plan: {
           type: "boolean",
@@ -145,7 +145,7 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
           type: "integer",
           minimum: 1,
           description:
-            "Issue-scoped audit: the audit is steered to the code this issue implicates, and filed findings carry a Context reference to it. Set by `junco assess owner/repo#N`.",
+            "Issue-scoped audit: the audit is steered to the code this issue implicates, and filed findings carry a Context reference to it. Set by `junco audit owner/repo#N`.",
         },
         issue_title: {
           type: "string",
@@ -153,10 +153,41 @@ export const TICKET_FRONTMATTER_JSON_SCHEMA: Record<string, unknown> = {
         },
       },
     },
+    assess: {
+      type: "object",
+      description:
+        "Legacy alias for `audit:` — permanently accepted, never removed. Same shape and behavior as `audit:` (see above); when a ticket carries both `assess:` and `audit:`, `audit:` wins.",
+      properties: {
+        auto_plan: {
+          type: "boolean",
+          description:
+            "Also apply the configured GitHub trigger label to each created issue, so the bridge plans it on its next sweep.",
+        },
+        issue: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Issue-scoped audit: the audit is steered to the code this issue implicates, and filed findings carry a Context reference to it. Set by `junco audit owner/repo#N` (or the legacy `junco assess owner/repo#N`).",
+        },
+        issue_title: {
+          type: "string",
+          description: "The scoping issue's title (machine-built, display-only).",
+        },
+      },
+    },
+    investigate: {
+      type: "object",
+      description:
+        "Presence of this mapping selects the analysis flavor: junco investigates the issue named here against the repository in `repo:` and parks a comment draft for review — it never posts without operator confirmation. Authored by `junco investigate`. `analyze:` is a permanently accepted legacy alias for this same mapping; when a ticket carries both, `investigate:` wins.",
+      properties: {
+        issue: { type: "integer", minimum: 1, description: "Issue number to investigate." },
+        title: { type: "string", description: "Issue title, for display/logging." },
+      },
+    },
     analyze: {
       type: "object",
       description:
-        "Presence of this mapping selects the analysis flavor: junco investigates the issue named here against the repository in `repo:` and parks a comment draft for review — it never posts without operator confirmation. Authored by `junco analyze`.",
+        "Legacy alias for `investigate:` — permanently accepted, never removed. Same shape and behavior as `investigate:` (see above); when a ticket carries both `analyze:` and `investigate:`, `investigate:` wins.",
       properties: {
         issue: { type: "integer", minimum: 1, description: "Issue number to investigate." },
         title: { type: "string", description: "Issue title, for display/logging." },
