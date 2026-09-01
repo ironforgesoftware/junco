@@ -1584,6 +1584,55 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(body).toMatch(/agent completed/i);
   });
 
+  it("a failed apply followed by its Stage-2a fallback appends ONE chronological transcript — apply frames (carrying the failure), then the fallback session's", async () => {
+    const cfg = makeConfig(h, { transcriptsEnabled: true });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback-tx.md",
+      `---\nid: apply-fallback-tx\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => commitFactory({ commit: true })(fcfg, cwd),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.mode).toBe("apply_fallback");
+
+    const transcriptPath = transcriptPathFor(dataTreePaths(cfg).transcripts, task.id);
+    const lines = readFileSync(transcriptPath, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "");
+    const parsed = lines.map((l) => parseTranscriptLine(l));
+
+    const metaLines = parsed.filter((p) => p.kind === "junco" && p.record.type === "junco_meta");
+    expect(metaLines).toHaveLength(1); // exactly once, despite two run-shaped writers
+    expect(parsed[0].kind).toBe("junco");
+    if (parsed[0].kind === "junco") expect(parsed[0].record.type).toBe("junco_meta");
+
+    const runStartFlows = parsed
+      .filter((p) => p.kind === "junco" && p.record.type === "junco_run_start")
+      .map((p) => (p.kind === "junco" && p.record.type === "junco_run_start" ? p.record.flow : ""));
+    // The FAILED apply's own frame pair lands FIRST, then the fallback's.
+    expect(runStartFlows).toEqual(["apply", "pr_apply_fallback"]);
+
+    const runEnds = parsed.filter((p) => p.kind === "junco" && p.record.type === "junco_run_end");
+    expect(runEnds).toHaveLength(2);
+    const applyEnd = runEnds[0];
+    if (applyEnd.kind === "junco" && applyEnd.record.type === "junco_run_end") {
+      // The apply's own run_end carries the git-am failure — the operator can
+      // see WHY it fell back, not just that an agent eventually finished it.
+      expect(applyEnd.record.stopReason).toBe("apply_failed");
+      expect(applyEnd.record.errorMessage).toMatch(/git am --3way failed/);
+    }
+
+    // Real turn activity happened for the fallback session (SDK passthrough
+    // lines) — proves the second half is a genuine agent run.
+    expect(parsed.some((p) => p.kind === "sdk")).toBe(true);
+  });
+
   it("a fallback session's critic pass actually dispatches when criticEnabled is true (proves the narrowed skip gate, not Stage 1's blanket per-ticket skip)", async () => {
     // The previous fallback test above runs with this file's default
     // criticEnabled: false, so it can't distinguish the narrowed gate

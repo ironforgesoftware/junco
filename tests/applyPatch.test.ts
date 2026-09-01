@@ -372,16 +372,37 @@ describe("applyPatchSeries — transcript frames (Stage 4a)", () => {
     expect(existsSync(path)).toBe(false);
   });
 
-  it("a failed apply writes no transcript frames (nothing ran to completion)", async () => {
+  it("a failed apply (toggle off, terminal) still writes the frame pair — junco_run_end carries the failure reason", async () => {
     const { root, work } = setup();
     const conflicting = conflictingSeries(work);
-    const cfg = cfgFor(root, { transcriptsEnabled: true });
+    const cfg = cfgFor(root, { transcriptsEnabled: true, applyFallbackToAgent: false });
+    const mem = memorySink();
 
-    const out = await applyPatchSeries(cfg, work, "apply-tx-fail", conflicting);
+    const out = await applyPatchSeries(cfg, work, "apply-tx-fail", conflicting, {
+      transcriptSink: mem.transcriptSink,
+      fileExists: mem.fileExists,
+    });
     expect(out.ok).toBe(false);
+    const reason = (out as { reason: string }).reason;
 
-    const path = transcriptPathFor(dataTreePaths(cfg).transcripts, "apply-tx-fail");
-    expect(existsSync(path)).toBe(false);
+    const frames = parseFrames(mem.lines);
+    expect(frames.map((f) => f.type)).toEqual(["junco_meta", "junco_run_start", "junco_run_end"]);
+
+    const start = frames[1] as { type: "junco_run_start"; flow: string };
+    expect(start.flow).toBe("apply");
+
+    const end = frames[2] as {
+      type: "junco_run_end";
+      stopReason: string | null;
+      errorMessage: string | null;
+      usage: { total: number; costUsd: number };
+      durationMs: number;
+    };
+    expect(end.stopReason).toBe("apply_failed");
+    expect(end.errorMessage).toBe(reason);
+    expect(end.errorMessage).toMatch(/git am --3way failed/);
+    expect(end.usage).toEqual({ input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 });
+    expect(end.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   it("two apply runs against the same ticket id append to one file without a duplicate junco_meta", async () => {
