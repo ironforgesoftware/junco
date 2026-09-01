@@ -217,7 +217,10 @@ function mountOrder(policy: SandboxPolicy): { rule: ReadRule; writable: boolean 
 
 /** bwrap args: read-only root, private /dev+/proc+/tmp, then one mount per
  *  read rule (tmpfs-mask a denied dir, /dev/null-mask a denied file, ro-bind
- *  an allow-back, rw-bind a writable root), then unshare net when denied.
+ *  an allow-back, rw-bind a writable root), then the namespace flags: pid,
+ *  ipc and uts always, net only when denied, plus `--new-session` (#345 —
+ *  bwrap's own docs recommend it against TIOCSTI terminal injection; bashOps
+ *  gives the child no tty anyway, so this is belt-and-braces, not a fix).
  *
  *  Mounts apply in argv ORDER and later mounts are destructive, so order is
  *  meaning. Rules are emitted via `mountOrder`, i.e. `orderRules` order (see
@@ -256,9 +259,9 @@ export function bwrapArgs(
     if (!writable && !existsFn(rule.path)) continue;
     args.push(...readRuleMounts(rule, writable));
   }
-  args.push("--unshare-pid");
+  args.push("--unshare-pid", "--unshare-ipc", "--unshare-uts");
   if (!policy.network) args.push("--unshare-net");
-  args.push("--die-with-parent");
+  args.push("--new-session", "--die-with-parent");
   return args;
 }
 
