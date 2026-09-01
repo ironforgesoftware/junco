@@ -846,48 +846,47 @@ export type SessionManagerMode =
   | { open: { file: string; dir: string; cwd: string } };
 
 /**
- * Paths this process has handed out via makeSessionManager's "create" branch,
- * kept only to bridge the SDK's lazy first flush: SessionManager.create()
- * reports a getSessionFile() path immediately, but session-manager.js's
- * _persist() (its write path) writes nothing to disk until the first
- * ASSISTANT reply lands — so a session with zero completed turns leaves no
- * file on disk at all. Worse, SessionManager.open() never throws for a
- * missing path when a cwdOverride is given (session-manager.js ~1190: the
- * only existsSync+header-read guard is skipped whenever cwdOverride is
- * defined, which makeSessionManager's "open" branch always supplies) — it
- * silently builds an unrelated fresh session at that path instead. An
- * existsSync() check alone therefore can't tell "this process created it but
- * nothing was ever flushed" from "no one ever created this" — both read as
- * absent. This registry closes that gap: a path handed out by "create" this
- * process is trusted even before its first flush; a path this process never
- * created (e.g. a data-tree record surviving a crash that happened before the
- * first flush) still throws so the caller (chatSession.ts) archives and
- * recreates. Entries are cheap (a string) and rare (once per new chat
- * session), so this is never evicted.
- */
-const createdSessionFiles = new Set<string>();
-
-/**
  * Chat sessions persist under a junco-owned dir (spec 2026-09-01 §2.1) —
  * never ~/.pi. SDK 0.84.2 `dist/core/session-manager.d.ts`: create(cwd,
  * sessionDir) line 318, open(path, sessionDir, cwdOverride) line 325,
- * getSessionFile() line 208. Throws on an unreadable file; the caller
- * (chatSession.ts) archives it and recreates.
+ * getSessionFile() line 208.
+ *
+ * Verified against the installed SDK (0.84.2) directly, since both facts
+ * below are easy to assume wrong from the `.d.ts` alone:
+ *   - create() writes nothing to disk immediately: getSessionFile() reports a
+ *     path right away, but session-manager.js's _persist() (the write path)
+ *     skips every write until the first ASSISTANT reply lands (the
+ *     `hasAssistant` gate). A session with zero completed turns leaves no
+ *     file on disk at all.
+ *   - open() on a missing path never throws — with or without a
+ *     cwdOverride. The static open()'s only existsSync+header-read guard
+ *     (session-manager.js ~1190) is skipped whenever cwdOverride is defined,
+ *     which we always pass; even without that guard, `_setSessionFile`'s
+ *     (line 614) "file doesn't exist" branch (line 639) just calls
+ *     `newSession()` and reassigns the explicit path, silently yielding a
+ *     fresh, empty session AT that path instead of erroring.
+ *
+ * That second fact is exactly what we want here: "created, no turn yet,
+ * daemon restarted" and "file lost" both mean the same thing — there is
+ * nothing to recover — so a missing path becoming a fresh empty session at
+ * that path IS the correct behavior, not a failure to guard against. The
+ * caller (chatSession.ts, a later task) is the one with enough context to
+ * tell those two cases apart if it ever needs to (e.g. by consulting its own
+ * chat-transcript record of whether a reply was ever recorded) and to decide
+ * whether a missing file means "nothing lost, carry on" or "reset the chat
+ * state accordingly" — this helper only surfaces the SDK's file-contract
+ * primitives faithfully, it doesn't guess at that policy.
  */
 export async function makeSessionManager(
   mode: SessionManagerMode,
 ): Promise<{ manager: unknown; file: string }> {
   const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  if ("open" in mode && !existsSync(mode.open.file) && !createdSessionFiles.has(mode.open.file)) {
-    throw new Error(`session file not found: ${mode.open.file}`);
-  }
   const manager =
     "create" in mode
       ? SessionManager.create(mode.create.cwd, mode.create.dir)
       : SessionManager.open(mode.open.file, mode.open.dir, mode.open.cwd);
   const file = (manager as { getSessionFile(): string | undefined }).getSessionFile();
   if (!file) throw new Error("SDK SessionManager reported no session file (not persisting)");
-  if ("create" in mode) createdSessionFiles.add(file);
   return { manager, file };
 }
 

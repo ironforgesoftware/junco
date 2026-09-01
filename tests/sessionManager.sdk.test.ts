@@ -15,10 +15,11 @@ describe("makeSessionManager (SDK file-backed sessions under a junco-owned dir)"
     const opened = await makeSessionManager({ open: { file: created.file, dir, cwd: dir } });
     expect(opened.file).toBe(created.file);
   });
-  it("open on a missing file throws (the caller archives and recreates)", async () => {
+  it("open on a missing path never throws — it yields a fresh session at that path (the caller decides what a missing file means)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "junco-chat-sm-"));
-    await expect(
-      makeSessionManager({ open: { file: join(dir, "nope.jsonl"), dir, cwd: dir } }),
-    ).rejects.toThrow();
+    const thatPath = join(dir, "nope.jsonl");
+    const opened = await makeSessionManager({ open: { file: thatPath, dir, cwd: dir } });
+    expect(opened.file).toBe(thatPath);
+    expect(typeof opened.manager).toBe("object");
   });
 });
