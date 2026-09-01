@@ -378,6 +378,12 @@ describe("flatToV2Pairs", () => {
     expect(pairs).toContainEqual({ from: join("/from", "plans"), to: join("/to", "data/plans") });
   });
 
+  it("moves chats and chat-drafts into data/ (spec 2026-09-01 §1.1)", () => {
+    const cross = flatToV2Pairs("/old", "/new");
+    expect(cross).toContainEqual({ from: "/old/chats", to: "/new/data/chats" });
+    expect(cross).toContainEqual({ from: "/old/chat-drafts", to: "/new/data/chat-drafts" });
+  });
+
   it("covers every layout key (guards against a forgotten tree)", () => {
     // A new LAYOUTS entry with no pair here is silently left behind by a
     // cross-root migrate AND blocks the legacy-root rmdir. Keep this list in
