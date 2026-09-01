@@ -30,6 +30,8 @@ import {
   type Commit,
 } from "./pr.js";
 import { lintTicket, LabelCache } from "./planLint.js";
+import { parsePatchSeries } from "./patchTicket.js";
+import { applyPatchSeries } from "./applyPatch.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
 import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
@@ -464,43 +466,75 @@ export async function runPrFlow(
     );
   }
 
-  // --- Phase 4: Run the agent in the worktree. ---
-  const prompt = buildPromptWithRepoContext(task, ctx, wtPath, nwo, {
-    amendTarget,
-    commitLeftoversEnabled: cfg.commitLeftoversEnabled,
-  });
-  // A ticket-level `tools:` overrides the configured allowlist for THIS
-  // ticket's sessions (worker + corrective). Everything else keeps cfg.
-  // flowCfg (not cfg) also goes to runEnveloped so junco_run_start records
-  // the enforced tool subset (narrowed-cfg ruling, matching the qaCfg/
-  // assessCfg/analyzeCfg precedent). The envelope derives the per-ticket
-  // transcript path from task.id, records spend, and builds the guard
-  // manager — spend is recorded immediately, BEFORE any requeue/fail
-  // branching below: this session's dollars were spent regardless of what
-  // the ticket does next (Phase-3 Task 4 — the ledger is the honest record,
-  // unlike the ticket's own footer accounting which never sees a requeued
-  // attempt again).
+  // --- Phase 4: Apply a patch series, or run the agent in the worktree. ---
+  // An apply ticket (body carries a junco-patch fence) has no uncertainty left
+  // to resolve: `git am` applies AND commits, and Phases 5-14 continue on the
+  // resulting commits exactly as they would after an agent session.
+  //
+  // flowCfg is hoisted above the branch: it is read again in Phase 9's
+  // corrective-dispatch block, which runs only on the agent path but needs to
+  // type-check regardless of which branch of this `if` executed.
   const flowCfg: Config = task.tools ? { ...cfg, tools: task.tools } : cfg;
-  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
-    network: task.network ?? undefined,
-  });
-  const result = await runEnveloped(
-    flowCfg,
-    {
-      ticketId: task.id,
-      flow: "pr",
-      body: prompt,
-      cwd: wtPath,
-      timeoutMs: task.timeoutSeconds * 1000,
-    },
-    {
-      createSession: factory,
-      abortSignal: deps.abortSignal,
-      onProgress: deps.onProgress,
-      onGuardDecision: deps.onGuardDecision,
-      spend: deps.spend,
-    },
-  );
+  const patchSeries = parsePatchSeries(task.body);
+  let result: RunResult;
+  if (patchSeries !== null) {
+    log.info("apply mode: applying junco-patch series", {
+      patches: patchSeries.count,
+      files: patchSeries.files.length,
+    });
+    const outcome = await applyPatchSeries(cfg, wtPath, patchSeries);
+    if (!outcome.ok) {
+      // Terminal by design — see applyPatch.ts's header: a conflict is
+      // deterministic, so Phase 5's transient classifier must never see it.
+      const phaseError = `apply failed: ${outcome.reason}`;
+      prOutcome.worktreePreserved = true;
+      log.warn(phaseError);
+      const r = emptyRunResult(phaseError);
+      return flowResult(
+        finalizePr(claimedPath, r, prOutcome, { dirs, phaseError }),
+        prOutcome,
+        r,
+        phaseError,
+      );
+    }
+    result = outcome.result;
+  } else {
+    const prompt = buildPromptWithRepoContext(task, ctx, wtPath, nwo, {
+      amendTarget,
+      commitLeftoversEnabled: cfg.commitLeftoversEnabled,
+    });
+    // A ticket-level `tools:` overrides the configured allowlist for THIS
+    // ticket's sessions (worker + corrective). Everything else keeps cfg.
+    // flowCfg (not cfg) also goes to runEnveloped so junco_run_start records
+    // the enforced tool subset (narrowed-cfg ruling, matching the qaCfg/
+    // assessCfg/analyzeCfg precedent). The envelope derives the per-ticket
+    // transcript path from task.id, records spend, and builds the guard
+    // manager — spend is recorded immediately, BEFORE any requeue/fail
+    // branching below: this session's dollars were spent regardless of what
+    // the ticket does next (Phase-3 Task 4 — the ledger is the honest record,
+    // unlike the ticket's own footer accounting which never sees a requeued
+    // attempt again).
+    const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
+      network: task.network ?? undefined,
+    });
+    result = await runEnveloped(
+      flowCfg,
+      {
+        ticketId: task.id,
+        flow: "pr",
+        body: prompt,
+        cwd: wtPath,
+        timeoutMs: task.timeoutSeconds * 1000,
+      },
+      {
+        createSession: factory,
+        abortSignal: deps.abortSignal,
+        onProgress: deps.onProgress,
+        onGuardDecision: deps.onGuardDecision,
+        spend: deps.spend,
+      },
+    );
+  }
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
   // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
@@ -622,7 +656,14 @@ export async function runPrFlow(
     let newCommits = await countNewCommits(cfg, wtPath, sinceRef);
     const dirty = await worktreeIsDirty(cfg, wtPath);
     if (newCommits === 0 && dirty) {
-      if (cfg.commitLeftoversEnabled) {
+      if (patchSeries !== null) {
+        // `git am` applies AND commits — a dirty-but-uncommitted worktree
+        // after an apply means the am step left something behind (it should
+        // not, since a failed am is aborted before Phase 4 returns). Never
+        // silently sweep an apply ticket's leftovers into a commit the
+        // series itself did not author (spec open question 3).
+        log.warn("apply mode: worktree dirty with no commits — failing loud, not sweeping");
+      } else if (cfg.commitLeftoversEnabled) {
         log.warn("no commits but wt dirty; committing leftovers");
         await commitLeftovers(cfg, wtPath, `junco: ${task.id} (leftovers)`);
         newCommits = await countNewCommits(cfg, wtPath, sinceRef);
@@ -730,14 +771,24 @@ export async function runPrFlow(
     // corrective, critic pass 2 — whichever executed) so their usage can be
     // summed into the main run's for the ticket's recorded cost/tokens.
     const skipPostSessionReview = result.abortedByGuard || result.timedOut;
+    // Apply mode skips the CRITIC specifically (not verification): the diff
+    // IS the spec the ticket carried, so an LLM comparing the diff against
+    // itself is tautological. Spec verification is a separate, independent
+    // check (the ticket's own `## Verification` blocks) and still runs.
+    const skipCritic = skipPostSessionReview || patchSeries !== null;
     const extraUsages: Usage[] = [];
-    if (skipPostSessionReview) {
+    if (skipCritic) {
       // Record the skip as metadata (parity with worker.py PrOutcome.critic =
       // CriticResult(status="skipped", ...)). The buildPrBody banner only fires
       // on pass/missing, so this never surfaces in the PR body — metadata only.
       prOutcome.critic = {
         status: "skipped",
-        findings: result.timedOut ? "timed-out session" : "aborted-by-repetition session",
+        findings:
+          patchSeries !== null
+            ? "apply mode — the patch series is the spec"
+            : result.timedOut
+              ? "timed-out session"
+              : "aborted-by-repetition session",
         rawOutput: "",
         usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
       };
@@ -752,63 +803,65 @@ export async function runPrFlow(
         );
       }
 
-      const critic = await runCriticPass(cfg, task, wtPath, sinceRef, {
-        criticSessionFactory: deps.criticSessionFactory,
-      });
-      prOutcome.critic = critic;
-      extraUsages.push(critic.usage);
-      deps.spend?.recordUsd(critic.usage.costUsd);
-      log.info(
-        `critic: ${critic.status}${critic.findings ? ` (${critic.findings.slice(0, 120)})` : ""}`,
-      );
-
-      if (critic.status === "missing" && cfg.criticMaxRetries > 0 && !isAmend(ctx)) {
-        log.info(
-          `critic: MISSING ${critic.findings.slice(0, 120)} — re-dispatching one corrective worker turn`,
-        );
-        const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(
-          flowCfg,
-          wtPath,
-          {
-            network: task.network ?? undefined,
-          },
-        );
-        // Same ticketId → the envelope derives the same transcript path as
-        // the main run, so this turn appends to the same chronological
-        // record (second open finds the file exists → no second junco_meta).
-        const corrective = await runEnveloped(
-          flowCfg,
-          {
-            ticketId: task.id,
-            flow: "pr_corrective",
-            body: buildCorrectivePrompt(task, critic.findings),
-            cwd: wtPath,
-            timeoutMs: task.timeoutSeconds * 1000,
-          },
-          {
-            createSession: correctiveFactory,
-            abortSignal: deps.abortSignal,
-            onProgress: deps.onProgress,
-            onGuardDecision: deps.onGuardDecision,
-            spend: deps.spend,
-          },
-        );
-        extraUsages.push(corrective.usage);
-        prOutcome.criticRetriesUsed = 1;
-        log.info(`critic retry: agent abortedByGuard=${corrective.abortedByGuard}`);
-        // Re-evaluate commits + critic + verification after the retry.
-        newCommits = await countNewCommits(cfg, wtPath, sinceRef);
-        prOutcome.commits = await listNewCommits(cfg, wtPath, sinceRef);
-        const criticAfter = await runCriticPass(cfg, task, wtPath, sinceRef, {
+      if (patchSeries === null) {
+        const critic = await runCriticPass(cfg, task, wtPath, sinceRef, {
           criticSessionFactory: deps.criticSessionFactory,
         });
-        prOutcome.critic = criticAfter;
-        extraUsages.push(criticAfter.usage);
-        deps.spend?.recordUsd(criticAfter.usage.costUsd);
+        prOutcome.critic = critic;
+        extraUsages.push(critic.usage);
+        deps.spend?.recordUsd(critic.usage.costUsd);
         log.info(
-          `critic (post-retry): ${criticAfter.status}${criticAfter.findings ? ` (${criticAfter.findings.slice(0, 120)})` : ""}`,
+          `critic: ${critic.status}${critic.findings ? ` (${critic.findings.slice(0, 120)})` : ""}`,
         );
-        prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+
+        if (critic.status === "missing" && cfg.criticMaxRetries > 0 && !isAmend(ctx)) {
+          log.info(
+            `critic: MISSING ${critic.findings.slice(0, 120)} — re-dispatching one corrective worker turn`,
+          );
+          const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(
+            flowCfg,
+            wtPath,
+            {
+              network: task.network ?? undefined,
+            },
+          );
+          // Same ticketId → the envelope derives the same transcript path as
+          // the main run, so this turn appends to the same chronological
+          // record (second open finds the file exists → no second junco_meta).
+          const corrective = await runEnveloped(
+            flowCfg,
+            {
+              ticketId: task.id,
+              flow: "pr_corrective",
+              body: buildCorrectivePrompt(task, critic.findings),
+              cwd: wtPath,
+              timeoutMs: task.timeoutSeconds * 1000,
+            },
+            {
+              createSession: correctiveFactory,
+              abortSignal: deps.abortSignal,
+              onProgress: deps.onProgress,
+              onGuardDecision: deps.onGuardDecision,
+              spend: deps.spend,
+            },
+          );
+          extraUsages.push(corrective.usage);
+          prOutcome.criticRetriesUsed = 1;
+          log.info(`critic retry: agent abortedByGuard=${corrective.abortedByGuard}`);
+          // Re-evaluate commits + critic + verification after the retry.
+          newCommits = await countNewCommits(cfg, wtPath, sinceRef);
+          prOutcome.commits = await listNewCommits(cfg, wtPath, sinceRef);
+          const criticAfter = await runCriticPass(cfg, task, wtPath, sinceRef, {
+            criticSessionFactory: deps.criticSessionFactory,
+          });
+          prOutcome.critic = criticAfter;
+          extraUsages.push(criticAfter.usage);
+          deps.spend?.recordUsd(criticAfter.usage.costUsd);
+          log.info(
+            `critic (post-retry): ${criticAfter.status}${criticAfter.findings ? ` (${criticAfter.findings.slice(0, 120)})` : ""}`,
+          );
+          prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+        }
       }
     }
 
