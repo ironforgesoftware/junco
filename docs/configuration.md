@@ -156,6 +156,8 @@ external                → clones/external         github-watchlist.json → wa
 
 ### `junco data migrate` — the opt-in full unification
 
+> **Sunset (#360): `junco data migrate` — and the pre-0.10 `flat`-layout / `vaultRoot` migration path it exists for — is removed in 1.0.** Every 0.x release keeps it, so the upgrade path for an older install is: run `junco data migrate` on a 0.x release _before_ moving to 1.0. Nothing is ever deleted — a root that was never migrated stays exactly where it is — but from 1.0 on, nothing in junco relocates it any more.
+
 Two things never move on their own: a `vaultRoot` queue, and the root itself while it's still the legacy `~/.local/state/junco` (or an explicit `dataDir` that predates the `v2` shape) — leaving either alone is always safe, and nothing silently relocates live data. `junco data migrate` is the explicit, opt-in command that unifies all of it in one run, in order:
 
 1. Moves the `vaultRoot` queue (if set) into `<targetRoot>/queue` (rename, falling back to copy+verify+fsync+delete across filesystems).

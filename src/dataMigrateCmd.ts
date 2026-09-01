@@ -93,6 +93,10 @@
  * renaming, then remove the redundant legacy file — order-independent, and
  * correct whether the target journal is fresh or already holds entries from
  * an earlier run.
+ *
+ * Sunset (#360): this module, and migratePathRewrite.ts with it, serve only
+ * pre-0.10 flat-layout / vaultRoot installs and are removed in 1.0 — see
+ * docs/configuration.md § `junco data migrate`.
  */
 import {
   existsSync,
