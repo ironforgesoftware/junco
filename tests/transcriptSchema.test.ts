@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseTranscriptLine } from "../src/agent/transcriptSchema.js";
+import type { ChatRecord, FlowKind } from "../src/agent/transcriptSchema.js";
 
 describe("parseTranscriptLine", () => {
   it("classifies junco_* records", () => {
@@ -31,7 +32,7 @@ describe("parseTranscriptLine", () => {
 
 describe("chat records (spec 2026-09-01 §1.3)", () => {
   it("every junco_chat_* record classifies as junco", () => {
-    const records: any[] = [
+    const records: ChatRecord[] = [
       { type: "junco_chat_prompt", text: "hi", mode: "prompt", source: "operator", ts: "t" },
       { type: "junco_chat_turn_start", modelId: "m", tools: ["read"], timeoutMs: 1, ts: "t" },
       {
@@ -64,7 +65,7 @@ describe("chat records (spec 2026-09-01 §1.3)", () => {
     }
   });
   it("chat is a FlowKind", () => {
-    const f: any = "chat";
+    const f: FlowKind = "chat";
     expect(f).toBe("chat");
   });
 });
