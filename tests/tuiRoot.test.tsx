@@ -5,7 +5,7 @@ import { Root } from "../src/tui/Root.js";
 import { defaultAnswers } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 import { makeAppProps } from "./helpers/localFixtures.js";
-import { until, UNTIL_TRIES } from "./helpers/until.js";
+import { until, tick, pressUntilAdvanced } from "./helpers/until.js";
 
 afterEach(cleanup);
 
@@ -42,31 +42,9 @@ function fakeIo(overrides: Partial<WizardIO> = {}): WizardIO {
 }
 
 const ENTER = "\r";
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30));
 async function press(stdin: { write: (s: string) => void }, key: string): Promise<void> {
   stdin.write(key);
   await tick();
-}
-/** Press `key` repeatedly — but only while `fromMarker` still shows — until
- * `toMarker` appears. Adapted from tests/wizardApp.test.tsx (see the doc
- * comment there): the Model chapter's "pick" step is mounted from a bare
- * Promise .then(), so under CPU starvation a single keystroke can arrive in
- * the gap before its useInput subscribes and be dropped for good. */
-async function pressUntilAdvanced(
-  stdin: { write: (s: string) => void },
-  key: string,
-  lastFrame: () => string | undefined,
-  fromMarker: string,
-  toMarker: string,
-  tries = UNTIL_TRIES,
-): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    const frame = lastFrame() ?? "";
-    if (frame.includes(toMarker)) return;
-    if (frame.includes(fromMarker)) stdin.write(key);
-    await tick();
-  }
-  await until(() => (lastFrame() ?? "").includes(toMarker), 1); // final real-failure assert
 }
 
 /** Enter-through choreography from Welcome to (and including) Review's

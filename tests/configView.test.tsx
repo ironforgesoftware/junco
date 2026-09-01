@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ConfigView } from "../src/tui/components/ConfigView.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
-import { until, fireUntil } from "./helpers/until.js";
+import { until, fireUntil, tick } from "./helpers/until.js";
 
 afterEach(cleanup);
 
@@ -16,14 +16,6 @@ const RIGHT = "\x1b[C";
 const ENTER = "\r";
 const ESC = "\x1b";
 const BACKSPACE = "\x7f";
-
-// A single native `data` event (one `stdin.write` call) is one keypress, and
-// Ink schedules its resulting state update as a React "discrete" update — a
-// SECOND write issued before that update has committed can race a stale
-// closure (confirmed empirically: chained writes with no tick between them
-// silently dropped keystrokes). tuiApp.test.tsx's own `tick()` helper exists
-// for the same reason — mirrored here for every multi-step key sequence.
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30));
 
 async function press(stdin: { write: (s: string) => void }, ...keys: string[]): Promise<void> {
   for (const k of keys) {

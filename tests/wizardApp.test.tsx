@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
 import { render, cleanup } from "ink-testing-library";
-import { until } from "./helpers/until.js";
+import { until, tick, pressUntilAdvanced } from "./helpers/until.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { WizardApp } from "../src/tui/wizard/WizardApp.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
@@ -11,7 +11,6 @@ import type { WizardAnswers } from "../src/wizard/flow.js";
 afterEach(cleanup);
 const ENTER = "\r";
 const ESC = "\x1b";
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30));
 async function press(stdin: { write: (s: string) => void }, ...keys: string[]): Promise<void> {
   for (const k of keys) {
     stdin.write(k);
@@ -26,43 +25,6 @@ async function press(stdin: { write: (s: string) => void }, ...keys: string[]): 
 const mousePress = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
 const lineOf = (frame: string, needle: string): number =>
   frame.split("\n").findIndex((l) => l.includes(needle));
-
-/**
- * Press `key` repeatedly — but only while `fromMarker` is still showing —
- * until `toMarker` appears. Plain `press()` + `until()` is unsafe for one
- * specific transition in the walkthrough below: the Model chapter's "pick"
- * step (see src/tui/wizard/chapters/Model.tsx) is the only step in the whole
- * flow mounted from a bare Promise `.then()` (the `probe` effect's
- * `io.discoverModels().then(...)`) rather than from a keystroke handler,
- * which Ink wraps in `reconciler.discreteUpdates` (src/hooks/use-input.js in
- * ink) and flushes synchronously. A step mounted off-cycle like this can
- * still be rendering (its marker text visible via lastFrame()) a tick before
- * its own `useInput` effect has subscribed to Ink's internal input emitter —
- * and that emitter is fire-and-forget: a keystroke arriving in that gap is
- * dropped for good, no replay, so a plain `until()` afterward would spin
- * until it exhausts its whole budget no matter how generous. Confirmed by
- * capturing the exact pre/post frames on a reproduced stall: they were
- * byte-for-byte identical, i.e. the Enter never reached the Select at all.
- * Resending is safe specifically because every resend is gated on still
- * seeing `fromMarker`: a first press that landed but just hasn't rendered
- * yet is never double-submitted, since we stop the instant `toMarker` shows.
- */
-async function pressUntilAdvanced(
-  stdin: { write: (s: string) => void },
-  key: string,
-  lastFrame: () => string | undefined,
-  fromMarker: string,
-  toMarker: string,
-  tries: number,
-): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    const frame = lastFrame() ?? "";
-    if (frame.includes(toMarker)) return;
-    if (frame.includes(fromMarker)) stdin.write(key);
-    await tick();
-  }
-  await until(() => (lastFrame() ?? "").includes(toMarker), 1); // final real-failure assert
-}
 
 const SIZE = { columns: 100, rows: 32 };
 // Generous ceiling for the long Enter-through walkthrough: exits as soon as
