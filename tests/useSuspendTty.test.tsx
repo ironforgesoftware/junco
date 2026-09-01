@@ -162,7 +162,18 @@ describe("useSuspend under incrementalRendering", () => {
       <SuspendProvider>
         <Probe />
       </SuspendProvider>,
-      { stdin, stdout, exitOnCtrlC: false, patchConsole: false, incrementalRendering: true },
+      // interactive: true — Ink resolves the default as `!isInCi && stdout.isTTY`
+      // (ink/build/ink.js resolveInteractiveOption), and GitHub Actions sets
+      // CI=true, so without the override Ink writes NO frames on CI and this
+      // test (which observes Ink's own writes) can never see the repaint.
+      {
+        stdin,
+        stdout,
+        exitOnCtrlC: false,
+        patchConsole: false,
+        incrementalRendering: true,
+        interactive: true,
+      },
     );
     unmountFn = () => app.unmount();
     await until(() => done);

@@ -85,6 +85,10 @@ export function mountForFrames(
       patchConsole: false,
       alternateScreen: true,
       incrementalRendering: opts.incrementalRendering ?? false,
+      // Ink defaults `interactive` to `!isInCi && stdout.isTTY`; under CI=true
+      // it would count frames (onRender still fires) but write no bytes, so
+      // `bytes()` would silently read 0 there. Force the production mode.
+      interactive: true,
       onRender: (m) => {
         frames.push(m.renderTime);
       },
