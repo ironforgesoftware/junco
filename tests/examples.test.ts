@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseTicket } from "../src/ticket.js";
 import { lintTicket } from "../src/planLint.js";
 import { extractPatchBody, extractPlanSetBody } from "../src/githubInbox.js";
 import { parsePlanSet, compilePlan } from "../src/planCompiler.js";
-import { LEVERS } from "../src/configLevers.js";
+import { LEVERS, getAtPath } from "../src/configLevers.js";
+import { assembleConfig, configDeprecations, parseConfigFile } from "../src/config.js";
 
 // `examples/` ships in the npm package (package.json `files` allowlist) and
 // `docs/` is what people copy from. Neither has code coupling, so nothing else
@@ -61,6 +64,59 @@ describe("examples/plan-set.md", () => {
     for (const child of children) {
       const t = parseTicket(`${child.ticketId}.md`, child.content);
       expect(lintTicket(t.body, t.frontmatter, { checkLabels: false }).violations).toEqual([]);
+    }
+  });
+});
+
+// Keys a config template sets to show a shape rather than to restate a default:
+// the endpoint identity and a hosted-endpoint spend cap. Every other key it
+// states must equal the schema default, so the template can't drift from the
+// code again (#377). `dataDir`/`baseUrl`/`apiKey` need no entry — their lever
+// default is `undefined`, which the drift check already skips.
+const ILLUSTRATIVE = ["model.id", "model.compat", "worker.dailyBudgetUsd"];
+
+function leaves(obj: unknown, prefix = ""): Array<[string, unknown]> {
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return [[prefix, obj]];
+  return Object.entries(obj as Record<string, unknown>).flatMap(([k, v]) =>
+    leaves(v, prefix === "" ? k : `${prefix}.${k}`),
+  );
+}
+
+describe.each(["examples/config.json", "examples/config.hosted.json"])("%s", (rel) => {
+  const raw = JSON.parse(read(rel)) as Record<string, unknown>;
+
+  it("leads with dataDir and sets no deprecated queue-root key", () => {
+    expect(Object.keys(raw)[0]).toBe("dataDir");
+    expect(raw).not.toHaveProperty("vaultRoot");
+    expect(raw).not.toHaveProperty("juncoSubdir");
+  });
+
+  it("loads through the config loader and resolves with no deprecation warning", () => {
+    const parsed = parseConfigFile(fileURLToPath(new URL(`../${rel}`, import.meta.url)));
+    const cfg = assembleConfig(parsed, { HOME: "/h" }, { existsFn: () => false });
+    expect(configDeprecations(cfg)).toEqual([]);
+    expect(cfg.queueRoot).toBe(join(cfg.dataDir, "queue"));
+  });
+
+  it("names every post-0.9 section", () => {
+    const sections = [
+      "updateCheck",
+      "worker.applyFallbackToAgent",
+      "github",
+      "botAccount",
+      "planSets",
+      "skills",
+    ];
+    for (const path of sections) expect(getAtPath(raw, path), path).toBeDefined();
+  });
+
+  it("states only known levers, each at its schema default (illustrative values aside)", () => {
+    for (const [path, value] of leaves(raw)) {
+      const lever = LEVERS.find((l) => l.path === path || path.startsWith(`${l.path}.`));
+      expect(lever, `${path} is not a config lever`).toBeDefined();
+      if (lever === undefined || ILLUSTRATIVE.includes(lever.path)) continue;
+      if (lever.default === undefined) continue;
+      expect(value, path).toEqual(lever.default);
     }
   });
 });

@@ -1,7 +1,7 @@
 {
-  "vaultRoot": "~/junco-vault",
-  "juncoSubdir": "Junco",
-  "tools": ["bash", "read", "write", "edit", "grep", "find"],
+  "dataDir": "~/.junco",
+  "updateCheck": true,
+  "tools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
   "worker": {
     "commitLeftovers": false,
     "defaultTimeoutMinutes": 30,
@@ -10,7 +10,8 @@
     "startupWait": true,
     "maxTransientRetries": 2,
     "retryBackoffSeconds": 60,
-    "maxConcurrent": 1
+    "maxConcurrent": 1,
+    "applyFallbackToAgent": true
   },
   "model": {
     "id": "myprovider/my-model",
@@ -38,7 +39,6 @@
     "ghBin": "gh",
     "defaultBaseBranch": "main",
     "branchPrefix": "junco/",
-    "worktreeRoot": "~/junco/worktrees",
     "removeWorktreeOnSuccess": true,
     "allowedRepoRoots": []
   },
@@ -77,9 +77,28 @@
     "logToFile": true,
     "transcripts": true
   },
+  "github": {
+    "enabled": false,
+    "triggerLabel": "junco",
+    "pollIntervalSeconds": 60,
+    "requireApproval": true,
+    "repos": []
+  },
+  "botAccount": {
+    "enabled": false,
+    "configDir": "~/.junco/gh"
+  },
+  "planSets": {
+    "enabled": false,
+    "mergePollSeconds": 60,
+    "maxTasks": 10
+  },
   "assess": {
     "maxIssuesPerRun": 20,
     "minSeverity": "low",
     "npmBin": "npm"
+  },
+  "skills": {
+    "harnessDirs": []
   }
 }
