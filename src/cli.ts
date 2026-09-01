@@ -1458,6 +1458,21 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     // branch only ever sets `content` (+ a synthetic `fileArg` for display/idHint
     // parity with the file-sourced path); everything after it is unchanged.
     if (typeof values.patch === "string") {
+      // final-review item 13: reject usage errors up front, at exit 2, rather
+      // than silently discarding a positional (fileArg was clobbered by
+      // `fileArg = patchArg` below with no warning) or failing late with a
+      // confusing "no junco-plan fence found in '<patchfile>'" once --plan's
+      // own branch runs against a composed patch ticket that never had one.
+      if (fileArg) {
+        process.stderr.write(
+          "junco submit: --patch and a positional file argument are mutually exclusive\n",
+        );
+        return 2;
+      }
+      if (values.plan === true) {
+        process.stderr.write("junco submit: --patch and --plan are mutually exclusive\n");
+        return 2;
+      }
       const patchArg = values.patch;
       const repoFlag = values.repo as string | undefined;
       if (!repoFlag) {

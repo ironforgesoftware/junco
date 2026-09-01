@@ -1288,7 +1288,10 @@ describe("claimNextTask (apply tickets bypass the readiness gate — Stage 4b)",
     const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
     const j = join(root, "Junco");
     ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
-    writeFileSync(join(j, "inbox", "apply1.md"), `---\nid: apply1\n---\n${applyTicketBody()}`);
+    writeFileSync(
+      join(j, "inbox", "apply1.md"),
+      `---\nid: apply1\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
+    );
     const work = await claimNextTask(cfg(root), { readyFn: async () => false });
     // Pre-narrowing code returns null unconditionally once readyFn reports
     // not-ready, so this fails against it (work would be null/undefined).
@@ -1303,7 +1306,7 @@ describe("claimNextTask (apply tickets bypass the readiness gate — Stage 4b)",
     writeFileSync(join(j, "inbox", "agent1.md"), "---\nid: agent1\npriority: high\n---\nx\n");
     writeFileSync(
       join(j, "inbox", "apply1.md"),
-      `---\nid: apply1\npriority: low\n---\n${applyTicketBody()}`,
+      `---\nid: apply1\npriority: low\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
     );
     const work = await claimNextTask(cfg(root), { readyFn: async () => false });
     // Pre-narrowing code returns null here too, so work?.ticket.id would be
@@ -1320,15 +1323,15 @@ describe("claimNextTask (apply tickets bypass the readiness gate — Stage 4b)",
     ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
     writeFileSync(
       join(j, "inbox", "a.md"),
-      `---\nid: low\npriority: low\n---\n${applyTicketBody()}`,
+      `---\nid: low\npriority: low\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
     );
     writeFileSync(
       join(j, "inbox", "b.md"),
-      `---\nid: normal\npriority: normal\n---\n${applyTicketBody()}`,
+      `---\nid: normal\npriority: normal\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
     );
     writeFileSync(
       join(j, "inbox", "c.md"),
-      `---\nid: high\npriority: high\n---\n${applyTicketBody()}`,
+      `---\nid: high\npriority: high\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
     );
     const readyFn = async () => false;
     // Each claim re-discovers the inbox — same idiom as the ready-path
@@ -1359,6 +1362,76 @@ describe("claimNextTask (apply tickets bypass the readiness gate — Stage 4b)",
     // report for the full discrimination rationale per test).
     expect(work).toBeNull();
     expect(readdirSync(join(j, "inbox"))).toEqual(["agent1.md"]); // left queued, untouched
+  });
+
+  // ---------------------------------------------------------------------
+  // final-review R4: the fence test alone is body-only — "no agent session"
+  // is only true on the PR-flow branch. executeClaimed routes on analyze →
+  // assess → hasRepo, all ahead of/around apply mode, so an analyze:/assess:
+  // ticket, or a repo-less one, carrying a junco-patch fence must NOT be
+  // claimed while the endpoint/gate is down: it would be handed to a flow
+  // that genuinely needs inference.
+  // ---------------------------------------------------------------------
+
+  it("does not claim an assess ticket while not ready, even though it carries a well-formed junco-patch fence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(
+      join(j, "inbox", "assess-apply.md"),
+      `---\nid: assess-apply\nassess: {}\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
+    );
+    const work = await claimNextTask(cfg(root), { readyFn: async () => false });
+    // Before the fix: the body-only filter sees the fence and claims it,
+    // handing an assess ticket to a flow that needs the (down) endpoint.
+    expect(work).toBeNull();
+    expect(readdirSync(join(j, "inbox"))).toEqual(["assess-apply.md"]); // left queued
+  });
+
+  it("does not claim an analyze ticket while not ready, even though it carries a well-formed junco-patch fence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(
+      join(j, "inbox", "analyze-apply.md"),
+      `---\nid: analyze-apply\nanalyze:\n  issue: 1\n  title: T\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
+    );
+    const work = await claimNextTask(cfg(root), { readyFn: async () => false });
+    expect(work).toBeNull();
+    expect(readdirSync(join(j, "inbox"))).toEqual(["analyze-apply.md"]); // left queued
+  });
+
+  it("does not claim a repo-less ticket while not ready, even though it carries a well-formed junco-patch fence — apply mode needs a repo to run `git am` in", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(
+      join(j, "inbox", "norepo-apply.md"),
+      `---\nid: norepo-apply\n---\n${applyTicketBody()}`,
+    );
+    const work = await claimNextTask(cfg(root), { readyFn: async () => false });
+    expect(work).toBeNull();
+    expect(readdirSync(join(j, "inbox"))).toEqual(["norepo-apply.md"]); // left queued
+  });
+
+  it("still claims a genuine (hasRepo, non-assess, non-analyze) apply ticket among a mix of excluded kinds", async () => {
+    // A mixed-queue regression guard: the narrowing must not become so broad
+    // it stops claiming real apply tickets once assess/analyze/repo-less
+    // exclusions are added.
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(
+      join(j, "inbox", "assess-apply.md"),
+      `---\nid: assess-apply\nassess: {}\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
+    );
+    writeFileSync(
+      join(j, "inbox", "real-apply.md"),
+      `---\nid: real-apply\nrepo: /tmp/does-not-exist-junco\n---\n${applyTicketBody()}`,
+    );
+    const work = await claimNextTask(cfg(root), { readyFn: async () => false });
+    expect(work?.ticket.id).toBe("real-apply");
+    expect(readdirSync(join(j, "inbox"))).toEqual(["assess-apply.md"]); // only the real one claimed
   });
 });
 

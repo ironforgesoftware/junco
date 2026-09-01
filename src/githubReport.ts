@@ -50,8 +50,10 @@ function excerpt(text: string, cap = 700): string {
 export interface BuildFinalCommentOpts {
   /** Whether a per-ticket event transcript actually exists on disk. Defaults
    * to true — every existing (pre-2026-08-31) caller is an agent ticket,
-   * which always produces one; apply tickets (git am, no agent session) never
-   * do, so makeGithubReporter passes the real check explicitly. */
+   * which always produces one; an apply ticket (git am, no agent session)
+   * writes its own transcript frames too (see applyPatch.ts), but
+   * makeGithubReporter passes the real existsSync check explicitly rather
+   * than assume either way. */
   transcriptExists?: boolean;
 }
 

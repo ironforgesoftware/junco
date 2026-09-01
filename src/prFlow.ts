@@ -261,6 +261,25 @@ async function worktreeIsDirty(cfg: Config, wtPath: string): Promise<boolean> {
   return cp.stdout.trim().length > 0;
 }
 
+/**
+ * Pick the most useful line from a multi-line apply-fallback failure reason
+ * for the disclosure banner (final-review O13/item 12): `git am`'s output
+ * commonly leads with its LEAST informative line (git's own "Applying:
+ * <subject>" progress line), with the actual cause — a CONFLICT/error/fatal
+ * line — further down. Prefer that; fall back to the first line when nothing
+ * matches (single-line reasons, or a reason shaped by the verification rung
+ * rather than `git am`, are unaffected).
+ */
+function pickInformativeReasonLine(reason: string): string {
+  const lines = reason
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return reason.split("\n")[0];
+  const informative = lines.find((l) => /^(CONFLICT|error:|fatal:)/i.test(l));
+  return informative ?? lines[0];
+}
+
 /** Format an elapsed seconds count (parity with worker.py `_fmt_duration`). */
 function fmtDuration(seconds: number): string {
   if (seconds < 0) return "?";
@@ -311,7 +330,7 @@ export function buildPrBody(
   // model, so this banner is never optional when applyFallback is set.
   if (prOutcome.applyFallback) {
     const { kind, reason } = prOutcome.applyFallback;
-    const reasonFirstLine = reason.split("\n")[0];
+    const reasonFirstLine = pickInformativeReasonLine(reason);
     const what =
       kind === "apply"
         ? "The reviewed patch did not apply cleanly"
@@ -560,6 +579,30 @@ export async function runPrFlow(
       network: task.network ?? undefined,
     });
   const patchSeries = parsePatchSeries(task.body);
+  // final-review B1: an apply ticket can never amend an existing PR. Amend
+  // mode's Phase 12 branch (below) only refreshes the PR URL — it never calls
+  // buildPrBody — so a fallback session here would substitute agent work for
+  // the reviewed diff with NO disclosure anywhere (not the PR body, not the
+  // finalize comment). This is documented-unsupported (SKILL.md/TEMPLATE.md)
+  // and now caught structurally at lint time too (planLint.ts's
+  // `patch_no_amend`); this is the runtime backstop for a ticket that reaches
+  // claim some other way (lint disabled or non-blocking). Terminate BEFORE
+  // entering apply mode or the agent path — never let this combination run.
+  if (patchSeries !== null && isAmend(ctx)) {
+    const phaseError =
+      "apply ticket cannot amend an existing PR (amends_pr) — amend mode never rebuilds the " +
+      "PR body, so a fallback would substitute agent work with no disclosure; dispatch this " +
+      "as a fresh ticket instead";
+    prOutcome.worktreePreserved = true;
+    log.warn(phaseError);
+    const r = emptyRunResult(phaseError);
+    return flowResult(
+      finalizePr(claimedPath, r, prOutcome, { dirs, phaseError }),
+      prOutcome,
+      r,
+      phaseError,
+    );
+  }
   let result: RunResult;
   if (patchSeries !== null) {
     log.info("apply mode: applying junco-patch series", {
@@ -717,15 +760,37 @@ export async function runPrFlow(
       const cls = classifyProviderFailure(result.errorMessage);
       if (deps.gate && GATE_CLASSES.has(cls)) {
         deps.gate.reportFailure(cls, result.errorMessage ?? cls);
-        const rq = requeueTicketKeepBudget(
-          cfg,
-          claimedPath,
-          deps.gate.notBeforeIso(),
-          result.errorMessage ?? cls,
-        );
-        await cleanupWorktree(cfg, ctx, wtPath);
-        log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
-        return requeuedResult(rq.dst, result);
+        const reason = result.errorMessage ?? cls;
+        // final-review R3: `requeueTicketKeepBudget`'s own invariant is "the
+        // gate, not the budget, prevents a hot loop" — true for an ordinary
+        // agent ticket (a latched gate blocks re-claiming), but NOT for
+        // Stage 2a's apply-failure fallback: Stage 4b lets apply tickets
+        // claim through a latched gate, so a fallback session that hits the
+        // SAME gate-class failure every retry (e.g. a standing 401) would
+        // otherwise requeue budget-free forever, roughly every
+        // retryBackoffSeconds, provisioning and tearing down a worktree each
+        // cycle. Consume the retry budget for THIS session only — ordinary
+        // agent tickets (prOutcome.applyFallback stays null for them) keep
+        // the existing budget-free, gate-protected requeue.
+        if (prOutcome.applyFallback !== null) {
+          const rq = requeueTicket(cfg, claimedPath, task, reason);
+          if (rq.requeued) {
+            await cleanupWorktree(cfg, ctx, wtPath);
+            log.warn("provider-gate requeue (fallback session, budgeted)", {
+              dst: rq.dst,
+              class: cls,
+            });
+            return requeuedResult(rq.dst!, result);
+          }
+          // Budget exhausted (or malformed frontmatter) — fall through to the
+          // ordinary hard-error terminal handling below instead of retrying
+          // the requeue a second time.
+        } else {
+          const rq = requeueTicketKeepBudget(cfg, claimedPath, deps.gate.notBeforeIso(), reason);
+          await cleanupWorktree(cfg, ctx, wtPath);
+          log.warn("provider-gate requeue", { dst: rq.dst, class: cls });
+          return requeuedResult(rq.dst, result);
+        }
       }
       if (deps.gate && cls === "outage") deps.gate.reportFailure(cls, result.errorMessage ?? cls);
     }
@@ -1000,7 +1065,20 @@ export async function runPrFlow(
           kind: "verification",
           detail,
         });
-        const fallback = await runEnveloped(
+        // Full fidelity (final-review R5): REPLACE `result` with the fallback
+        // session's own RunResult, mirroring Stage 2a's Phase-4 fallback
+        // (which assigns straight into `result` too) rather than discarding
+        // everything but its usage. Downstream — computePrStatus (finalize.ts),
+        // buildPrBody's guard/timeout banners and Agent-summary/metadata
+        // section, and Phase 14's gate.reportSuccess() below — all read
+        // `result`/`finalResult`, not a separately-tracked fallback value; a
+        // guard-killed or timed-out fallback must read as a partial run, and
+        // the PR body must show what the agent actually did, not the
+        // synthesized apply result's "Applied N patch(es)" / zero tool calls.
+        // extraUsages stays untouched here: `result.usage` (now the fallback's)
+        // is already the base sumUsage(...) below adds onto — pushing it again
+        // would double-count.
+        result = await runEnveloped(
           flowCfg,
           {
             ticketId: task.id,
@@ -1017,8 +1095,7 @@ export async function runPrFlow(
             spend: deps.spend,
           },
         );
-        extraUsages.push(fallback.usage);
-        log.info(`apply fallback (verification): agent abortedByGuard=${fallback.abortedByGuard}`);
+        log.info(`apply fallback (verification): agent abortedByGuard=${result.abortedByGuard}`);
         // Re-count/list commits (mirrors the critic corrective-retry
         // re-evaluation below) and re-run verification exactly once.
         newCommits = await countNewCommits(cfg, wtPath, sinceRef);
@@ -1279,7 +1356,16 @@ export async function runPrFlow(
   // A guard-kill or timeout can reach this same return with commits salvaged
   // (aborted_partial/timeout_partial) — that's not a clean inference-side
   // success (mirrors the Q&A gate wiring in runOnce.ts, which excludes both).
-  if (deps.gate && !result.abortedByGuard && !result.timedOut) deps.gate.reportSuccess();
+  // final-review R2: a clean apply (`prOutcome.mode === "apply"`) never ran a
+  // model session at all — `result` is the synthesized `git am` outcome, which
+  // is always !abortedByGuard/!timedOut, so reporting success here would tell
+  // the gate the PROVIDER is healthy on evidence consisting entirely of `git
+  // am`. Only report success once an agent session actually ran (mode
+  // "agent" or "apply_fallback") — the same evidence-gated pattern
+  // reportBudgetExhausted already follows elsewhere.
+  if (deps.gate && prOutcome.mode !== "apply" && !result.abortedByGuard && !result.timedOut) {
+    deps.gate.reportSuccess();
+  }
   return flowResult(
     finalizePr(claimedPath, finalResult, prOutcome, { dirs }),
     prOutcome,

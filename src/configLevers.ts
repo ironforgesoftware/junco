@@ -343,7 +343,7 @@ export const LEVERS: Lever[] = [
     editable: true,
     reload: "live",
     description:
-      "When a patch ticket's junco-patch series fails to apply, fall back to the agent (patch as spec) instead of failing the ticket terminally.",
+      "When a patch ticket's junco-patch series fails to apply, or applies cleanly but its own Verification block then fails, fall back to the agent (patch as spec) instead of failing the ticket terminally.",
   },
   {
     path: "worker.dailyBudgetUsd",

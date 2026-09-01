@@ -257,8 +257,9 @@ amends_pr: 42
 Use this instead of the Steps/Files shape above when you already know the
 exact bytes the change needs. An apply ticket carries a `git format-patch`
 series in a `junco-patch` fence instead of prose Steps; junco applies and
-commits it directly with `git am --3way` — no agent session, and the
-series' own commit messages become the PR's commits.
+commits it directly with `git am --3way` — no agent session when the series
+applies cleanly (see the fallback in SKILL.md) — and the series' own commit
+messages become the PR's commits.
 
 ### Minimal apply ticket
 

@@ -180,7 +180,16 @@ export async function claimNextTask(
     // gate (daemon.ts) — a latched/backed-off gate blocks claiming exactly
     // like an unreachable endpoint does, so "inference endpoint not ready"
     // is misleading when only the gate is the reason. Stay readiness-neutral.
-    claimable = unblocked.filter((t) => parsePatchSeries(t.body) !== null);
+    // final-review R4: the fence test alone is body-only — "executed by
+    // `git am` with no agent session" (the comment above the ORIGINAL,
+    // narrower filter) is only true on the PR-flow branch. executeClaimed
+    // routes on analyze → assess → hasRepo, all ahead of/around apply mode,
+    // so an analyze:/assess: ticket, or a repo-less one, that happens to
+    // carry a junco-patch fence would otherwise be claimed here and then
+    // handed to a flow that DOES need inference. Narrow to PR-flow tickets.
+    claimable = unblocked.filter(
+      (t) => t.hasRepo && !t.assess && !t.analyze && parsePatchSeries(t.body) !== null,
+    );
     if (claimable.length === 0) {
       log.warn(
         "not ready to claim (endpoint or provider gate); leaving inbox untouched this poll",

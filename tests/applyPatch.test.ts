@@ -500,4 +500,77 @@ describe("buildApplyFallbackPrompt", () => {
     expect(prompt).toMatch(/applied cleanly.*Verification.*failed/i);
     expect(prompt).toContain("grep -q 'line one' feature.txt failed (exit 1)");
   });
+
+  // ---------------------------------------------------------------------
+  // final-review R6: the "already been tried and rolled back" claim is only
+  // true on the APPLY rung (git am --abort really ran); on the VERIFICATION
+  // rung the series applied cleanly and its commits are already in the
+  // worktree — saying "rolled back" there is false and contradicts the
+  // prompt's own opening sentence, inviting the agent to redo work that's
+  // already present.
+  // ---------------------------------------------------------------------
+
+  it("an APPLY-kind failure still says the series was rolled back", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, { kind: "apply", detail: "conflict" });
+    expect(prompt).toMatch(/rolled back/i);
+  });
+
+  it("a VERIFICATION-kind failure does NOT claim the series was rolled back — it applied and is already committed", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, {
+      kind: "verification",
+      detail: "grep -q 'line one' feature.txt failed (exit 1)",
+    });
+    // Before the fix, this was unconditional text shared by both kinds — an
+    // outright false statement on this rung (nothing was rolled back).
+    expect(prompt).not.toMatch(/rolled back/i);
+    // It should instead be honest that the series already applied/committed
+    // and that the job is to fix what the checks caught, not redo the work.
+    expect(prompt).toMatch(/already applied|already .* committed|already in this worktree/i);
+    // Still forbids re-running git am/git apply (for a different reason).
+    expect(prompt).toMatch(/do not run `git am` or `git apply`/i);
+  });
+
+  // ---------------------------------------------------------------------
+  // final-review O5: the series must appear exactly ONCE in the prompt — the
+  // fenced "### Intended change" block. Before the fix, `task.body` (which
+  // still carries the whole junco-patch fence) was appended verbatim as
+  // "### The ticket", doubling the series for a large patch.
+  // ---------------------------------------------------------------------
+
+  it("embeds the series exactly once, even though the ticket's own body still carries the junco-patch fence", () => {
+    const bodyWithFence = [
+      "# Add levels 15-19",
+      "",
+      "Extend the LEVELS array in game.js.",
+      "",
+      "````junco-patch",
+      series.raw,
+      "````",
+      "",
+      "## Verification",
+      "",
+      "```bash",
+      "node --check game.js",
+      "```",
+      "",
+    ].join("\n");
+    const taskWithFence = parseTicket(
+      "/q/t2.md",
+      `---\nid: t2\nrepo: /r\n---\n${bodyWithFence}`,
+      30,
+    );
+    const prompt = buildApplyFallbackPrompt(taskWithFence, series, {
+      kind: "apply",
+      detail: "conflict",
+    });
+    // series.raw itself contains no newline-terminated repeats of its own
+    // text, so a plain occurrence count is a safe, exact discriminator.
+    const occurrences = prompt.split(series.raw).length - 1;
+    expect(occurrences).toBe(1);
+    // The ticket's own prose survives (stripPatchFence removes only the fence).
+    expect(prompt).toContain("Extend the LEVELS array in game.js.");
+    expect(prompt).toContain("## Verification");
+    // The fence marker itself is gone from the "### The ticket" section.
+    expect(prompt).not.toContain("junco-patch");
+  });
 });

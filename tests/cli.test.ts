@@ -2481,6 +2481,52 @@ index 1111111..2222222 100644
     expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
   });
 
+  // Usage errors (final-review item 13): a positional file argument together
+  // with --patch used to be silently overwritten (`fileArg = patchArg`), and
+  // --patch --plan used to fail late inside --plan's own branch with a
+  // confusing "no junco-plan fence found in '<patchfile>'" (the composed
+  // patch ticket never has a junco-plan fence — it isn't the right kind of
+  // fence to look for). Both are usage errors, caught up front at exit 2.
+
+  it("a positional file argument together with --patch is a usage error (exit 2), not a silent override", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    const cap = capturedStderr();
+    let code: number;
+    try {
+      code = await run(
+        ["submit", "some-other-file.md", "--patch", patchFile, "--repo", "/sbxroot/repo"],
+        { env: { HOME: vaultRoot } },
+      );
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(2);
+    expect(cap.errLines.join("")).toMatch(/--patch.*positional|positional.*--patch/i);
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
+  });
+
+  it("--patch --plan is a usage error (exit 2), not a late 'no junco-plan fence found' failure", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    const cap = capturedStderr();
+    let code: number;
+    try {
+      code = await run(["submit", "--patch", patchFile, "--repo", "/sbxroot/repo", "--plan"], {
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(2);
+    expect(cap.errLines.join("")).toMatch(/--patch.*--plan|--plan.*--patch/i);
+    // Before the fix: exit 1, with this exact confusing message instead.
+    expect(cap.errLines.join("")).not.toContain("no junco-plan fence found");
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
+  });
+
   // Proves --as-issue with --patch reaches the SAME submitAsIssue() the file
   // path uses, rather than a fork that silently local-submits or no-ops: a
   // default (github disabled) config produces submitAsIssue's OWN disabled

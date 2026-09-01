@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config, RunResult, Ticket, Usage } from "./types.js";
 import { git } from "./git.js";
-import type { PatchSeries } from "./patchTicket.js";
+import { stripPatchFence, type PatchSeries } from "./patchTicket.js";
 import {
   guardOptionsFromConfig,
   openRunTranscriptSink,
@@ -143,9 +143,15 @@ export async function applyPatchSeries(
  * series either failed to apply, or applied but the ticket's own
  * `## Verification` block then failed. Mirrors buildCorrectivePrompt's shape
  * (critic.ts) but frames the patch as a SPECIFICATION to implement against
- * current reality, not bytes to replay — the series has already been tried
- * (and rolled back on an apply failure), so re-running `git am`/`git apply`
- * would just fail again identically.
+ * current reality, not bytes to replay.
+ *
+ * final-review R6: what happened to the series differs by rung, and the
+ * prompt must say so honestly — on the APPLY rung `git am` really did fail
+ * and roll back (git am --abort, applyPatchSeries above), so re-running it
+ * would just fail again identically; on the VERIFICATION rung the series
+ * applied cleanly and its commits are ALREADY in the worktree — nothing was
+ * rolled back, and telling the agent otherwise invites it to redo (and
+ * duplicate or conflict with) work that's already there.
  */
 export function buildApplyFallbackPrompt(
   task: Ticket,
@@ -156,20 +162,32 @@ export function buildApplyFallbackPrompt(
     failure.kind === "apply"
       ? "The ticket carried a patch series, but it did not apply to the current tree."
       : "The ticket's patch series applied cleanly, but the ticket's `## Verification` block failed.";
+  const seriesStatus =
+    failure.kind === "apply"
+      ? "Do NOT run `git am` or `git apply` — the series has already been tried and rolled " +
+        "back (`git am --abort` ran; the worktree is clean)."
+      : "Do NOT run `git am` or `git apply` again — the series ALREADY applied and its commits " +
+        "are already in this worktree. Your job is to fix what the checks below caught, not " +
+        "to redo work that's already there.";
+  // final-review O5: task.body still carries the fenced mbox (the series is
+  // embedded once already, below, as the raw diff bytes an agent must read) —
+  // re-embedding it a second time via the raw ticket body would double the
+  // prompt for a large series. Strip the fence; the ticket's own prose
+  // (Why/Verification) survives untouched.
+  const ticketProse = stripPatchFence(task.body);
   return (
     "## Apply-mode fallback — finish this ticket yourself\n\n" +
     what +
     "\n\nThe patch below is the CHANGE THAT WAS INTENDED and reviewed. Treat it as the\n" +
     "specification, not as bytes to replay: the tree has moved, so implement the same\n" +
-    "intent against what is actually there. Do NOT run `git am` or `git apply` — the\n" +
-    "series has already been tried and rolled back.\n\n" +
+    `intent against what is actually there. ${seriesStatus}\n\n` +
     `### Why it failed\n\n\`\`\`\n${failure.detail}\n\`\`\`\n\n` +
     `### Intended change (${series.count} patch(es), ${series.files.length} file(s))\n\n` +
     "```\n" +
     series.raw +
     "\n```\n\n" +
     "### The ticket\n\n" +
-    task.body +
+    ticketProse +
     "\n"
   );
 }
