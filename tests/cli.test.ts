@@ -2285,6 +2285,230 @@ describe("run(['submit', '--plan', ...]) — plan-set CLI door", () => {
   });
 });
 
+// --- submit --patch (Task 5, spec 2026-08-31-apply-tickets-design.md): the
+// local CLI door that composes an apply ticket from a git format-patch file
+// (composePatchTicket, patchTicket.ts) and routes it through the SAME
+// dry-run / --as-issue / local-submit branches as a file-sourced ticket. ---
+
+describe("run(['submit', '--patch', ...]) — apply-ticket compose door", () => {
+  const ONE_PATCH = `From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001
+From: Dispatcher <d@example.com>
+Date: Sun, 31 Aug 2026 12:00:00 -0700
+Subject: [PATCH 1/1] feat: add a level
+
+---
+ game.js | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/game.js b/game.js
+index 1111111..2222222 100644
+--- a/game.js
++++ b/game.js
+@@ -1,2 +1,3 @@
+ const LEVELS = [
++  "new",
+ ];
+`;
+
+  function writePatchFile(dir: string, content = ONE_PATCH): string {
+    const p = join(dir, "add-level.patch");
+    writeFileSync(p, content, "utf8");
+    return p;
+  }
+
+  function capturedStderr(): { errLines: string[]; restore: () => void } {
+    const errLines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    return { errLines, restore: () => spy.mockRestore() };
+  }
+
+  it("composes and submits an apply ticket to the inbox, with the patch-filename slug + date as id, and no pr_title", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    const captured: string[] = [];
+    const code = await run(["submit", "--patch", patchFile, "--repo", "/sbxroot/repo"], {
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(code).toBe(0);
+    expect(captured.join("")).toMatch(/^submitted: /);
+
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const files = readdirSync(inboxDir).filter((f) => f.endsWith(".md"));
+    expect(files).toHaveLength(1);
+    // "add-level" (slugifyId of the "add-level.patch" filename stem) + today's date.
+    expect(files[0]).toMatch(/^add-level-\d{4}-\d{2}-\d{2}\.md$/);
+
+    const ticket = readFileSync(join(inboxDir, files[0]), "utf8");
+    expect(ticket).toContain('repo: "/sbxroot/repo"');
+    expect(ticket).toContain("```junco-patch");
+    expect(ticket).toContain("diff --git a/game.js b/game.js");
+    expect(ticket).not.toContain("pr_title:");
+    expect(ticket).not.toContain("## Verification"); // no --verify given
+  });
+
+  it("derives the id from a slug of --title (not the filename) and stamps pr_title", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    const code = await run(
+      ["submit", "--patch", patchFile, "--repo", "/sbxroot/repo", "--title", "Add a New Level"],
+      { env: { HOME: vaultRoot } },
+    );
+    expect(code).toBe(0);
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const files = readdirSync(inboxDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^Add-a-New-Level-\d{4}-\d{2}-\d{2}\.md$/);
+    const ticket = readFileSync(join(inboxDir, files[0]), "utf8");
+    expect(ticket).toContain('pr_title: "Add a New Level"');
+  });
+
+  it("includes a ## Verification block only when --verify is given, carrying the exact command", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    const code = await run(
+      [
+        "submit",
+        "--patch",
+        patchFile,
+        "--repo",
+        "/sbxroot/repo",
+        "--verify",
+        "node --check game.js",
+      ],
+      { env: { HOME: vaultRoot } },
+    );
+    expect(code).toBe(0);
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const ticket = readFileSync(join(inboxDir, readdirSync(inboxDir)[0]), "utf8");
+    expect(ticket).toContain("## Verification\n\n```bash\nnode --check game.js\n```");
+  });
+
+  it("a custom --why replaces the filename-naming default", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    const code = await run(
+      ["submit", "--patch", patchFile, "--repo", "/sbxroot/repo", "--why", "because reasons"],
+      { env: { HOME: vaultRoot } },
+    );
+    expect(code).toBe(0);
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    const ticket = readFileSync(join(inboxDir, readdirSync(inboxDir)[0]), "utf8");
+    expect(ticket).toContain("## Why\n\nbecause reasons");
+    expect(ticket).not.toContain("add-level.patch");
+  });
+
+  it("missing --repo is a usage error (exit 2) and submits nothing", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    const cap = capturedStderr();
+    let code: number;
+    try {
+      code = await run(["submit", "--patch", patchFile], { env: { HOME: vaultRoot } });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(2);
+    expect(cap.errLines.join("")).toContain("Usage: junco submit --patch <file> --repo <path>");
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
+  });
+
+  it("an unreadable patch file exits 1 with a clear message and submits nothing", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const missing = join(vaultRoot, "nope.patch");
+    const cap = capturedStderr();
+    let code: number;
+    try {
+      code = await run(["submit", "--patch", missing, "--repo", "/sbxroot/repo"], {
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(1);
+    expect(cap.errLines.join("")).toContain(`junco submit --patch: cannot read '${missing}'`);
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
+  });
+
+  it("a file that is not a well-formed patch series exits 1 naming the file and submits nothing", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const badFile = writePatchFile(vaultRoot, "just some prose, not a patch\n");
+    const cap = capturedStderr();
+    let code: number;
+    try {
+      code = await run(["submit", "--patch", badFile, "--repo", "/sbxroot/repo"], {
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(1);
+    expect(cap.errLines.join("")).toContain(badFile);
+    expect(cap.errLines.join("")).toContain("not a well-formed");
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
+  });
+
+  it("--dry-run reports the COMPOSED ticket text (not raw patch bytes) and writes nothing", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    let seenContent = "";
+    let seenFileArg = "";
+    let called = 0;
+    const code = await run(
+      ["submit", "--patch", patchFile, "--repo", "/sbxroot/repo", "--dry-run"],
+      {
+        env: { HOME: vaultRoot },
+        runSubmitDryRunFn: async (_cfg, fileArg, content) => {
+          called++;
+          seenFileArg = fileArg;
+          seenContent = content;
+          return 0;
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(called).toBe(1);
+    expect(seenFileArg).toBe(patchFile);
+    expect(seenContent).toContain("```junco-patch");
+    expect(seenContent).toContain('repo: "/sbxroot/repo"');
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
+  });
+
+  // Proves --as-issue with --patch reaches the SAME submitAsIssue() the file
+  // path uses, rather than a fork that silently local-submits or no-ops: a
+  // default (github disabled) config produces submitAsIssue's OWN disabled
+  // message, not a "submitted:" line or a crash.
+  it("--as-issue routes into submitAsIssue instead of the local inbox", async () => {
+    const { vaultRoot } = freshDispatchVault();
+    const patchFile = writePatchFile(vaultRoot);
+    const captured: string[] = [];
+    const cap = capturedStderr();
+    let code: number;
+    try {
+      code = await run(["submit", "--patch", patchFile, "--repo", "/sbxroot/repo", "--as-issue"], {
+        printFn: (s) => captured.push(s),
+        env: { HOME: vaultRoot },
+      });
+    } finally {
+      cap.restore();
+    }
+    expect(code).toBe(1);
+    expect(cap.errLines.join("")).toContain(
+      "junco submit --as-issue: GitHub integration is disabled",
+    );
+    expect(captured.join("")).not.toMatch(/submitted:/);
+    const inboxDir = join(vaultRoot, "Junco", "inbox");
+    expect(existsSync(inboxDir) ? readdirSync(inboxDir) : []).toEqual([]);
+  });
+});
+
 // --- init (removed — dashboard FTUE is the interactive path, `config init`
 // the headless scaffold; see tests/dashboardCmd.test.ts + tests/configCmd.test.ts) ---
 
