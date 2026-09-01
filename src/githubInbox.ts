@@ -247,11 +247,57 @@ function extractFencedBlock(text: string, fenceTag: string): string | null {
   return stripped === "" ? null : stripped;
 }
 
-/** Pull the plan body out of the LAST ```junco-ticket fence in `text`. See
- * extractFencedBlock for the matching rules. Null = no usable (complete)
- * plan. */
+/** Invisible delimiters for a parked `--as-issue` ticket body (#329). The
+ * rendered plan IS the machine payload: GitHub's REST API returns an issue
+ * body as raw markdown, so the second (fenced) copy #327 added bought only
+ * bytes and a desync surface. The 8-hex nonce plays the role wrapInFence's
+ * longest-run logic plays for fences — a body that itself quotes a
+ * marker-shaped comment cannot terminate its own block. */
+const TICKET_MARKER_NONCE = "[0-9a-f]{8}";
+
+export function ticketMarkers(nonce: string): { start: string; end: string } {
+  return {
+    start: `<!-- junco:ticket:start:${nonce} -->`,
+    end: `<!-- junco:ticket:end:${nonce} -->`,
+  };
+}
+
+/** Body delimited by the LAST complete junco:ticket marker pair. Post-
+ * processing is deliberately identical to extractFencedBlock's: CRLF
+ * normalized (#134), a smuggled frontmatter block stripped (frontmatter is
+ * machine-owned — issue text can never set repo:/workdir:/tools:), trimmed,
+ * empty → null. */
+function extractMarkedBlock(text: string): string | null {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const openRe = new RegExp(`^<!--\\s*junco:ticket:start:(${TICKET_MARKER_NONCE})\\s*-->\\s*$`);
+  let last: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = openRe.exec(lines[i]);
+    if (!m) continue;
+    const closeRe = new RegExp(`^<!--\\s*junco:ticket:end:${m[1]}\\s*-->\\s*$`);
+    let close = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (closeRe.test(lines[j])) {
+        close = j;
+        break;
+      }
+    }
+    if (close === -1) continue; // unterminated → not a complete block; ignore
+    last = lines.slice(i + 1, close).join("\n");
+    i = close; // resume after this block's closer
+  }
+  if (last === null) return null;
+  const stripped = last.replace(SMUGGLED_FRONTMATTER_RE, "").trim();
+  return stripped === "" ? null : stripped;
+}
+
+/** Pull the plan body out of a parked issue body: the invisible junco:ticket
+ * markers (#329) first, falling back to the LAST ```junco-ticket fence in
+ * `text` for issues parked by an older version (see extractFencedBlock for
+ * the fence matching rules) and for planner-produced plan COMMENTS, which are
+ * fence-only and never carry markers. Null = no usable (complete) plan. */
 export function extractPlanBody(text: string): string | null {
-  return extractFencedBlock(text, PLAN_FENCE);
+  return extractMarkedBlock(text) ?? extractFencedBlock(text, PLAN_FENCE);
 }
 
 /** Pull the plan-set body out of the LAST ```junco-plan fence in `text`. See

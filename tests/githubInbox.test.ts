@@ -11,6 +11,7 @@ import {
   newBridgeState,
   extractPlanBody,
   extractPlanSetBody,
+  ticketMarkers,
   buildPlanComment,
   buildExecutionTicket,
   timeoutMarker,
@@ -1448,6 +1449,50 @@ describe("extractPlanBody", () => {
     const out = extractPlanBody(text);
     expect(out).toBe("# Title\n\n## Steps\n- do it");
     expect(out).not.toContain("\r");
+  });
+});
+
+describe("marked ticket blocks (#329)", () => {
+  const m = ticketMarkers("a3f81c2e");
+
+  it("extracts the body between a matched marker pair", () => {
+    const body = `_header_\n\n${m.start}\n# Plan\n\n## Why\n\nbecause\n${m.end}\n<!-- junco:as-issue -->\n`;
+    expect(extractPlanBody(body)).toBe("# Plan\n\n## Why\n\nbecause");
+  });
+
+  it("survives a body that contains a marker-shaped comment with a different nonce", () => {
+    const inner = ticketMarkers("deadbeef");
+    const body = `${m.start}\n# Plan\n\nquoting an older parked issue:\n${inner.start}\nold\n${inner.end}\n${m.end}\n`;
+    // The inner PAIR is complete, so it is the LAST complete pair by start
+    // order? No: scanning takes the last complete pair, and the outer opens
+    // first — assert the documented rule explicitly.
+    const got = extractPlanBody(body);
+    expect(got).toContain("# Plan");
+    expect(got).toContain("quoting an older parked issue");
+  });
+
+  it("ignores an unterminated marker (no end) and falls back to a fence", () => {
+    const body = `${m.start}\n# Half\n\n\`\`\`junco-ticket\n# Fenced\n\`\`\`\n`;
+    expect(extractPlanBody(body)).toBe("# Fenced");
+  });
+
+  it("still reads an old-format fenced parked body (back-compat)", () => {
+    const body =
+      "_header_\n\n````junco-ticket\n# Old\n\n```bash\necho hi\n```\n````\n\n<!-- junco:as-issue -->\n";
+    expect(extractPlanBody(body)).toContain("# Old");
+    expect(extractPlanBody(body)).toContain("echo hi");
+  });
+
+  it("normalizes CRLF and strips smuggled frontmatter, exactly like the fence path", () => {
+    const body = `${m.start}\r\n---\r\nrepo: /evil\r\n---\r\n# Plan\r\n${m.end}\r\n`;
+    const got = extractPlanBody(body);
+    expect(got).toBe("# Plan");
+    expect(got).not.toContain("repo:");
+    expect(got).not.toContain("\r");
+  });
+
+  it("an empty marked block is not a usable body", () => {
+    expect(extractPlanBody(`${m.start}\n\n${m.end}\n`)).toBe(null);
   });
 });
 
