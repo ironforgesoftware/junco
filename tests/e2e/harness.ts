@@ -12,6 +12,18 @@
  * seeded clone) and `ghCases` (case-table fake gh with no permissive default —
  * an unscripted subcommand fails loud with `fake-gh: unhandled: <args>`, which
  * is how a scenario discovers the exact table it needs).
+ *
+ * Diagnostics ordering (spec §8's "read them before deciding anything"
+ * guarantee): every scenario's `afterEach(() => sb.close())` runs BEFORE this
+ * module's `onTestFailed` diagnostics handler, not after. Confirmed by
+ * reading `node_modules/@vitest/runner/dist/chunk-artifact.js`'s `runTest`
+ * (Vitest 4.1.10): it awaits the suite's `afterEach` hook, THEN
+ * `test.onFinished`, THEN — only if the test failed — `test.onFailed`, in
+ * that fixed order regardless of registration order. So by the time
+ * `onTestFailed` fires, `close()` has already `rmSync`'d the sandbox (unless
+ * `JUNCO_E2E_KEEP` is set) and the on-disk state is gone. `snapshotDiagnostics`
+ * exists to read that state once, at the TOP of `close()` before teardown, and
+ * stash it on `sb.diagnostics` so `registerDiagnostics` can still print it.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import {
@@ -96,6 +108,13 @@ export interface CliResult {
   timedOut: boolean;
 }
 
+/** The on-disk diagnostic sources `registerDiagnostics` prints — see `snapshotDiagnostics`. */
+export interface DiagnosticsSnapshot {
+  queue: Record<QueueDir, string[]>;
+  ghLog: string;
+  workerLogTail: string;
+}
+
 export interface Sandbox {
   home: string;
   configPath: string;
@@ -110,6 +129,15 @@ export interface Sandbox {
   env: Record<string, string>;
   /** The most recent `runCli` / daemon result — dumped by the failure diagnostics. */
   lastRun: CliResult | null;
+  /**
+   * On-disk diagnostics (queue listing, gh.log, worker.log tail) captured at
+   * the TOP of `close()`, before teardown — `null` until the sandbox has been
+   * closed once. `registerDiagnostics` prints this (falling back to a live
+   * `snapshotDiagnostics` read if `close()` hasn't run yet) because its own
+   * `onTestFailed` handler always fires AFTER `close()` has already deleted
+   * the sandbox — see the module header comment.
+   */
+  diagnostics: DiagnosticsSnapshot | null;
   close(): Promise<void>;
 }
 
@@ -165,15 +193,54 @@ function firstExisting(paths: string[]): string | null {
   return null;
 }
 
+/**
+ * Read the three on-disk diagnostic sources for `sb` as they exist RIGHT NOW:
+ * the queue listing, `gh.log`, and the v2-then-flat `worker.log` tail (same
+ * probe `transcript()` uses, via `firstExisting`).
+ *
+ * Called once by `close()`, at the top, before any teardown — so the result
+ * can be stashed on `sb.diagnostics` and survive the `rmSync` that follows.
+ * Also safe to call directly for a live read (e.g. a sandbox never closed).
+ */
+export function snapshotDiagnostics(sb: Sandbox): DiagnosticsSnapshot {
+  const workerLog = firstExisting([
+    join(sb.dataDir, "logs", "worker.log"),
+    join(sb.dataDir, "worker.log"),
+  ]);
+  return {
+    queue: listQueue(sb),
+    ghLog: readIfExists(join(sb.home, "gh.log")),
+    workerLogTail: tail(workerLog === null ? "" : readIfExists(workerLog)),
+  };
+}
+
+/**
+ * Register the `onTestFailed` diagnostics dump for `sb`.
+ *
+ * This handler ALWAYS runs after the scenario's own `afterEach(() =>
+ * sb.close())` (see the module header comment for why) — so by the time it
+ * fires, the sandbox's on-disk state is normally already gone. It prints
+ * `sb.diagnostics` (the snapshot `close()` took before teardown) when
+ * present, falling back to a live `snapshotDiagnostics(sb)` read only if
+ * `close()` somehow hasn't run yet, and labels which case applied so a reader
+ * knows whether the on-disk section reflects a post-run snapshot or a live
+ * probe.
+ */
 function registerDiagnostics(sb: Sandbox): void {
   onTestFailed(() => {
     const out: string[] = [`--- e2e diagnostics (sandbox ${sb.home}) ---`];
-    const q = listQueue(sb);
-    out.push(`queue: ${JSON.stringify(q)}`);
+    const postClose = sb.diagnostics !== null;
+    const snap = sb.diagnostics ?? snapshotDiagnostics(sb);
+    out.push(
+      postClose
+        ? "on-disk state below was snapshotted at sandbox close (post-run)"
+        : "on-disk state below is a LIVE read (sandbox not yet closed)",
+    );
+    out.push(`queue: ${JSON.stringify(snap.queue)}`);
     out.push(
       `stub: requests=${sb.stub?.requests.length ?? "n/a"} exhausted=${String(sb.stub?.exhausted ?? "n/a")}`,
     );
-    out.push(`gh.log:\n${readIfExists(join(sb.home, "gh.log")) || "(empty)"}`);
+    out.push(`gh.log:\n${snap.ghLog || "(empty)"}`);
     if (sb.lastRun) {
       out.push(
         `last run: code=${String(sb.lastRun.code)} signal=${String(sb.lastRun.signal)} timedOut=${String(sb.lastRun.timedOut)}`,
@@ -181,11 +248,7 @@ function registerDiagnostics(sb: Sandbox): void {
       out.push(`stdout (tail):\n${tail(sb.lastRun.stdout)}`);
       out.push(`stderr (tail):\n${tail(sb.lastRun.stderr)}`);
     }
-    const workerLog = firstExisting([
-      join(sb.dataDir, "logs", "worker.log"),
-      join(sb.dataDir, "worker.log"),
-    ]);
-    out.push(`worker.log (tail):\n${tail(workerLog === null ? "" : readIfExists(workerLog))}`);
+    out.push(`worker.log (tail):\n${snap.workerLogTail}`);
     out.push(
       process.env.JUNCO_E2E_KEEP
         ? `sandbox retained at ${sb.home}`
@@ -244,6 +307,7 @@ export async function createSandbox(opts: SandboxOptions = {}): Promise<Sandbox>
   const configPath = join(dataDir, "config.json");
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
+  let closed = false;
   const sb: Sandbox = {
     home,
     configPath,
@@ -257,7 +321,19 @@ export async function createSandbox(opts: SandboxOptions = {}): Promise<Sandbox>
     bin: binaryUnderTest(),
     env: childEnv(home),
     lastRun: null,
+    diagnostics: null,
     close: async () => {
+      // Idempotent: a scenario's own afterEach plus createSandbox's own
+      // setup-failure path can both call close() on the same sandbox — a
+      // second call must be a no-op, never a double-rmSync/double-server-close
+      // throw.
+      if (closed) return;
+      closed = true;
+      // Snapshot on-disk diagnostics BEFORE any teardown below, so a failed
+      // test's onTestFailed handler (which always runs after this — see the
+      // module header comment) can still print real queue/gh.log/worker.log
+      // state instead of reading a directory that's already gone.
+      sb.diagnostics = snapshotDiagnostics(sb);
       await stubModel?.close();
       if (process.env.JUNCO_E2E_KEEP)
         console.error(`JUNCO_E2E_KEEP set — sandbox retained at ${home}`);
