@@ -20,7 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Dashboard idle cost: a poll that delivers unchanged data no longer commits an Ink frame — every poll sink keeps its previous state on structural equality, and the age clock ticks on its own 5 s interval instead of every queue poll. Sub-minute "Ns ago" strings now step in 5 s increments. Spinners share Ink's animation timer, and the dashboard renders incrementally so an animation frame rewrites only changed lines. A frame-level perf test (`tests/framePerf.test.tsx`) pins zero frames per constant-data poll tick.
 - Corrects four Stage-1 apply-tickets claims that the escalation ladder above supersedes, all previously stated as unconditional facts about every apply ticket and now true only for a clean apply with the fallback lever left untriggered: (1) apply runs are **not** transcript-less — `docs/tickets.md`/`docs/github-mode.md` said an apply ticket runs no agent session so `junco transcript`/the dashboard's transcript view have nothing to show for it, but apply runs now write their own transcript frames (see the Added entry above); (2) a conflict does **not** always fail the ticket outright — with the fallback lever on (the default) it escalates to an agent instead; (3) the critic pass is **not** always skipped — it runs again once either escalation rung fires; (4) "no agent session runs" and "leftovers are never swept" hold only until a fallback fires, after which the ticket is an ordinary agent ticket for the rest of the pipeline. `docs/github-mode.md`'s claim that labeling a parked apply-mode issue approves "the exact diff that will land" is corrected the same way: labeling approves the diff shown in the issue, which is what lands only when it applies cleanly.
-
 - A parked `--as-issue` body now carries the plan **once** — rendered markdown wrapped in invisible `junco:ticket` delimiters — instead of a rendered copy plus a collapsed machine fence (#329). Half the issue size, no desync surface between the two copies, and editing the parked plan in GitHub's UI before applying the label now edits exactly what runs. The bridge reads markers first and still falls back to a `junco-ticket` fence, so issues parked by older versions launch unchanged; `--as-issue --plan` keeps its fence (YAML payload). Mixed-fleet note: an older bridge sweeping an issue parked by a newer CLI finds no fence (markers are invisible to it) and routes the issue to the planner instead of queueing the parked plan verbatim — upgrade the daemon before parking with a newer CLI.
 - The `junco-dispatch` skill drops authored boilerplate the CLI and worker now own: the per-ticket `created:` timestamp, running `junco lint` again after a clean `dry-run` (whose output already carries the full lint verdict), the separate monitor-the-ticket and repo-target-confirmation `AskUserQuestion` asks (monitoring is now folded into the same call as the dispatch preview; the repo target is confirmed by the preview's `repo:` line instead of a standalone question), the unconditional `EXAMPLE.md` read before drafting (now conditional on an unfamiliar plan shape or a prior structural lint failure), and authoring-time `gh label list` pre-checks (labels are validated by dry-run/lint's own `labels_exist` check instead). The preview itself is now codified as a curated essence — key design decisions, a Files/Steps summary, and the dry-run's destination/reason/carried/discard/timeout lines — plus the temp-file path for full reading, never the raw ticket body.
 - The worker's prompt preamble now carries the full strict working discipline (trust-the-ticket, no-scope-expansion, graceful-stop-on-mismatch, final-summary) for every run, so `TEMPLATE.md` and `EXAMPLE.md` no longer ship an authored "Notes for the agent" block and plan-lint's `notes_block_present` rule is retired. An existing ticket that still carries a Notes block stays valid — it's simply wasted tokens now, not a required section.
@@ -369,7 +368,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **The execution sandbox is now ON by default** (`sandbox.enabled` defaults to `true`). On macOS this is transparent (Seatbelt is always available). On Linux without `bwrap` installed, tickets **fail closed** with a clear error — install bubblewrap, or set `sandbox.enabled: false` / `sandbox.backend: "none"` (via `junco config set` or the `,` config editor). Run `junco doctor` to preflight. See `docs/operations.md` § Sandboxing the agent (#166).
-- **BREAKING:** configuration is now `config.json` (camelCase) instead of `config.toml`; the `smol-toml` dependency is removed. Convert existing `config.toml` files by hand (see docs/configuration.md); junco errors with a pointer if it finds a leftover `config.toml`. Legacy `[pi]`/`[oMLX]` sections are gone — set `model.*` directly; the tool allowlist is now top-level `tools`, and `commit_leftovers` is `worker.commitLeftovers`.
+- **BREAKING:** configuration is now `config.json` (camelCase) instead of `config.toml`; the `smol-toml` dependency is removed. Convert existing `config.toml` files by hand (see docs/configuration.md); junco errors with a pointer if it finds a leftover `config.toml`. The legacy `[pi]` and inference-endpoint sections are gone — set `model.*` directly; the tool allowlist is now top-level `tools`, and `commit_leftovers` is `worker.commitLeftovers`.
 
 ### Fixed
 
@@ -441,13 +440,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - User-level config discovery: `--config` → `./config.toml` → `~/.config/junco/config.toml` (the wizard writes the user-level path by default, so `junco` works from any directory).
-- Stack-agnostic naming: daemon logs say "inference endpoint"; bare model ids default to the `local` provider (previously `omlx`).
+- Stack-agnostic naming: daemon logs say "inference endpoint"; bare model ids default to the `local` provider (previously a server-specific provider name).
 - The diff-vs-spec critic is told when its diff was truncated, preventing false MISSING verdicts on very large diffs.
 - The Pi event stream is typed at the session boundary (`AgentEvent`).
 
 ### Fixed
 
-- README troubleshooting referenced the legacy `[oMLX].url` key instead of `[model].base_url`.
+- README troubleshooting referenced the legacy inference-endpoint section's `url` key instead of `[model].base_url`.
 - Stale-worktree cleanup failures now surface as a clear `GitOpError` instead of a raw fs error.
 
 ## [0.2.2] - 2026-06-01
@@ -484,13 +483,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Configurable model + inference provider via a `[model]` config section — the API style, context window, max tokens, thinking format, and the rest of the model's capabilities are configurable, so junco can drive any model on any Pi-supported provider (OpenAI-compatible, Anthropic, Google, Bedrock, …). Two modes: point `[model].models_json` at a Pi-style `models.json` to load the provider+model from that file, or describe it inline with `[model]` fields. The legacy `[pi].model_id` and `[oMLX]` keys still work as fallbacks for `id` / `base_url` / `api_key`.
+- Configurable model + inference provider via a `[model]` config section — the API style, context window, max tokens, thinking format, and the rest of the model's capabilities are configurable, so junco can drive any model on any Pi-supported provider (OpenAI-compatible, Anthropic, Google, Bedrock, …). Two modes: point `[model].models_json` at a Pi-style `models.json` to load the provider+model from that file, or describe it inline with `[model]` fields. The legacy `[pi].model_id` key and the legacy inference-endpoint section still work as fallbacks for `id` / `base_url` / `api_key`.
 - Daemon (`junco start`) with configurable poll loop, single-instance lock via PID file, orphan recovery on restart, and graceful SIGTERM/SIGINT shutdown.
 - PR flow: per-ticket git worktree isolation, plan-lint gating (validates frontmatter + discipline rules before the agent runs), loop guards via the supervisor (per-kind budgets, escalation-window turn cap, per-turn and post-commit output budgets), `## Verification` bash-block runner (executed in the worktree after the agent session, results surfaced in the PR body), diff-vs-spec critic pass with one configurable corrective re-dispatch, `gh pr create` integration, and amend mode (`amends_pr`) for adding commits to existing PRs.
 - Q&A ticket mode: tickets without a `repo:` field are answered in-place by the agent with no git operations.
-- Embedded coding agent over any OpenAI-compatible inference endpoint (`[oMLX]` config section); agent driven via the `pi` SDK with a configurable tool allowlist and per-ticket timeout.
+- Embedded coding agent over any OpenAI-compatible inference endpoint (the legacy inference-endpoint config section); agent driven via the `pi` SDK with a configurable tool allowlist and per-ticket timeout.
 - Observability: `/live`, `/ready`, and `/health` HTTP endpoints; per-run metrics (turn count, output tokens, elapsed time); structured JSON logs; configurable log level (`debug` | `info` | `warn` | `error`).
 - Dispatch CLI: `junco submit <ticket>` (enqueue a ticket), `junco inbox-path` (print the inbox directory), `junco schema` (print the ticket-frontmatter JSON Schema), `junco init` (scaffold `~/junco/config.toml`), `junco service` (render a launchd plist or systemd unit for the daemon).
 - Typed ticket-frontmatter contract validated with Zod; all fields documented in the schema subcommand output.
 - Harness-agnostic `junco-dispatch` Claude Code skill for scaffolding plan-lint-clean tickets from natural-language prompts.
 - Service rendering for launchd (macOS) and systemd (Linux) via `junco service`.
+
+[Unreleased]: https://github.com/ironforgesoftware/junco/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/ironforgesoftware/junco/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/ironforgesoftware/junco/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/ironforgesoftware/junco/compare/v0.9.1...v0.10.0
+[0.9.1]: https://github.com/ironforgesoftware/junco/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/ironforgesoftware/junco/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/ironforgesoftware/junco/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/ironforgesoftware/junco/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/ironforgesoftware/junco/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/ironforgesoftware/junco/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/ironforgesoftware/junco/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/ironforgesoftware/junco/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/ironforgesoftware/junco/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/ironforgesoftware/junco/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/ironforgesoftware/junco/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/ironforgesoftware/junco/releases/tag/v0.1.0
