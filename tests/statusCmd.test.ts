@@ -306,15 +306,15 @@ describe("runStatusCommand", () => {
     expect(lines[outboxIdx]).toMatch(/outbox: {4}2 queued · 1 dead/);
   });
 
-  it("omits the assess review line when nothing is pending", async () => {
+  it("omits the audit review line when nothing is pending", async () => {
     const fetchFn = (async () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
-    expect(out.join("")).not.toMatch(/assess review:/);
+    expect(out.join("")).not.toMatch(/audit review:/);
   });
 
-  it("shows the pending assess-review count", async () => {
+  it("shows the pending audit-review count", async () => {
     writePending(cfg, {
       id: "a",
       nwo: "o/r",
@@ -329,19 +329,19 @@ describe("runStatusCommand", () => {
     }) as unknown as typeof fetch;
     await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
     const text = out.join("");
-    expect(text).toContain("assess review");
-    expect(text).toMatch(/1 pending \(junco assess review\)/);
+    expect(text).toContain("audit review");
+    expect(text).toMatch(/1 pending \(junco audit review\)/);
   });
 
-  it("omits the assess line when no repo has history", async () => {
+  it("omits the audit line when no repo has history", async () => {
     const fetchFn = (async () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
-    expect(out.join("")).not.toMatch(/^assess:/m);
+    expect(out.join("")).not.toMatch(/^audit:/m);
   });
 
-  it("prints an assess line per repo with history", async () => {
+  it("prints an audit line per repo with history", async () => {
     recordRun(cfg, "o/r", { ok: true, at: "2026-07-16T00:00:00.000Z", found: 4, parked: 3 });
     const fetchFn = (async () => {
       throw new Error("ECONNREFUSED");
@@ -366,12 +366,12 @@ describe("runStatusCommand", () => {
     expect(text).toMatch(/last attempt failed 2026-07-16/);
   });
 
-  it("omits the analyze review line when nothing is pending", async () => {
+  it("omits the investigate review line when nothing is pending", async () => {
     const fetchFn = (async () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
-    expect(out.join("")).not.toMatch(/analyze review:/);
+    expect(out.join("")).not.toMatch(/investigate review:/);
   });
 
   it("shows the pending comment-draft count", async () => {
@@ -391,8 +391,8 @@ describe("runStatusCommand", () => {
     }) as unknown as typeof fetch;
     await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
     const text = out.join("");
-    expect(text).toContain("analyze review");
-    expect(text).toMatch(/1 pending \(junco analyze review\)/);
+    expect(text).toContain("investigate review");
+    expect(text).toMatch(/1 pending \(junco investigate review\)/);
   });
 
   it("lock held but /health unreachable → 'not responding'", async () => {

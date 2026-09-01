@@ -70,7 +70,7 @@ const MAIN_GLOBALS: MnemonicOption[] = [
   { id: "unwatch", label: "unwatch", guarded: true },
   { id: "browser", label: "browser" },
   { id: "refresh", label: "refresh" },
-  { id: "assess", label: "assess" },
+  { id: "assess", label: "audit" },
   { id: "queue", label: "queue" },
   { id: "review", label: "review" },
   { id: "prs", label: "PRs" },
@@ -81,12 +81,12 @@ const MAIN_GLOBALS: MnemonicOption[] = [
 
 const BODY_VERBS: Record<MainBody, MnemonicOption[]> = {
   issues: [
-    { id: "dispatch", label: "dispatch" },
+    { id: "dispatch", label: "import" },
     { id: "approve", label: "approve" },
-    { id: "analyze", label: "analyze" },
+    { id: "analyze", label: "investigate" },
     // Shift variants: bound, help-only (spec §2 hidden set).
-    { id: "dispatchAsk", label: "dispatch as ask", guarded: true, hidden: true },
-    { id: "assessAutoPlan", label: "assess auto-plan", guarded: true, hidden: true },
+    { id: "dispatchAsk", label: "import as ask", guarded: true, hidden: true },
+    { id: "assessAutoPlan", label: "audit auto-plan", guarded: true, hidden: true },
     { id: "replan", label: "re-plan", guarded: true, hidden: true },
   ],
   repoDetail: [],

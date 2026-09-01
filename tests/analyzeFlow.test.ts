@@ -146,7 +146,7 @@ describe("runAnalyzeFlow", () => {
 
     // The done/ summary points the operator at the review step.
     const body = readFileSync(join(j, "done", readdirSync(join(j, "done"))[0]), "utf8");
-    expect(body).toContain("junco analyze review analyze-o-r-5");
+    expect(body).toContain("junco investigate review analyze-o-r-5");
   });
 
   it("strips a spoofed junco:finding marker from the parked draft", async () => {

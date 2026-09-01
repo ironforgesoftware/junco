@@ -208,9 +208,9 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   }
   const reviews = pendingCount(cfg);
   if (reviews > 0) {
-    print(`assess review: ${reviews} pending (junco assess review)\n`);
+    print(`audit review: ${reviews} pending (junco audit review)\n`);
   }
-  // Per-repo assess history (#193): age + outcome for every repo ever audited.
+  // Per-repo audit history (#193): age + outcome for every repo ever audited.
   // Silent when nothing has been assessed — same "only when non-empty" rule as
   // the review backlog above.
   for (const h of listHistory(cfg)) {
@@ -218,11 +218,11 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
     const counts =
       h.lastSuccessAt !== null ? ` · ${h.lastFound ?? 0} found · ${h.lastParked ?? 0} parked` : "";
     const failed = h.lastFailureAt ? ` · last attempt failed ${h.lastFailureAt.slice(0, 10)}` : "";
-    print(`assess:    ${h.id} ${when}${counts}${failed}\n`);
+    print(`audit:     ${h.id} ${when}${counts}${failed}\n`);
   }
   const drafts = draftCount(cfg);
   if (drafts > 0) {
-    print(`analyze review: ${drafts} pending (junco analyze review)\n`);
+    print(`investigate review: ${drafts} pending (junco investigate review)\n`);
   }
   // npm update nudge (spec 2026-07-16) — best-effort; silent unless newer.
   const update = await (deps.checkUpdateFn ?? ((c: Config) => checkForUpdate(c)))(cfg);

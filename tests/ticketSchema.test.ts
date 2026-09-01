@@ -95,6 +95,8 @@ describe("describeTicketSchema()", () => {
       "workdir",
       "assess",
       "analyze",
+      "audit",
+      "investigate",
     ];
     for (const field of expected) {
       expect(s).toContain(`"${field}"`);
@@ -171,6 +173,53 @@ describe("describeTicketSchema()", () => {
     const analyzeProps = s.properties.analyze.properties as Record<string, Record<string, unknown>>;
     expect(analyzeProps.issue.type).toBe("integer");
     expect(analyzeProps.title.type).toBe("string");
+  });
+
+  it("documents audit as the canonical mapping, same shape as legacy assess", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.audit.type).toBe("object");
+    const auditProps = s.properties.audit.properties as Record<string, Record<string, unknown>>;
+    expect(auditProps.auto_plan.type).toBe("boolean");
+    expect(auditProps.issue.type).toBe("integer");
+    expect(auditProps.issue.minimum).toBe(1);
+    expect(auditProps.issue_title.type).toBe("string");
+    // Canonical mapping is authored by the new verb, not documented as an alias.
+    expect(s.properties.audit.description).toMatch(/junco audit/);
+  });
+
+  it("documents investigate as the canonical mapping, same shape as legacy analyze", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.investigate.type).toBe("object");
+    const investigateProps = s.properties.investigate.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(investigateProps.issue.type).toBe("integer");
+    expect(investigateProps.issue.minimum).toBe(1);
+    expect(investigateProps.title.type).toBe("string");
+    expect(s.properties.investigate.description).toMatch(/junco investigate/);
+  });
+
+  it("documents assess and analyze as permanently-accepted legacy aliases (not scheduled for removal)", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.assess.description).toMatch(/legacy alias/i);
+    expect(s.properties.assess.description).toMatch(/audit:/);
+    expect(s.properties.analyze.description).toMatch(/legacy alias/i);
+    expect(s.properties.analyze.description).toMatch(/investigate:/);
+  });
+
+  it("pins both-keys precedence: audit wins over assess, investigate wins over analyze", () => {
+    const s = JSON.parse(describeTicketSchema()) as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(s.properties.audit.description).toMatch(/wins/i);
+    expect(s.properties.investigate.description).toMatch(/wins/i);
   });
 
   it("bounds timeout_minutes and amends_pr to the runtime-valid ranges (#52)", () => {

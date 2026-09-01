@@ -22,7 +22,7 @@ export interface PaletteCommand {
   /** Non-null = not runnable from the palette; the string is the reason. */
   excluded: string | null;
   /** Subprocess time budget; null = DEFAULT_TIMEOUT_MS. Long-runners only:
-   * assess may fork+clone an unwatched repo, run-once executes a full ticket. */
+   * audit may fork+clone an unwatched repo, run-once executes a full ticket. */
   timeoutMs: number | null;
 }
 
@@ -48,7 +48,7 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("outbox", "[flush]", "List or push the offline GitHub backlog"),
   cmd("prs", null, "List junco-authored pull requests"),
   cmd(
-    "assess",
+    "audit",
     "<path|owner/repo> [--auto-plan]",
     "Audit a repo for vulnerabilities and file GitHub issues",
     [],

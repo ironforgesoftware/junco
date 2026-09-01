@@ -1,5 +1,5 @@
 /**
- * `junco analyze <owner/repo#N|url>` — compose and submit a machine-owned
+ * `junco investigate <owner/repo#N|url>` — compose and submit a machine-owned
  * investigation ticket. This command's only job is target resolution +
  * ticket authoring; the daemon's normal claim/execute path
  * (src/analyzeFlow.ts) runs the read-only investigation and parks a comment
@@ -40,12 +40,13 @@ function slugify(s: string): string {
 
 /**
  * Build a machine-owned analysis ticket for a resolved issue target.
- * Frontmatter carries only `id`, `repo`, and `analyze` — deliberately NO
- * `github:` block: the reporter's comment/label lifecycle keys off that
- * block, and an analyze ticket must produce no un-gated outward write (the
- * only outward write is the human-confirmed `junco analyze post`). The id
- * carries no timestamp, so a queued duplicate fails loud and a re-run
- * overwrites the parked draft (the review store is keyed by id).
+ * Frontmatter carries only `id`, `repo`, and the canonical `investigate:` key
+ * — deliberately NO `github:` block: the reporter's comment/label lifecycle
+ * keys off that block, and an investigate ticket must produce no un-gated
+ * outward write (the only outward write is the human-confirmed `junco
+ * investigate post`). The id carries no timestamp, so a queued duplicate
+ * fails loud and a re-run overwrites the parked draft (the review store is
+ * keyed by id).
  */
 export function buildAnalyzeTicket(t: IssueTarget): { id: string; content: string } {
   const [owner, name] = t.nwo.split("/");
@@ -56,7 +57,7 @@ export function buildAnalyzeTicket(t: IssueTarget): { id: string; content: strin
     `---\n` +
     `id: ${id}\n` +
     `repo: ${JSON.stringify(t.clonePath)}\n` +
-    `analyze:\n` +
+    `investigate:\n` +
     `  issue: ${t.issue}\n` +
     `  title: ${JSON.stringify(t.title)}\n` +
     `---\n\n${body}`;
@@ -71,7 +72,7 @@ export interface AnalyzeCmdDeps {
 }
 
 /**
- * Shared core of `junco analyze <ref>`: resolve → build ticket → submit.
+ * Shared core of `junco investigate <ref>`: resolve → build ticket → submit.
  * Throws on any failure. The CLI shell (`runAnalyzeCommand`) wraps this in a
  * single try/catch that prints the message and exits 1; the dashboard's
  * `analyzeIssue` client method wraps it in `attempt` instead.
@@ -98,7 +99,7 @@ export async function runAnalyzeCommand(
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
 
   if (!ref) {
-    print(`Usage: junco analyze <owner/repo#N|url>\n`);
+    print(`Usage: junco investigate <owner/repo#N|url>\n`);
     return 2;
   }
 
@@ -106,14 +107,14 @@ export async function runAnalyzeCommand(
   try {
     ({ destPath } = await analyzeIssueCore(cfg, ref, deps));
   } catch (e) {
-    print(`junco analyze: ${e instanceof Error ? e.message : String(e)}\n`);
+    print(`junco investigate: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
 
   print(`queued: ${destPath}\n`);
   print(
     "queued — the worker will investigate and park a comment draft; " +
-      "run `junco analyze review` when it lands\n",
+      "run `junco investigate review` when it lands\n",
   );
   return 0;
 }
@@ -128,9 +129,9 @@ function firstDraftLine(draft: string): string {
 }
 
 /**
- * `junco analyze review [<id>]` — read side of the durable comment-review
+ * `junco investigate review [<id>]` — read side of the durable comment-review
  * queue (src/commentReview.ts). No id lists pending drafts parked by the
- * analysis flow; an id previews exactly what `junco analyze post` would
+ * analysis flow; an id previews exactly what `junco investigate post` would
  * post (composeCommentBody folds in the footer when the draft carries one).
  */
 export async function runAnalyzeReviewCommand(
@@ -153,26 +154,26 @@ export async function runAnalyzeReviewCommand(
       );
     }
     print(
-      "\nreview one: junco analyze review <id> · edit: junco analyze edit <id> · " +
-        "post: junco analyze post <id>\n",
+      "\nreview one: junco investigate review <id> · edit: junco investigate edit <id> · " +
+        "post: junco investigate post <id>\n",
     );
     return 0;
   }
 
   const { draft, error } = readDraft(cfg, id);
   if (error) {
-    print(`junco analyze review: ${error}\n`);
+    print(`junco investigate review: ${error}\n`);
     return 1;
   }
   if (!draft) {
-    print(`junco analyze review: no pending draft '${id}'\n`);
+    print(`junco investigate review: no pending draft '${id}'\n`);
     return 2;
   }
 
   const scope = draft.external ? "external" : "owned";
   print(`${draft.id}  ${draft.nwo}#${draft.issue} (${scope})  ${draft.issueTitle}\n`);
   print(`\n${composeCommentBody(draft)}\n`);
-  print(`\npost: junco analyze post ${draft.id}\n`);
+  print(`\npost: junco investigate post ${draft.id}\n`);
   return 0;
 }
 
@@ -184,7 +185,7 @@ export interface AnalyzeEditDeps {
 }
 
 /**
- * `junco analyze edit <id>` — open a parked draft in $EDITOR/$VISUAL, then
+ * `junco investigate edit <id>` — open a parked draft in $EDITOR/$VISUAL, then
  * re-sanitize and store the edited text. The one interactive spawn in this
  * command: everything else in the CLI is deps-injectable without a real
  * child process, but an editor session has no meaningful fake — the real
@@ -205,11 +206,11 @@ export async function runAnalyzeEditCommand(
 
   const { draft, error } = readDraft(cfg, id);
   if (error) {
-    print(`junco analyze edit: ${error}\n`);
+    print(`junco investigate edit: ${error}\n`);
     return 1;
   }
   if (!draft) {
-    print(`junco analyze edit: no pending draft '${id}'\n`);
+    print(`junco investigate edit: no pending draft '${id}'\n`);
     return 2;
   }
 
@@ -219,7 +220,7 @@ export async function runAnalyzeEditCommand(
     // (reviewStore.ts entryFileName) — reuse that same slug rule rather than
     // reimplementing it, so this path always names the real file on disk.
     const path = join(commentReviewPaths(cfg).dir, `${slugifyId(id)}.json`);
-    print(`junco analyze edit: no $EDITOR (or $VISUAL) set — draft file: ${path}\n`);
+    print(`junco investigate edit: no $EDITOR (or $VISUAL) set — draft file: ${path}\n`);
     print("set $EDITOR (or $VISUAL) to edit interactively\n");
     return 2;
   }
@@ -231,19 +232,19 @@ export async function runAnalyzeEditCommand(
 
     const result = spawnFn(editor, [file]);
     if (result.status !== 0) {
-      print("junco analyze edit: editor exited nonzero — draft unchanged\n");
+      print("junco investigate edit: editor exited nonzero — draft unchanged\n");
       return 1;
     }
 
     const text = readFileSync(file, "utf8");
     const sanitized = sanitizeFindingText(text, 60_000);
     if (sanitized.length === 0) {
-      print("junco analyze edit: draft is empty after sanitize — unchanged\n");
+      print("junco investigate edit: draft is empty after sanitize — unchanged\n");
       return 1;
     }
 
     writeDraft(cfg, { ...draft, draft: sanitized });
-    print(`draft updated — junco analyze review ${id} to preview\n`);
+    print(`draft updated — junco investigate review ${id} to preview\n`);
     return 0;
   } finally {
     try {
@@ -303,7 +304,7 @@ export interface AnalyzePostDeps {
 }
 
 /**
- * Shared core of `junco analyze post`: read → compose → post/enqueue →
+ * Shared core of `junco investigate post`: read → compose → post/enqueue →
  * archive-on-success. Throws on read-error/missing/permanent-failure — a
  * plain `Error` carrying the CLI's own message text (`error`'s string, or
  * `no pending draft '<id>'`) for the first two, and the outbox's
@@ -339,7 +340,7 @@ export async function postDraftCore(
 }
 
 /**
- * `junco analyze post <id> [--no-footer]` — the human-confirmed step: posts a
+ * `junco investigate post <id> [--no-footer]` — the human-confirmed step: posts a
  * parked draft (commentReview.ts) as a comment on its issue, through the
  * outbox seam (githubOutbox.ts) so an offline run converges on the next
  * flush. Archives the draft to posted/ on EITHER outcome (sent or queued) —
@@ -355,7 +356,7 @@ export async function runAnalyzePostCommand(
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
 
   if (!id) {
-    print(`Usage: junco analyze post <id> [--no-footer]\n`);
+    print(`Usage: junco investigate post <id> [--no-footer]\n`);
     return 2;
   }
 
@@ -364,11 +365,11 @@ export async function runAnalyzePostCommand(
   // exit 1 (read error/permanent failure) without a typed-error seam.
   const { draft, error } = readDraft(cfg, id);
   if (error) {
-    print(`junco analyze post: ${error}\n`);
+    print(`junco investigate post: ${error}\n`);
     return 1;
   }
   if (!draft) {
-    print(`junco analyze post: no pending draft '${id}'\n`);
+    print(`junco investigate post: no pending draft '${id}'\n`);
     return 2;
   }
 
@@ -381,7 +382,7 @@ export async function runAnalyzePostCommand(
     }
     return 0;
   } catch (e) {
-    print(`junco analyze post: ${describeError(e)}\n`);
+    print(`junco investigate post: ${describeError(e)}\n`);
     return 1;
   }
 }

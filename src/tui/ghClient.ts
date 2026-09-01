@@ -178,7 +178,7 @@ export interface DashboardClient {
   ): Promise<Result<{ needed: false } | { needed: true; login: string; privatePersonal: boolean }>>;
   /** Build + submit a ticket for `nwo#num` via the shared dispatch core. */
   dispatchTicket(nwo: string, num: number): Promise<Result<{ id: string; destPath: string }>>;
-  /** Parked `junco assess` batches awaiting human confirmation. */
+  /** Parked `junco audit` batches awaiting human confirmation. */
   listReview(): Promise<Result<PendingAssess[]>>;
   /** File the selected findings (by fingerprint) from a parked batch; throws
    * (surfacing as an error `Result`) if the batch is missing or corrupt. The
@@ -188,15 +188,15 @@ export interface DashboardClient {
   /** Discard a parked batch without filing — the explicit end-of-life
    * (archives to review/assess/filed/). Already-gone ids are a no-op. */
   discardReview(id: string): Promise<Result<null>>;
-  /** Parked `junco analyze` comment drafts awaiting human confirmation. */
+  /** Parked `junco investigate` comment drafts awaiting human confirmation. */
   listCommentDrafts(): Promise<Result<PendingComment[]>>;
   /** Post (or, offline, durably enqueue) a parked draft with its footer
-   * intact, archiving it on either outcome — mirrors `junco analyze post`'s
+   * intact, archiving it on either outcome — mirrors `junco investigate post`'s
    * default (non `--no-footer`) behavior. */
   postCommentDraft(id: string): Promise<Result<{ outcome: "sent" | "queued"; url: string | null }>>;
   /** Discard a parked draft without posting it. */
   discardCommentDraft(id: string): Promise<Result<null>>;
-  /** Build + submit a `junco analyze` ticket for `nwo#num` via the shared
+  /** Build + submit a `junco investigate` ticket for `nwo#num` via the shared
    * analyze core. */
   analyzeIssue(nwo: string, num: number): Promise<Result<{ id: string }>>;
   /** The ticket's event transcript, summarized for the viewer — stat-gated:
@@ -223,7 +223,7 @@ export interface GhClientDeps {
    * ExternalDispatchDeps.withBotAuthFn (see externalDispatch.ts). */
   withBotAuthFn?: (cfg: Config) => Promise<Config>;
   /** assess.fileAs resolution for the review-confirm filing path — same
-   * contract as the CLI's `junco assess file` (assessCmd.ts): attach the bot
+   * contract as the CLI's `junco audit file` (assessCmd.ts): attach the bot
    * identity when fileAs is "bot", fail loud (→ error Result → toast) when
    * the bot login is broken. Injectable for tests, like withBotAuthFn. */
   withFileAsAuthFn?: (cfg: Config) => Promise<Config>;
@@ -552,7 +552,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         // provisioning branch). A withBotAuth throw (enabled but unauthed)
         // surfaces as an error Result via attempt(), never a crash.
         const botCfg = await (deps.withBotAuthFn ?? ((c: Config) => withBotAuth(c)))(cfg);
-        // This call never opts out of forking (unlike assess's read-only path,
+        // This call never opts out of forking (unlike audit's read-only path,
         // #105) — the dashboard's watch flow always needs a push target, so a
         // null forkNwo here means ensureExternalClone's fork step was skipped
         // unexpectedly. Fail loud rather than silently widen the return type.
@@ -645,7 +645,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         if (error) throw new Error(error);
         if (!batch) throw new Error(`no pending review '${id}'`);
         // assess.fileAs: the filing pass runs under the resolved identity, or
-        // fails loud BEFORE anything posts (mirrors `junco assess file`,
+        // fails loud BEFORE anything posts (mirrors `junco audit file`,
         // assessCmd.ts) — the batch stays parked on a broken bot login. (#224)
         const fileCfg = await (deps.withFileAsAuthFn ?? ((c: Config) => withFileAsAuth(c)))(cfg);
         return (deps.fileFindingsFn ?? fileFindings)(fileCfg, batch, new Set(fingerprints), {

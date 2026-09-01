@@ -1,5 +1,5 @@
 /**
- * Label-free issue dispatch — the shared core behind `junco dispatch` and the
+ * Label-free issue dispatch — the shared core behind `junco import` and the
  * dashboard's external-repo dispatch. Frontmatter is 100% machine-built from
  * gh JSON output; the (untrusted) issue text only ever lands in the body,
  * inside an explicit data-not-instructions block. Spec:
@@ -96,9 +96,9 @@ export interface IssueTarget {
 /** Parse an issue ref, fetch it via `gh`, and resolve it to a local clone —
  * owned repos (config ∪ non-external watchlist) resolve directly; unowned
  * repos are provisioned via `ensureCloneFn` and added to the watchlist.
- * Shared by `dispatchIssue`, `junco analyze`, and `junco assess`. `opts.fork`
+ * Shared by `dispatchIssue`, `junco investigate`, and `junco audit`. `opts.fork`
  * (default true) is forwarded to `ensureCloneFn` for the provisioning branch —
- * `junco assess`'s read-only path passes `{ fork: false }` so it doesn't leave
+ * `junco audit`'s read-only path passes `{ fork: false }` so it doesn't leave
  * an unused fork on the operator's account (#105); dispatch/analyze keep the
  * default (they need the fork as a push target). */
 export async function resolveIssueTarget(

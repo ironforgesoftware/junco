@@ -132,7 +132,9 @@ function readWaiting(paths: Paths, defaultTimeoutMinutes: number): Ticket[] {
   for (const n of names) {
     const p = join(paths.inbox, n);
     try {
-      const t = parseTicket(p, readFileSync(p, "utf8"), defaultTimeoutMinutes);
+      const t = parseTicket(p, readFileSync(p, "utf8"), defaultTimeoutMinutes, (msg) =>
+        log.warn(msg),
+      );
       if (t.dependsOn.some((d) => !t.depsSatisfied.includes(d))) out.push(t);
     } catch {
       /* unreadable/vanished — the claim path logs these */

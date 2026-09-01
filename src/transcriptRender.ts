@@ -144,6 +144,17 @@ export function fmtToolResult(r: ToolResultSummary | null): string {
   return `→ ${r.lines} line${r.lines === 1 ? "" : "s"}`;
 }
 
+/** Display-only rename for a run header's recorded flow id (RunSummary.flow,
+ * transcriptSchema.ts's FlowKind): the recorded transcript data keeps its
+ * internal `"assess"`/`"analyze"` values (out of surface-legibility Task 2's
+ * scope — old transcripts on disk will always say so), but the CLI verbs that
+ * produce those runs are now `junco audit`/`junco investigate`, so the
+ * rendered header tracks that rename instead of resurrecting the retired
+ * words — same pattern as the queue row's fmtQueueKind (src/tui/queueFmt.ts). */
+function fmtFlow(flow: string): string {
+  return flow === "assess" ? "audit" : flow === "analyze" ? "investigate" : flow;
+}
+
 /** The run header's outcome segment. `live` = this is the file's open last run. */
 export function fmtRunOutcome(run: RunSummary, live: boolean): { text: string; tone: RowTone } {
   const end = run.end;
@@ -186,7 +197,7 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
     const outcome = fmtRunOutcome(run, live);
     const head = [
       `run ${run.index}/${s.runs.length}`,
-      run.flow ?? "v1",
+      run.flow === null ? "v1" : fmtFlow(run.flow),
       run.modelId ?? "?",
       run.startedAt === null ? null : hhmmss(run.startedAt),
       outcome.text,

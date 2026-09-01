@@ -81,9 +81,10 @@ describe("buildAssessTicket", () => {
     expect(content).toContain("junco-findings");
   });
 
-  it("autoPlan: false emits `assess: {}` and parses to autoPlan: false", () => {
+  it("autoPlan: false emits `audit: {}` (canonical key) and parses to autoPlan: false", () => {
     const { content } = buildAssessTicket("/tmp/x/my-repo", { autoPlan: false }, FIXED);
-    expect(content).toContain("assess: {}");
+    expect(content).toContain("audit: {}");
+    expect(content).not.toContain("assess:");
 
     const t = parseTicket("submitted.md", content);
     expect(t.assess).toEqual({ autoPlan: false });
@@ -327,7 +328,7 @@ describe("runAssessCommand", () => {
     expect(receivedOpts).toEqual({ fork: false });
   });
 
-  it("issue-ref target: resolveFn throws -> exit 1, message prefixed `junco assess:`", async () => {
+  it("issue-ref target: resolveFn throws -> exit 1, message prefixed `junco audit:`", async () => {
     const resolveFn = (async () => {
       throw new Error("issue not found");
     }) as typeof resolveIssueTarget;
@@ -341,7 +342,7 @@ describe("runAssessCommand", () => {
     );
 
     expect(code).toBe(1);
-    expect(out.join("")).toContain("junco assess: issue not found");
+    expect(out.join("")).toContain("junco audit: issue not found");
   });
 
   it("unknown nwo -> exit 2, message mentions the repo isn't watched", async () => {
@@ -517,7 +518,7 @@ describe("runAssessReviewCommand", () => {
     await runAssessReviewCommand(c, "assess-x-1", { printFn: print });
     expect(out).toContain("[filed created 2026-07-10T00:00:00.000Z]");
     expect(out).toMatch(/f2.*Nit\n/); // unfiled row carries no filed note
-    expect(out).toContain("discard: junco assess discard assess-x-1");
+    expect(out).toContain("discard: junco audit discard assess-x-1");
   });
 });
 
@@ -729,7 +730,7 @@ describe("runAssessFileCommand", () => {
     expect(out).toContain("assess-ghost");
   });
 
-  it("fileFindings throws -> prints a clean `junco assess file: <msg>`, exit 1, batch preserved (#106)", async () => {
+  it("fileFindings throws -> prints a clean `junco audit file: <msg>`, exit 1, batch preserved (#106)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "afc-throws-"));
     const c = cfg([], dir);
     writePending(c, {
@@ -772,7 +773,7 @@ describe("runAssessFileCommand", () => {
     );
 
     expect(code).toBe(1);
-    expect(out).toBe("junco assess file: dedup lookup failed: permission denied\n");
+    expect(out).toBe("junco audit file: dedup lookup failed: permission denied\n");
     // the batch was never archived — it stays available for retry
     expect(readPending(c, "assess-x-throws").batch).not.toBeNull();
   });
@@ -994,6 +995,6 @@ describe("runAssessDiscardCommand", () => {
     let out = "";
     const code = await runAssessDiscardCommand(c, undefined, { printFn: (s) => (out += s) });
     expect(code).toBe(2);
-    expect(out).toContain("Usage: junco assess discard <id>");
+    expect(out).toContain("Usage: junco audit discard <id>");
   });
 });

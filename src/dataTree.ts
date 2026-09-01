@@ -89,7 +89,7 @@ export interface DataTreePaths {
   clonesWatched: string;
   clonesExternal: string; // NOTE: cfg.github.externalReposRoot (legacy-overridable)
   worktrees: string; // NOTE: cfg.worktreeRoot (legacy-overridable)
-  assessHistory: string; // per-repo `junco assess` history (one file per repo)
+  assessHistory: string; // per-repo `junco audit` history (one file per repo)
   history: string; // per-task finalize records (tasks-YYYY-MM.jsonl shards)
   transcripts: string;
   plans: string;

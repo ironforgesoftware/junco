@@ -1,0 +1,245 @@
+# Repo audit
+
+`junco audit` — audit a repository, park what it finds for review, then file the findings you confirm as GitHub issues.
+
+[← back to the README](../README.md)
+
+Junco authors the issues; it never merges anything on its own. Filing is gated by a human review step of its own — you see every finding's fingerprint, severity, and title before anything lands on a tracker. Beyond that, the human gates are the same ones GitHub-integrated mode already has: **triage** (labeling a filed issue for planning), **approval** (of the resulting plan), and **merge** (of the resulting PR) — audit just gives junco something concrete to author instead of waiting for you to write the first issue.
+
+**Works on any watched repo — owned or not.** A repo you own gets `junco:finding` + `severity/<level>` labels on filed issues (best-effort) and can opt into `--auto-plan`. A repo you don't own gets label-free issues (junco never assumes triage rights it doesn't have), and `--auto-plan` has no effect there — junco doesn't queue plan/PR work against a repo it doesn't own.
+
+## The flow (two phases)
+
+Phase A is the daemon's read-only audit; it **parks** findings instead of filing them. Phase B is you (or a follow-up `junco audit` invocation), reviewing and confirming what actually gets filed — that step runs under your own `gh` auth, not the daemon's.
+
+```
+You (or CI, a cron job, …)
+│
+│ junco audit <path|owner/repo|owner/repo#N> [--auto-plan]
+▼
+inbox/                              ← one machine-owned audit ticket
+│
+│ daemon polls every 15s
+▼
+┌───────────────────────────────────────────────────────────────┐
+│ Phase A — junco daemon (assessFlow.ts), read-only               │
+│                                                                  │
+│ 1. claim inbox/ → processing/                                   │
+│ 2. external clone? → sync to upstream's default branch first    │
+│    (owned checkouts are never fetched or reset)                 │
+│ 3. npm audit --json          → dependency findings              │
+│ 4. read-only agent audit     → code findings                    │
+│ 5. validate + sanitize + severity filter + within-run dedupe    │
+│ 6. GitHub-side dedup           fetchFindingMarkers (last 500,   │
+│                                 your own issues, any repo)      │
+│ 7. park ALL survivors          assessReview.ts (durable store)  │
+│ 8. finalize processing/ → done/|failed/, summary names the id   │
+└───────────────────────────────────────────────────────────────┘
+│
+▼
+pending review batch, keyed by the ticket id
+│
+│ junco audit review [<id>]        ← you list / inspect pending findings
+│ junco audit file <id> --all | --only <fingerprint,…>
+▼
+┌───────────────────────────────────────────────────────────────┐
+│ Phase B — you, in-process, under your own gh auth (assessFiling.ts) │
+│                                                                  │
+│ 1. re-run authoritative dedup for the selected findings          │
+│ 2. owned repo → best-effort ensure junco:finding + severity/*    │
+│    labels; external repo → label-free by construction            │
+│ 3. file each selected, un-filed finding as a GitHub issue        │
+│    (via the offline-durable outbox)                              │
+│ 4. stamp per-finding filed records; batch stays parked           │
+└───────────────────────────────────────────────────────────────┘
+│
+▼
+GitHub issues (labeled on owned repos, label-free on repos you don't own)
+│
+│ --auto-plan only, owned + bridge-watched repos only
+▼
++ trigger label → the plan → approve → PR loop (docs/github-mode.md)
+```
+
+Nothing is filed until Phase B runs. A batch that's never reviewed just sits in the pending store — it doesn't expire, and a re-run of `junco audit` on the same ticket id overwrites it rather than piling up duplicates (carrying forward any `filed` stamps for findings that are still present, so an offline-dedup re-park doesn't lose track of what already went out).
+
+Filing does not remove a batch from the pending list either: it stamps per-finding filed accounting (created/queued/deduped, a timestamp, and the issue URL when created) and the batch stays parked, so you can file the rest of it later or just check what already went out. `junco audit discard <id>` — or `x` on an open batch in the dashboard review view — is the only way a batch leaves the pending list.
+
+## CLI usage
+
+### `junco audit <path|owner/repo|owner/repo#N> [--auto-plan]` — audit
+
+```bash
+junco audit <path|owner/repo|owner/repo#N> [--auto-plan]
+```
+
+- **`<path>`** — an absolute or `~`-relative filesystem path to a local git checkout.
+- **`<owner/repo>`** — matched case-insensitively against the watched repo list: `github.repos` entries, anything added from the dashboard, **and external (unowned, fork-managed) watchlist entries**. The target must already be watched — if not, the command errors instead of guessing a clone path.
+- **`owner/repo#N`** (or an issue URL) — scopes the audit to one issue instead of a whole-repo sweep, and **auto-provisions** an unwatched repo (fork, clone, watchlist add) instead of requiring it be watched already. See [Issue-scoped audit](#issue-scoped-audit) below.
+- **`--auto-plan`** — apply the configured GitHub trigger label (`github.triggerLabel`, default `junco`) to every issue filed from this batch, so the bridge can pick each one up. Only takes effect on owned repos filed via Phase B below — an external batch always forces `autoPlan` off, regardless of this flag. See the caveat below.
+
+A target that looks like `owner/repo#N` (or an issue URL) is resolved as an issue reference first. Otherwise, a target that looks like `owner/repo` (word characters either side of one slash) is treated as a watched-repo lookup unless a local directory by that literal name exists, in which case it's treated as a path instead.
+
+What gets printed:
+
+| Outcome                  | stdout                                                                                                                                                                                                                                    | Exit |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| No target given          | `Usage: junco audit <path\|owner/repo\|owner/repo#N> [--auto-plan]`                                                                                                                                                                       | 2    |
+| `owner/repo` not watched | `junco audit: '<target>' is not watched — add it under github.repos in config.json, or watch it from the dashboard, then retry`                                                                                                           | 2    |
+| Path is not a directory  | `junco audit: not a directory: <resolved-path>`                                                                                                                                                                                           | 2    |
+| Ticket submission failed | `junco audit: <error>`                                                                                                                                                                                                                    | 1    |
+| Queued                   | `queued: <ticket-path>`, then `queued — the worker will audit the repo and park findings for review on its next claim; run 'junco audit review' then 'junco audit file <id>' to file them` (plus a third line when `--auto-plan` was set) | 0    |
+
+The command only composes and submits the ticket. The actual audit — `npm audit`, the agent session, dedup, and parking — runs later, whenever the daemon claims the ticket. Nothing files yet; that's Phase B, below.
+
+### `junco audit review [<id>]` — list / inspect pending findings
+
+The same review can also be done without leaving the dashboard: press `v` there to open the in-dashboard review view, a per-finding checklist with the same select/confirm-to-file flow described below.
+
+```bash
+junco audit review              # list every pending batch
+junco audit review <id>         # show one batch's findings
+```
+
+With no id, prints one line per pending batch: id, nwo, `(owned)`/`(external)`, finding count, the audit's timestamp, and — once anything in the batch has been filed — a `filed n/m` count; or `no pending audit reviews` if the store is empty.
+
+With an id, prints the batch's `nwo`/scope followed by each finding's fingerprint, severity, and title (a filed finding's line ends with a `[filed <how> <at>]` note), then three ready-to-run hints: `junco audit file <id> --all`, a `--only <fp,fp>` example built from the first two fingerprints, and `junco audit discard <id>`.
+
+### `junco audit file <id> --all | --only <fingerprint,…>` — confirm and file
+
+```bash
+junco audit file <id> --all
+junco audit file <id> --only <fingerprint>,<fingerprint>,…
+```
+
+Files the selected findings as GitHub issues (through `assessFiling.ts`) and stamps per-finding filed accounting (created/queued/deduped, a timestamp, and the issue URL when created) — the batch stays in the pending review list; `junco audit discard <id>` is the explicit end-of-life, not filing. **There is no bare default** — you must pass `--all` or `--only <fingerprints>` — because these are writes landing on someone else's issue tracker as much as your own. Findings you don't select simply stay unreviewed for the next audit; they aren't suppressed (see dedup semantics below).
+
+Before filing, it re-runs the authoritative dedup scan (so a finding someone already filed by hand in the meantime is skipped, not duplicated) and, on an owned repo, best-effort ensures the `junco:finding` + `severity/<level>` labels exist — if that fails (e.g. a transient permission glitch), the issue still files, just label-free, rather than the whole run failing.
+
+Prints a one-line summary — `filed N · queued N · already-filed N · failed N` — followed by the created issue URLs and any warnings, and exits `1` if anything failed to file.
+
+**Filing identity** (`assess.fileAs`, default `"me"`): by default issues post under your ambient `gh` login — human confirmation is human attribution. Set `assess.fileAs: "bot"` to file under the dedicated bot account instead: the bot identity is attached to the whole filing pass, so the author-scoped dedup scan, the label ensure, and the issue creates all run as the bot (a scan-as-me/file-as-bot split would blind dedup to the bot's own past findings). Fails loud — with the bot disabled or its login missing/expired, `audit file` exits non-zero pointing at `junco auth login` and posts nothing; there is no silent fallback to your personal login. The bot needs triage-or-better on owned repos for the labels; label gaps degrade the same best-effort way as today. Switching filing identity does not disturb dedup: the marker scan is author-independent, so findings filed under either identity stay deduplicated.
+
+### `junco audit discard <id>` — the end-of-life for a batch
+
+```bash
+junco audit discard <id>
+```
+
+The explicit end-of-life for a parked batch: archives it out of the pending review list (to `review/assess/filed/`) without filing anything further. Filing no longer archives a batch, so this — or `x` on an open batch in the dashboard review view — is the only way one leaves `junco audit review`, whether it's fully filed, partially filed, or untouched. Discarding an id that's already gone is a no-op success, not an error.
+
+## Issue-scoped audit
+
+`junco audit owner/repo#N` (or a full issue URL) points the audit at one issue instead of sweeping the whole repo. Target resolution goes through the same `resolveIssueTarget` helper `junco import` and `junco investigate` use: a fail-fast `gh issue view` fetch, then either resolve against an already-watched repo or **auto-provision** an unwatched one — fork, clone into a managed directory, add it to the watchlist.
+
+**This auto-provisioning is asymmetric with the plain `owner/repo` form above, and that's deliberate.** `junco audit <nwo>` on its own still requires the repo be already watched — no clone is provisioned for it. An issue reference is treated as an explicit, single-issue ask; a bare repo target is a broader operation that shouldn't silently provision a clone just because you typed a name it recognizes as `owner/repo`-shaped.
+
+The audit prompt gains an extra section carrying the issue's title and body, framed the same way `junco import`/`junco investigate` frame issue text: explicit untrusted data, not instructions, with an instruction to scope the audit to the code that issue implicates (findings outside that scope are still reported, just deprioritized).
+
+Findings park exactly like a whole-repo audit's do — same store, same `junco audit review` / `junco audit file` flow, same dashboard review view. The one difference is in what gets filed: each finding's issue body gets a `**Context:** <owner/repo>#<N>` line immediately before the machine-readable block. GitHub turns that into an automatic cross-reference, so every filed finding shows up on the original issue's timeline for free. **No comment is posted on the issue itself** — an issue-scoped audit run is read-only apart from the issues it files; posting prose on the original issue is a different, deliberate command, `junco investigate` (see the [issue investigation guide](./investigate.md)).
+
+**Dedup is shared, not scoped.** Fingerprints (`sha256("<kind>|<ruleId>|<locus>")`) never fold in the scoping issue, so a finding surfaced by an issue-scoped audit and the same finding surfaced later by a whole-repo audit — or vice versa — collide and dedup against each other. Re-running audit in either mode never double-files the same defect.
+
+**From the dashboard:** `u` (or `A` for auto-plan) scopes to the selected issue automatically when the issues pane (pane 2) is focused and an issue is selected; everywhere else it stays repo-scoped. See [Dashboard](./dashboard.md).
+
+## Issue format
+
+Each filed finding becomes one GitHub issue:
+
+- **Title:** `[<severity>] <title> (<ruleId>)` — flattened to one line, capped at 120 characters.
+- **Body:** whichever of these sections apply — `## Summary`, `## Package` (dependency findings: name / vulnerable range / fixed-in), `## Location` (code findings: `path` or `path:line`), `## Evidence`, `## Remediation`, `## References` — followed by a `<details><summary>machine-readable</summary>` block containing the full finding as JSON, and closing with a `<!-- junco:finding:<fingerprint> -->` marker as the literal last line, outside every fence. That marker line is what the dedup scan reads back.
+- **Labels — owned repos only, best-effort:** `junco:finding` + `severity/<level>`, plus the configured trigger label when the batch was `--auto-plan`. A repo you don't own gets **no labels at all** — junco doesn't create or apply labels it may not have rights to; the severity and fingerprint still live in the title and the marker, so the issue is fully self-describing without them.
+
+**Fingerprint:** `sha256("<kind>|<ruleId>|<locus>")` truncated to 16 hex characters, where `locus` is the package name for dependency findings, else the code location's file path, else the title. Line numbers are deliberately excluded from the fingerprint, so it survives the surrounding code drifting.
+
+## Dedup semantics
+
+- **Within a run:** npm-audit findings and agent findings are merged; the first occurrence of each fingerprint wins, and later duplicates are dropped before anything is parked.
+- **Against GitHub, one path for owned and unowned repos:** both the audit-time pre-filter and the authoritative file-time check scan the target repo's **most recent 500 issues — any author, closed included** (`gh issue list --state all`) for `<!-- junco:finding:... -->` markers, and skip any fingerprint already present. The scan is **marker-scoped, not author-scoped**: whoever filed the issue — you, the bot account, a teammate, an older label-based run — the marker is what counts. That makes dedup immune to identity splits: a bot daemon pre-filtering findings that were filed under your personal login (or an `assess.fileAs` switch mid-history) sees exactly the same picture as the filing pass.
+- **Offline replay is idempotent:** an issue queued to the outbox re-runs that same marker scan fresh at flush time (never from a cache), so two offline runs that both queued the same finding still converge to one issue.
+- **Trust note.** Because the scan reads every author's issues, anyone who can open an issue on the repo can write a marker line and suppress that fingerprint — the same trust class as the close-to-suppress behavior below, and consistent with treating repo collaborators as operators.
+
+> **Caveat — read this before closing a finding as wontfix.** Because closed issues still count toward the scan, closing a finding issue for any reason suppresses that fingerprint **forever** — including a genuine future regression that hashes to the same fingerprint. To let junco re-file it, delete the issue, or edit the `<!-- junco:finding:... -->` marker line out of its body.
+>
+> **A parked-but-never-filed finding is different: it isn't suppressed.** If you review a batch and don't select a finding (or never run `junco audit file` on it at all), the next audit re-parks it, because no issue — and so no marker — exists yet.
+
+## Offline behavior
+
+- **Issue creation goes through the same outbox as everything else GitHub.** When `gh issue create` fails for a network reason during `junco audit file`, the create is queued to the outbox (`<dataDir>/data/outbox/` — or `<dataDir>/outbox/` on a not-yet-migrated legacy tree; see [github-mode.md § Offline / flaky network](github-mode.md#offline--flaky-network)) instead of failing the run. `junco outbox` lists what's queued, `junco outbox flush` (or the next bridge sweep) drains it, and the dashboard header shows a `⇡N unpushed` chip while anything is queued.
+- **`npm audit` needs registry access.** A failure — offline or otherwise — never aborts the audit: it's recorded as a warning in the ticket's finalize summary, and the run continues with agent-only (code) findings, still parked for review.
+- **The GitHub-side dedup scan can itself be offline,** at either phase. During the audit (Phase A), a network failure degrades to an empty dedup set rather than failing the run — findings park as if new. During filing (Phase B), the same degrade applies — findings file as if new — and the outbox's fresh re-scan at flush time is what keeps that from duplicating. Any other dedup-scan failure (not network-shaped) is fatal to the run/file attempt, since junco won't risk mass-refiling against unknown upstream state.
+
+## `--auto-plan` caveat
+
+`--auto-plan` only gets a finding as far as the trigger label, and only on an **owned** repo — an external batch forces `autoPlan` off no matter what the flag said at audit time, since junco doesn't queue plan/PR work against a repo it doesn't own. On an owned repo, the label lands on every issue the batch files (once you confirm with `junco audit file`) either way, but it's the bridge that turns a labeled issue into a plan — and the bridge only sweeps repos it's watching, and only when `github.enabled = true`. If the target repo isn't bridge-watched (or the bridge is disabled), the issues still file, but the label sits there inert until the repo is watched.
+
+## Config
+
+`assess.*` — knobs for `junco audit` runs (verified against `src/config.ts`):
+
+| Key                      | Default | Description                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assess.maxIssuesPerRun` | `20`    | Historical cap on issues filed per run. Parking has no cap — your review pass at `junco audit file` is the volume gate now — so this field currently has no effect; it's kept for config compatibility and may resurface as a review-list pre-selection default in a future dashboard view. |
+| `assess.minSeverity`     | `"low"` | Findings ranked below this are dropped before parking. One of `critical`, `high`, `medium`, `low`.                                                                                                                                                                                          |
+| `assess.npmBin`          | `"npm"` | Binary used for the dependency scan (`<npmBin> audit --json`).                                                                                                                                                                                                                              |
+
+## Ticket flavor
+
+`junco audit` composes and submits the ticket itself — you don't hand-author it. Its frontmatter:
+
+```yaml
+---
+id: assess-<repo-basename>-<UTC stamp>
+repo: <absolute path to the audit target>
+audit:
+  auto_plan: true # only present with --auto-plan
+  issue: 42 # only present when scoped via `junco audit owner/repo#N`
+  issue_title: "..." # machine-built, display-only; travels with `issue`
+# `audit: {}` when neither --auto-plan nor an issue scope applies
+---
+```
+
+Presence of the `audit:` mapping is what selects this flavor (see the flavor table in [docs/tickets.md](./tickets.md)) — the daemon audits the `repo:` path and parks findings for review instead of running Q&A or PR flow. Unlike every other ticket carrying `repo:`, an audit ticket **never opens a pull request**: the daemon checks for `audit:` before it checks for `repo:`, so an audit ticket always short-circuits into the audit flow above. `assess:` is a permanently accepted legacy alias for the same mapping — when a ticket carries both, `audit:` wins (see [docs/tickets.md](./tickets.md#key-frontmatter-fields)).
+
+The pending review batch is keyed by this ticket's `id`, so a transient requeue (crash, transient agent failure) that re-runs the same ticket **overwrites** the same batch rather than creating a duplicate — `junco audit review <id>` always reflects the latest audit for that ticket.
+
+## Audit history — the rail indicator
+
+Every whole-repo `junco audit` run records one history entry for that repo when it finishes — success or failure. Three surfaces read it: the dashboard rail (a compact indicator next to each repo), and `junco status`/`junco doctor` (a plain-text line with the full breakdown). Nothing is recorded until a whole-repo run finishes; a ticket that dies before the repo is resolved records nothing either.
+
+In the dashboard rail (pane 1), each watched repo's row ends with a fixed-width indicator:
+
+| Indicator | Meaning                                                                                            |
+| --------- | -------------------------------------------------------------------------------------------------- |
+| `—`       | Never assessed — no whole-repo run has ever finished, success or failure.                          |
+| `2h 0✓`   | Last successful whole-repo audit finished 2 hours ago and found nothing.                           |
+| `21d 4⚠`  | Last successful whole-repo audit finished 21 days ago and found 4 findings.                        |
+| `21d! 4⚠` | Same as above, but the most recent attempt (since that success) failed — the `!` suffixes the age. |
+| `— !`     | The repo has never had a successful whole-repo audit, and the most recent attempt failed.          |
+
+Age caps at `99d+`, the finding count at `99+`, so a long-neglected repo can't blow out the rail's fixed-width column.
+
+**The age always tracks the last _successful_ whole-repo audit — never a failed attempt.** A failed run appends the `!` marker so a broken audit doesn't go unnoticed, but it never moves the age or the finding count: a repo whose audits keep failing stays visibly distinct from one that was genuinely re-audited, and a crashed run can never make a stale repo look freshly checked.
+
+**Issue-scoped runs (`junco audit owner/repo#N`) deliberately do not update this history at all.** They audit only the code the referenced issue implicates rather than sweeping the whole repo, so folding their result into the repo's freshness indicator would overstate how much of the repo was actually covered. Only a whole-repo `junco audit <path|owner/repo>` run writes a history entry; an issue-scoped run leaves the rail, `status`, and `doctor` output for that repo untouched.
+
+## Visibility
+
+`junco status` and `junco doctor` both print `audit review: N pending (junco audit review)` whenever the pending-review store is non-empty, so a backlog of unreviewed findings doesn't go unnoticed between audits.
+
+They also print the same per-repo audit history the rail shows, as plain text, once per repo that has ever been assessed (silent when none has). `junco status`:
+
+```
+audit:     <owner/repo> assessed 2026-07-14 · 4 found · 4 parked
+audit:     <owner/repo> assessed 2026-07-14 · 4 found · 4 parked · last attempt failed 2026-07-16
+audit:     <owner/repo> never assessed · last attempt failed 2026-07-16
+```
+
+`junco doctor` reports the same repos as informational lines — always `ok`, never a warning, since a stale or never-assessed repo is normal workflow state, not a health problem:
+
+```
+✓ audit history — <owner/repo>: assessed 2026-07-14 (last attempt failed)
+✓ audit history — <owner/repo>: never assessed
+```
+
+Both the date printed (`assessed YYYY-MM-DD`) and the `last attempt failed` marker trace back to the same fields the rail indicator reads, so the rail, `status`, and `doctor` always agree with each other.

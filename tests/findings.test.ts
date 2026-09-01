@@ -926,7 +926,7 @@ describe("FINDING_LABEL", () => {
 describe("FINDING_LABEL_SPECS", () => {
   it("has the junco:finding label plus one severity/<level> label per level", () => {
     expect(FINDING_LABEL_SPECS).toEqual([
-      ["junco:finding", "1D76DB", "Filed by junco assess"],
+      ["junco:finding", "1D76DB", "Filed by junco audit"],
       ["severity/critical", "B60205", "Finding severity: critical"],
       ["severity/high", "D93F0B", "Finding severity: high"],
       ["severity/medium", "FBCA04", "Finding severity: medium"],

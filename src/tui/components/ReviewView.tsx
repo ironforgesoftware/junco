@@ -203,8 +203,8 @@ export function ReviewView({
     return (
       <Box paddingX={1}>
         <Text dimColor>
-          no pending assess reviews — run assess (s) on a repo first · or draft a comment on an
-          issue (c)
+          no pending audit reviews — run audit (u) on a repo first · or draft a comment on an issue
+          (n)
         </Text>
       </Box>
     );

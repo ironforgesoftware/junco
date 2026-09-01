@@ -11,6 +11,7 @@ import {
   fmtCompact,
   fmtDurShort,
   fmtSpark,
+  fmtQueueKind,
   oldestQueuedAt,
 } from "../queueFmt.js";
 import { theme } from "../theme.js";
@@ -258,7 +259,7 @@ export const QueueView = React.memo(function QueueView({
         <Text key={`w-${w.id}`} wrap="truncate-end">
           {gutter(sel)}
           {i + 1}. <Text bold>{queueLabel(w.github, w.id)}</Text>
-          <Text dimColor> {w.github ? w.id : w.kind}</Text>
+          <Text dimColor> {w.github ? w.id : fmtQueueKind(w.kind)}</Text>
           {note !== "" ? <Text color="yellow"> {note}</Text> : null}
           {w.queuedAt !== null ? (
             <Text dimColor>

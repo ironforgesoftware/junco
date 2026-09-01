@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   mkdtempSync,
   mkdirSync,
@@ -26,6 +26,7 @@ import { makeGithubReporter } from "../src/githubReport.js";
 import { fakeSession, type FakeSessionFactory } from "./helpers/fakeSession.js";
 import { makeSpendLedger } from "../src/spendLedger.js";
 import { makeConfig } from "./helpers/config.js";
+import { log } from "../src/logging.js";
 
 function cfg(root: string): Config {
   return makeConfig(
@@ -1223,6 +1224,39 @@ describe("claimNextTask (per-repo serialization)", () => {
   });
 });
 
+describe("claimNextTask (audit/investigate collision warning)", () => {
+  // parseTicket's warnFn defaults to a silent no-op (pure parser); the daemon
+  // wires it to log.warn so a ticket carrying both the canonical and legacy
+  // key for the same flavor lands in the structured worker.log instead of
+  // nowhere (or, pre-fix, as a bare console.warn line that would break
+  // `junco logs --json`/the TUI log viewer's parse of that JSON-lines stream).
+  it("forwards the both-keys collision warning to the structured log, not console.warn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-claim-warn-"));
+    const j = join(root, "Junco");
+    ["inbox", "processing"].forEach((d) => mkdirSync(join(j, d), { recursive: true }));
+    writeFileSync(
+      join(j, "inbox", "both.md"),
+      "---\nid: both\naudit:\n  auto_plan: true\nassess:\n  auto_plan: false\n---\nx\n",
+      "utf8",
+    );
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const w = await claimNextTask(cfg(root));
+      expect(w?.ticket.id).toBe("both");
+      expect(w?.ticket.assess).toEqual({ autoPlan: true }); // canonical `audit:` still wins
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [msg] = warnSpy.mock.calls[0]!;
+      expect(String(msg)).toMatch(/audit/);
+      expect(String(msg)).toMatch(/assess/);
+      expect(consoleSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      consoleSpy.mockRestore();
+    }
+  });
+});
+
 describe("claimNextTask (priority ordering)", () => {
   // Issue #115: claimNextTask's priority sort (high>normal>low) had no direct
   // test — only the TUI display sort was covered. Filenames here sort a<b<c,
@@ -1694,7 +1728,7 @@ esac
     expect(body).toContain("<!-- junco-result");
     // The audit PARKS the finding — the summary points at the file step, and
     // no issue URL appears (nothing was filed).
-    expect(body).toContain("junco assess file assess-e2e");
+    expect(body).toContain("junco audit file assess-e2e");
     expect(body).not.toContain("https://github.com/acme/demo/issues/1");
 
     // The finding landed in the review store, keyed by ticket id, flagged owned.

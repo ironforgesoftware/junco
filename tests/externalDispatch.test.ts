@@ -1,7 +1,7 @@
 /**
  * Tests for src/externalDispatch.ts — label-free issue dispatch
  * (`parseIssueRef` / `buildExternalTicket` / `dispatchIssue`), the shared core
- * behind `junco dispatch` and the dashboard's external-repo dispatch.
+ * behind `junco import` and the dashboard's external-repo dispatch.
  */
 
 import { describe, it, expect, afterEach } from "vitest";

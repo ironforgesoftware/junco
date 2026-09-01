@@ -11,9 +11,9 @@ const KIND_LABEL: Record<PlanItemKind, (n: number) => string> = {
   "inbox-ticket": (n) => `${n} queued ticket(s)`,
   worktrees: () => "worktrees",
   "outbox-op": (n) => `${n} outbox op(s)`,
-  "assess-review": (n) => `${n} pending assess batch(es)`,
+  "assess-review": (n) => `${n} pending audit batch(es)`,
   "comment-review": (n) => `${n} pending comment draft(s)`,
-  "assess-history": () => "assess history",
+  "assess-history": () => "audit history",
   mirror: () => "mirror",
   "github-cache": () => "github cache",
 };

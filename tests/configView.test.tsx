@@ -92,6 +92,20 @@ describe("ConfigView", () => {
     expect(f).toMatch(/Root directory Junco keeps its ticket queue under/);
   });
 
+  // surface-legibility Task 2: the CLI verb over config.json's `assess.*` keys
+  // (assess.fileAs, …) is now `junco audit` — config.json's own key name stays
+  // `assess` (a persisted user key, out of this task's scope; see
+  // sectionKeyFor/SECTION_ORDER in ConfigView.tsx), but the rendered tab must
+  // track the renamed verb so the dashboard never shows the retired word.
+  it("renders the assess.* section's tab as 'audit', never 'assess'", async () => {
+    const p = fixture({ vaultRoot: "/v" });
+    const { lastFrame } = render(<ConfigView configPath={p} onExit={() => {}} />);
+    await until(() => /audit/i.test(lastFrame() ?? ""));
+    const f = lastFrame() ?? "";
+    expect(f).toMatch(/audit/);
+    expect(f).not.toMatch(/\bassess\b/);
+  });
+
   it("toggling a boolean lever writes the file", async () => {
     const p = fixture({ vaultRoot: "/v" });
     const { lastFrame, stdin } = render(<ConfigView configPath={p} onExit={() => {}} />);

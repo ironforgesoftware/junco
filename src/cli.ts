@@ -282,14 +282,14 @@ Subcommands:
   prs                 List junco-authored pull requests across watched repos
   data [--json]  Print the data tree (paths, counts, provenance); 'data migrate' unifies legacy roots
   config path|list|get <path>|set <path> <value>|init  Inspect/edit config.json knobs; init scaffolds defaults
-  assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
-  assess review [<id>]                    list pending assess reviews, or show one
-  assess file <id> --all | --only <fp,...>  file reviewed findings as issues
-  assess discard <id>                     discard a pending batch without filing
-  analyze <owner/repo#N|url>          investigate an issue and park a comment draft for review
-  analyze review [<id>]                   list pending comment drafts, or preview one
-  analyze edit <id>                       edit a pending draft in $EDITOR
-  analyze post <id> [--no-footer]        post an approved draft as a comment on its issue
+  audit <path|owner/repo|owner/repo#N> [--auto-plan]  sweep a repo — or scoped to one issue; findings await review
+  audit review [<id>]                     list pending audit reviews, or show one
+  audit file <id> --all | --only <fp,...>  file reviewed findings as issues
+  audit discard <id>                      discard a pending batch without filing
+  investigate <owner/repo#N|url>          deep-read one issue and park a comment draft for review
+  investigate review [<id>]               list pending comment drafts, or preview one
+  investigate edit <id>                   edit a pending draft in $EDITOR
+  investigate post <id> [--no-footer]     post an approved draft as a comment on its issue
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   auth login | auth grant <owner/repo>   Bot-account login / grant the bot write access to a repo
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
@@ -312,7 +312,7 @@ Subcommands:
                   frontmatter, and lint results without submitting
   lint <file>  Validate a ticket without submitting — plan-lint plus repo,
                   origin, and branch-collision preflight (exit 1 on errors)
-  dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
+  import <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
   skill install [--harness <name|path>]...  Link the junco-dispatch skill into
                   harness skills dirs via <dataDir>/skills (names: claude,
@@ -1168,10 +1168,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
-  // assess: compose + submit a machine-owned vulnerability-assessment ticket
-  // (src/assessCmd.ts) — the daemon's assessFlow.ts runs the actual audit.
+  // audit (was `assess` — surface-legibility Task 2, no alias): compose +
+  // submit a machine-owned vulnerability-assessment ticket (src/assessCmd.ts,
+  // internal names unchanged) — the daemon's assessFlow.ts runs the actual
+  // audit. `audit` names a systematic repo sweep producing findings (junco
+  // runs `npm audit` inside it); distinct from `investigate`, which deep-reads
+  // ONE issue and produces a comment.
   // ------------------------------------------------------------
-  if (subcommand === "assess") {
+  if (subcommand === "audit") {
     const cfg = loadConfigFn(configPath);
     const sub = positionals[1];
     if (sub === "review") {
@@ -1201,12 +1205,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
-  // analyze: compose + submit a machine-owned issue-investigation ticket
-  // (src/analyzeCmd.ts) — the daemon's analyzeFlow.ts investigates and parks
-  // a comment draft. review/edit read and refine a parked draft; post is the
-  // human-confirmed outward write, through the same outbox seam as assess.
+  // investigate (was `analyze` — surface-legibility Task 2, no alias):
+  // compose + submit a machine-owned issue-investigation ticket
+  // (src/analyzeCmd.ts, internal names unchanged) — the daemon's
+  // analyzeFlow.ts investigates and parks a comment draft. review/edit read
+  // and refine a parked draft; post is the human-confirmed outward write,
+  // through the same outbox seam as audit.
   // ------------------------------------------------------------
-  if (subcommand === "analyze") {
+  if (subcommand === "investigate") {
     const cfg = loadConfigFn(configPath);
     const sub = positionals[1];
     if (sub === "review") {
@@ -1215,7 +1221,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     if (sub === "edit") {
       if (positionals[2] === undefined) {
-        printFn(`Usage: junco analyze edit <id>\n`);
+        printFn(`Usage: junco investigate edit <id>\n`);
         return 2;
       }
       const { runAnalyzeEditCommand } = await import("./analyzeCmd.js");
@@ -1395,7 +1401,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // config: inspect/edit config.json knobs via the lever registry
   // (src/configLevers.ts) — path/list/get/set (src/configCmd.ts). Lazy
   // import keeps it off every other subcommand's require graph, matching
-  // `prs`/`assess`. daemonRunningFn reuses the same lock-holder liveness
+  // `prs`/`audit`. daemonRunningFn reuses the same lock-holder liveness
   // check as `status`/`restart` so `set` on a restart-kind lever only warns
   // when a daemon is actually up to restart.
   // ------------------------------------------------------------
@@ -1762,14 +1768,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
-  // dispatch <owner/repo#N | issue-url>: fetch a GitHub issue and queue a
-  // ticket for it, forking + cloning unowned repos automatically. Lazy import
-  // keeps this (and its gh/git dependency graph) off every other subcommand.
+  // import <owner/repo#N | issue-url>: fetch a GitHub issue and queue a
+  // ticket for it, forking + cloning unowned repos automatically. Named
+  // `import` (not `dispatch`, which this used to be called — no alias, that
+  // verb pointed the opposite way from the junco-dispatch SKILL, which
+  // authors NEW work rather than adopting an existing issue): the operation
+  // brings an external thing under junco's management, same as `terraform
+  // import`. Deferred module load keeps this (and its gh/git dependency
+  // graph) off every other subcommand.
   // ------------------------------------------------------------
-  if (subcommand === "dispatch") {
+  if (subcommand === "import") {
     const ref = positionals[1];
     if (!ref) {
-      process.stderr.write(`Usage: junco dispatch <owner/repo#N | issue-url>\n`);
+      process.stderr.write(`Usage: junco import <owner/repo#N | issue-url>\n`);
       return 2;
     }
     const cfg = loadConfigFn(configPath);
@@ -1777,13 +1788,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       deps.dispatchIssueFn ?? (await import("./externalDispatch.js")).dispatchIssue;
     try {
       const r = await dispatchFn(cfg, ref);
-      printFn(`dispatched: ${r.destPath}\n`);
+      printFn(`imported: ${r.destPath}\n`);
       if (r.external) {
         printFn(`external repo — fork: ${r.forkNwo} · clone: ${r.clonePath}\n`);
       }
       return 0;
     } catch (e) {
-      process.stderr.write(`junco dispatch: ${e instanceof Error ? e.message : String(e)}\n`);
+      process.stderr.write(`junco import: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
   }

@@ -1,12 +1,12 @@
 /**
- * `junco assess` orchestrator — an assess ticket runs through here. It mirrors
+ * `junco audit` orchestrator — an audit ticket runs through here. It mirrors
  * the Q&A path (runOnce.ts:120-260) for containment, read-only tools, the
  * supervisor/guard wiring, the transcript, the transient requeue, and the
  * finalize, then layers on the assess-specific work: an `npm audit` dependency
  * scan, parsing the agent's findings, a hallucination filter, severity +
  * fingerprint dedup, GitHub-side dedup, and PARKING the surviving findings in
  * the durable review store (assessReview.ts) for a separate, human-confirmed
- * filing step (`junco assess file <id>` → assessFiling.ts).
+ * filing step (`junco audit file <id>` → assessFiling.ts).
  *
  * Design posture (ported from prFlow.ts): expected failures NEVER throw out of
  * runAssessFlow — a fatal phase error finalizes the ticket to failed/ with the
@@ -121,11 +121,11 @@ export async function runAssessFlow(
   let recordNwo: string | null = null;
 
   const buildSummary = (phaseError: string | null): string => {
-    const parts: string[] = ["## junco assess", `_Assessed ${nowFn().toISOString()}_`];
+    const parts: string[] = ["## junco audit", `_Assessed ${nowFn().toISOString()}_`];
     if (phaseError) parts.push(`**Failed:** ${phaseError}`);
     if (counts.parked > 0) {
       parts.push(
-        `**${counts.parked} findings awaiting review — run \`junco assess file ${ticket.id}\`**`,
+        `**${counts.parked} findings awaiting review — run \`junco audit file ${ticket.id}\`**`,
       );
     }
     parts.push(
@@ -391,7 +391,7 @@ export async function runAssessFlow(
   }
 
   // --- Phase 7: Park all surviving findings for human review. There is NO cap
-  // here — the per-finding confirm at file time (`junco assess file <id>`) is
+  // here — the per-finding confirm at file time (`junco audit file <id>`) is
   // the volume gate, not this audit. The batch is keyed by ticket id, so a
   // requeued rerun overwrites (never duplicates) the pending batch. External
   // batches force autoPlan false: junco does not queue PR work against a repo

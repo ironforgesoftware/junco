@@ -832,26 +832,26 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       report("warn", "outbox dead-letters", `${stuck} in ${outboxPaths(cfg).dead}`);
     }
 
-    // 7d. assess review backlog — informational only (normal workflow state,
+    // 7d. audit review backlog — informational only (normal workflow state,
     // not a health problem), independent of the github.enabled bridge gate.
     const reviews = pendingCount(cfg);
     if (reviews > 0) {
-      report("ok", "assess review", `${reviews} pending (junco assess review)`);
+      report("ok", "audit review", `${reviews} pending (junco audit review)`);
     }
 
-    // 7d-bis. Per-repo assess history — informational only (a never-assessed
+    // 7d-bis. Per-repo audit history — informational only (a never-assessed
     // repo is normal workflow state, not a health problem), mirroring 7d.
     for (const h of listHistory(cfg)) {
       const when = h.lastSuccessAt ? `assessed ${h.lastSuccessAt.slice(0, 10)}` : "never assessed";
       const failed = h.lastFailureAt ? ` (last attempt failed)` : "";
-      report("ok", "assess history", `${h.id}: ${when}${failed}`);
+      report("ok", "audit history", `${h.id}: ${when}${failed}`);
     }
 
     // 7e. analyze comment-draft backlog — informational only (normal workflow
     // state, not a health problem), independent of the github.enabled gate.
     const drafts = draftCount(cfg);
     if (drafts > 0) {
-      report("ok", "analyze drafts", `${drafts} pending (junco analyze review)`);
+      report("ok", "investigate drafts", `${drafts} pending (junco investigate review)`);
     }
 
     // 8. daemon (informational) — and, since #310, the two shared-root claims

@@ -1456,9 +1456,9 @@ describe("runDoctor hosted-aware preflight", () => {
     expect(out).not.toMatch(/github/);
     expect(out).not.toMatch(/bot account/i);
     expect(out).not.toMatch(/outbox/);
-    expect(out).not.toMatch(/assess review/);
-    expect(out).not.toMatch(/analyze drafts/);
-    expect(out).not.toMatch(/assess history/);
+    expect(out).not.toMatch(/audit review/);
+    expect(out).not.toMatch(/investigate drafts/);
+    expect(out).not.toMatch(/audit history/);
     expect(out).toMatch(/ready — 0 failure\(s\), 0 warning\(s\)/);
   });
 });
@@ -1919,7 +1919,7 @@ describe("runDoctor outbox checks", () => {
   });
 });
 
-describe("runDoctor assess review checks", () => {
+describe("runDoctor audit review checks", () => {
   it("reports pending reviews as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-review-"));
     writePending({ dataDir: stateDir } as unknown as Config, {
@@ -1941,12 +1941,12 @@ describe("runDoctor assess review checks", () => {
     );
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the review count must still surface.
-    expect(lines.join("")).toMatch(/✓ assess review — 1 pending \(junco assess review\)/);
+    expect(lines.join("")).toMatch(/✓ audit review — 1 pending \(junco audit review\)/);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });
 
-describe("runDoctor analyze review checks", () => {
+describe("runDoctor investigate review checks", () => {
   it("reports pending drafts as informational — not a warning, github disabled", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-doc-draft-"));
     writeDraft({ dataDir: stateDir } as unknown as Config, {
@@ -1970,13 +1970,13 @@ describe("runDoctor analyze review checks", () => {
     );
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the draft count must still surface.
-    expect(lines.join("")).toMatch(/✓ analyze drafts — 1 pending \(junco analyze review\)/);
+    expect(lines.join("")).toMatch(/✓ investigate drafts — 1 pending \(junco investigate review\)/);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });
 
-describe("runDoctor assess history checks", () => {
-  it("reports per-repo assess history informationally — never as a warning", async () => {
+describe("runDoctor audit history checks", () => {
+  it("reports per-repo audit history informationally — never as a warning", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "junco-doc-history-"));
     recordRun({ dataDir } as unknown as Config, "o/r", {
       ok: true,
@@ -2003,7 +2003,7 @@ describe("runDoctor assess history checks", () => {
       }),
     );
     expect(code).toBe(0);
-    expect(lines.join("")).toMatch(/✓ assess history — o\/r: assessed 2026-07-16/);
+    expect(lines.join("")).toMatch(/✓ audit history — o\/r: assessed 2026-07-16/);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 
@@ -2027,7 +2027,7 @@ describe("runDoctor assess history checks", () => {
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(
-      /✓ assess history — o\/other: never assessed \(last attempt failed\)/,
+      /✓ audit history — o\/other: never assessed \(last attempt failed\)/,
     );
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
@@ -2059,7 +2059,7 @@ describe("runDoctor assess history checks", () => {
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(
-      /✓ assess history — o\/r: assessed 2026-07-14 \(last attempt failed\)/,
+      /✓ audit history — o\/r: assessed 2026-07-14 \(last attempt failed\)/,
     );
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });

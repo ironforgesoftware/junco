@@ -73,10 +73,13 @@ describe("unified rail", () => {
     ).toBe(true);
   });
 
-  it("the queue mnemonic (u) jumps straight to the queue system row and focuses the body", async () => {
+  it("the queue mnemonic (e) jumps straight to the queue system row and focuses the body", async () => {
     const r = renderApp();
     await until(() => (r.lastFrame() ?? "").includes("system"));
-    r.stdin.write("u"); // q[u]eue — q reserved for quit, U taken by unwatch (guarded)
+    // q[u]eue's own candidate letters are q (reserved for quit) then u — but
+    // surface-legibility Task 2's `audit` (was `assess`) label claims u first
+    // (it precedes queue in MAIN_GLOBALS), so queue falls to e.
+    r.stdin.write("e");
     await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos"));
     // The queue row carries the cursor even though we never pressed j.
     expect(

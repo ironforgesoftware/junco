@@ -580,7 +580,7 @@ describe("App", () => {
     const r = renderApp(client, wl());
     await until(() => (r.lastFrame() ?? "").includes("#7"));
     r.stdin.write(ESC + "[C"); // → pane 2 (issues)
-    await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 focused first
+    await until(() => (r.lastFrame() ?? "").includes("import")); // pane 2 focused first
     r.stdin.write("\r"); // medium layout → detail view
     await until(() => (r.lastFrame() ?? "").includes("the body"));
     r.stdin.write("b");
@@ -594,14 +594,14 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t"); // focus issues pane
     await tick();
-    r.stdin.write("d");
+    r.stdin.write("m");
     // Async applyAction + optimistic commit — bounded until-loop, never a fixed tick.
     await until(() => actions.length === 1);
     expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
     await until(() => (r.lastFrame() ?? "").includes("planning")); // optimistic label applied
   });
 
-  it("c drafts an analysis comment for the selected issue", async () => {
+  it("n drafts an analysis comment for the selected issue", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const analyzed: [string, number][] = [];
     client.analyzeIssue = async (nwo, num) => {
@@ -615,11 +615,13 @@ describe("App", () => {
     r.stdin.write("n");
     await until(() => analyzed.length === 1);
     expect(analyzed).toEqual([["acme/api", 7]]);
-    await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-acme-api-7-analyze"));
+    await until(() =>
+      (r.lastFrame() ?? "").includes("investigation queued: gh-acme-api-7-analyze"),
+    );
     expect(r.lastFrame()).toContain("v to review when parked");
   });
 
-  it("c on the selected issue toasts an error when the client call fails", async () => {
+  it("n on the selected issue toasts an error when the client call fails", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     client.analyzeIssue = async () => ({ ok: false, error: "no unowned clone available" });
     const r = renderApp(client, wl());
@@ -648,7 +650,7 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t");
     await tick();
-    r.stdin.write("d");
+    r.stdin.write("m");
     await until(() => (r.lastFrame() ?? "").includes("gh boom"));
     expect(actions).toHaveLength(1);
     expect(r.lastFrame()).not.toContain("planning"); // rolled back
@@ -661,7 +663,7 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("\t"); // focus issues pane
     await tick();
-    r.stdin.write("d");
+    r.stdin.write("m");
     await until(() => (r.lastFrame() ?? "").includes("offline — action queued"));
     expect(r.lastFrame()).toContain("planning"); // optimistic label NOT rolled back
   });
@@ -711,7 +713,7 @@ describe("App", () => {
       await until(() => (r.lastFrame() ?? "").includes("#7"));
       r.stdin.write("\t"); // focus issues pane
       await tick();
-      r.stdin.write("d"); // runAction("dispatch") → applyAction (now pending)
+      r.stdin.write("m"); // runAction("dispatch") → applyAction (now pending)
       await until(() => releaseAction !== undefined);
       r.unmount(); // unmount cleanup flips aliveRef.current = false synchronously
       releaseAction!(); // resolve AFTER unmount — the guard must swallow the .then
@@ -902,7 +904,7 @@ describe("App", () => {
       const eight = f.indexOf("Other thing");
       return eight !== -1 && seven !== -1 && eight < seven; // re-sort rendered: #8 above #7
     });
-    r.stdin.write("d"); // dispatch the SELECTED issue
+    r.stdin.write("m"); // dispatch the SELECTED issue
     await until(() => actions.length === 1);
     expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
   });
@@ -1076,9 +1078,9 @@ describe("App", () => {
       await until(() => (r.lastFrame() ?? "").includes("#7"));
       // Issue rows start at absolute y=5 (1-based): header(1) + border(2) + title(3)
       // + column header strip(4). From pane 1 this click only focuses pane 2 +
-      // selects (never opens detail); the pane-2 footer hint ("d dispatch") is
+      // selects (never opens detail); the pane-2 footer hint ("m import") is
       // the observable that it landed.
-      await fireUntil(r.stdin, click(30, 5), () => (r.lastFrame() ?? "").includes("dispatch"));
+      await fireUntil(r.stdin, click(30, 5), () => (r.lastFrame() ?? "").includes("import"));
       expect(r.lastFrame() ?? "").not.toContain("the body"); // still the list
       // Now pane 2 + already selected → a second click on the same row = Enter → detail.
       await fireUntil(r.stdin, click(30, 5), () => (r.lastFrame() ?? "").includes("the body"));
@@ -1266,7 +1268,7 @@ describe("App", () => {
       const r = renderApp(client, wl());
       await until(() => (r.lastFrame() ?? "").includes("#7"));
       r.stdin.write(ESC + "[C"); // → pane 2 (issues)
-      await until(() => (r.lastFrame() ?? "").includes("dispatch"));
+      await until(() => (r.lastFrame() ?? "").includes("import"));
       r.stdin.write("\r"); // open the issue detail
       await until(() => (r.lastFrame() ?? "").includes("the body"));
       // ↗ metadata row: 1-based y=5, middle band; counted with === 1 so the retry
@@ -1320,7 +1322,7 @@ describe("App", () => {
         ]);
       const r = renderApp(client, wl());
       await until(() => (r.lastFrame() ?? "").includes("#7"));
-      r.stdin.write("e");
+      r.stdin.write("v");
       await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
       // Same coordinates that, in the main view, focus pane 2 and (on a second
       // click) open the issue-detail overlay — see "first click focuses pane 2
@@ -1351,7 +1353,7 @@ describe("header breadcrumbs", () => {
     // App's pane===1 return-key branch) — so focus pane 2 explicitly first,
     // mirroring "o in the detail view opens the snapshotted issue" above.
     r.stdin.write(ESC + "[C"); // → pane 2 (issues)
-    await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 focused
+    await until(() => (r.lastFrame() ?? "").includes("import")); // pane 2 focused
     r.stdin.write("\r"); // open the issue detail
     await until(() => (r.lastFrame() ?? "").includes("acme/api ▸ #7"));
   });
@@ -1457,7 +1459,7 @@ describe("external-repo routing", () => {
     expect(validatePaths).toEqual(["/c/coral"]);
   });
 
-  it("d on an external repo dispatches a ticket instead of labeling", async () => {
+  it("m on an external repo imports a ticket instead of labeling", async () => {
     const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
     const dispatched: string[] = [];
     client.dispatchTicket = async (nwo, num) => {
@@ -1472,15 +1474,15 @@ describe("external-repo routing", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7")); // its issue loaded
     r.stdin.write(ESC + "[C"); // → focus issues pane
     await tick();
-    r.stdin.write("d");
+    r.stdin.write("m");
     await until(() => dispatched.length === 1);
     expect(dispatched[0]).toBe("up/stream#7");
     expect(actions).toHaveLength(0); // no label flow
     await until(() => (r.lastFrame() ?? "").includes("ticket queued: gh-up-stream-7"));
   });
 
-  it("d on an external repo resolving after unmount is swallowed by the aliveRef guard (no crash)", async () => {
-    // Same shape as the pane-2 "d" aliveRef test above, but for the
+  it("m on an external repo resolving after unmount is swallowed by the aliveRef guard (no crash)", async () => {
+    // Same shape as the pane-2 "m" aliveRef test above, but for the
     // external-repo dispatchTicket branch — its .then lacked the guard.
     const { client } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
     let releaseDispatch: (() => void) | undefined;
@@ -1500,7 +1502,7 @@ describe("external-repo routing", () => {
       await until(() => (r.lastFrame() ?? "").includes("#7")); // its issue loaded
       r.stdin.write(ESC + "[C"); // → focus issues pane
       await tick();
-      r.stdin.write("d"); // dispatchTicket now pending
+      r.stdin.write("m"); // dispatchTicket now pending
       await until(() => releaseDispatch !== undefined);
       r.unmount(); // unmount cleanup flips aliveRef.current = false synchronously
       releaseDispatch!(); // resolve AFTER unmount — the guard must swallow the .then
@@ -1511,7 +1513,7 @@ describe("external-repo routing", () => {
     }
   });
 
-  it("c on an external repo drafts an analysis comment too (no refusal)", async () => {
+  it("n on an external repo drafts an analysis comment too (no refusal)", async () => {
     const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
     const analyzed: string[] = [];
     client.analyzeIssue = async (nwo, num) => {
@@ -1530,11 +1532,13 @@ describe("external-repo routing", () => {
     await until(() => analyzed.length === 1);
     expect(analyzed[0]).toBe("up/stream#7");
     expect(actions).toHaveLength(0); // no label flow
-    await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-up-stream-7-analyze"));
+    await until(() =>
+      (r.lastFrame() ?? "").includes("investigation queued: gh-up-stream-7-analyze"),
+    );
     expect(r.lastFrame() ?? "").not.toContain("not available for external repos");
   });
 
-  it("D/a/R on an external repo explains instead of acting", async () => {
+  it("I/o/R on an external repo explains instead of acting", async () => {
     const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
     const file = wle();
     writeWatchlist(file, [{ nwo: "up/stream", path: "/ext", external: true }]);
@@ -1544,7 +1548,7 @@ describe("external-repo routing", () => {
     await until(() => (r.lastFrame() ?? "").includes("#7"));
     r.stdin.write(ESC + "[C"); // → focus issues pane
     await tick();
-    r.stdin.write("D");
+    r.stdin.write("I"); // dispatchAsk (guarded mnemonic — "import as ask")
     await until(() => (r.lastFrame() ?? "").includes("not available for external repos"));
     r.stdin.write("o"); // dismisses the toast, then re-explains
     await until(() => (r.lastFrame() ?? "").includes("not available for external repos"));
@@ -1760,13 +1764,13 @@ describe("command palette + focus keys", () => {
     expect(r.lastFrame()).not.toContain("Watch a repository");
   });
 
-  it("i jumps to the issues pane (d then dispatches the selected issue)", async () => {
+  it("i jumps to the issues pane (m then imports/dispatches the selected issue)", async () => {
     const { client, actions } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, wl2());
     await until(() => (r.lastFrame() ?? "").includes("#7")); // issue loaded before acting
     r.stdin.write("i"); // issues pane via direct jump — no tab needed
     await tick();
-    r.stdin.write("d");
+    r.stdin.write("m");
     await until(() => actions.length === 1);
     expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
   });
@@ -1882,7 +1886,7 @@ describe("command palette + focus keys", () => {
   });
 });
 
-describe("assess hotkey (s/S)", () => {
+describe("audit hotkey (u/A)", () => {
   const wl7 = () => join(mkdtempSync(join(tmpdir(), "junco-assess-")), "wl.json");
 
   function makeAssessRunner(result: Partial<CliRunResult> = {}) {
@@ -1894,39 +1898,39 @@ describe("assess hotkey (s/S)", () => {
     return { runs, runCliFn };
   }
 
-  it("s calls the runner once with (assess, [nwo]); success exit shows a toast with the nwo", async () => {
+  it("u calls the runner once with (audit, [nwo]); success exit shows a toast with the nwo", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const { runs, runCliFn } = makeAssessRunner();
     const r = renderApp(client, wl7(), 999999, runCliFn);
     await tick();
-    r.stdin.write("s");
+    r.stdin.write("u");
     await until(() => (r.lastFrame() ?? "").includes("acme/api: queued:"));
-    expect(runs).toEqual([["assess", ["acme/api"]]]);
+    expect(runs).toEqual([["audit", ["acme/api"]]]);
   });
 
-  it("S includes --auto-plan in the runner args", async () => {
+  it("A includes --auto-plan in the runner args", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const { runs, runCliFn } = makeAssessRunner();
     const r = renderApp(client, wl7(), 999999, runCliFn);
     await tick();
     r.stdin.write("A");
     await until(() => runs.length > 0);
-    expect(runs).toEqual([["assess", ["acme/api", "--auto-plan"]]]);
+    expect(runs).toEqual([["audit", ["acme/api", "--auto-plan"]]]);
   });
 
   it("nonzero exit shows an error toast with the first non-empty output line", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const { runCliFn } = makeAssessRunner({
       code: 1,
-      output: "\njunco assess: 'acme/api' is not watched — add it under [[github.repos]]\n",
+      output: "\njunco audit: 'acme/api' is not watched — add it under [[github.repos]]\n",
     });
     const r = renderApp(client, wl7(), 999999, runCliFn);
     await tick();
-    r.stdin.write("s");
+    r.stdin.write("u");
     await until(() => (r.lastFrame() ?? "").includes("is not watched"));
   });
 
-  it("no watched repos: s shows an error toast and never calls the runner", async () => {
+  it("no watched repos: u shows an error toast and never calls the runner", async () => {
     const { client } = makeClient({});
     const { runs, runCliFn } = makeAssessRunner();
     const file = wl7();
@@ -1957,7 +1961,7 @@ describe("assess hotkey (s/S)", () => {
       />,
     );
     await tick();
-    r.stdin.write("s");
+    r.stdin.write("u");
     await until(() => (r.lastFrame() ?? "").toLowerCase().includes("no repo selected"));
     expect(runs).toHaveLength(0);
   });
@@ -1971,26 +1975,26 @@ describe("assess hotkey (s/S)", () => {
     };
     const r = renderApp(client, wl7(), 999999, runCliFn);
     await tick();
-    r.stdin.write("s");
+    r.stdin.write("u");
     await tick();
-    r.stdin.write("s");
+    r.stdin.write("u");
     await until(() => (r.lastFrame() ?? "").toLowerCase().includes("already running"));
-    expect(runs).toEqual([["assess", ["acme/api"]]]);
+    expect(runs).toEqual([["audit", ["acme/api"]]]);
   });
 
-  it("s while the / filter input is active does not trigger the runner", async () => {
+  it("u while the / filter input is active does not trigger the runner", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const { runs, runCliFn } = makeAssessRunner();
     const r = renderApp(client, wl7(), 999999, runCliFn);
     await until(() => (r.lastFrame() ?? "").includes("#7"));
     r.stdin.write("/"); // enter filter-typing mode
     await tick();
-    r.stdin.write("s"); // captured as filter text, not the assess hotkey
-    await until(() => (r.lastFrame() ?? "").includes("/s")); // landed in the filter chip
+    r.stdin.write("u"); // captured as filter text, not the audit hotkey
+    await until(() => (r.lastFrame() ?? "").includes("/u")); // landed in the filter chip
     expect(runs).toHaveLength(0);
   });
 
-  it("s submits an assess audit for an external repo (no refusal) and hints the review view", async () => {
+  it("u submits an audit for an external repo (no refusal) and hints the review view", async () => {
     const { client } = makeClient({ "acme/api": [], "up/stream": [] });
     const { runs, runCliFn } = makeAssessRunner({ output: "queued: /x/inbox/assess-up-stream.md" });
     const file = wl7();
@@ -1999,37 +2003,37 @@ describe("assess hotkey (s/S)", () => {
     await tick();
     r.stdin.write("j"); // select up/stream (pane 1, index 1)
     await tick();
-    r.stdin.write("s");
+    r.stdin.write("u");
     await until(() => runs.length === 1);
-    expect(runs).toEqual([["assess", ["up/stream"]]]);
+    expect(runs).toEqual([["audit", ["up/stream"]]]);
     await until(() => (r.lastFrame() ?? "").includes("up/stream: queued:"));
     expect(r.lastFrame()).toContain("v to review");
     expect(r.lastFrame() ?? "").not.toContain("not available for external repos");
   });
 
-  it("pane 2 focused with an issue selected: s scopes assess to that issue", async () => {
+  it("pane 2 focused with an issue selected: u scopes audit to that issue", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const { runs, runCliFn } = makeAssessRunner();
     const r = renderApp(client, wl7(), 999999, runCliFn);
     await until(() => (r.lastFrame() ?? "").includes("#7"));
     r.stdin.write(ESC + "[C"); // → focus issues pane
     await tick();
-    r.stdin.write("s");
+    r.stdin.write("u");
     await until(() => runs.length > 0);
-    expect(runs).toEqual([["assess", ["acme/api#7"]]]);
+    expect(runs).toEqual([["audit", ["acme/api#7"]]]);
   });
 
-  it("pane 1 focused: s stays repo-scoped even with issues loaded", async () => {
+  it("pane 1 focused: u stays repo-scoped even with issues loaded", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const { runs, runCliFn } = makeAssessRunner();
     const r = renderApp(client, wl7(), 999999, runCliFn);
     await until(() => (r.lastFrame() ?? "").includes("#7"));
-    r.stdin.write("s"); // pane defaults to 1
+    r.stdin.write("u"); // pane defaults to 1
     await until(() => runs.length > 0);
-    expect(runs).toEqual([["assess", ["acme/api"]]]);
+    expect(runs).toEqual([["audit", ["acme/api"]]]);
   });
 
-  it("pane 2 focused with an issue selected: S scopes auto-plan assess to that issue", async () => {
+  it("pane 2 focused with an issue selected: A scopes auto-plan audit to that issue", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const { runs, runCliFn } = makeAssessRunner();
     const r = renderApp(client, wl7(), 999999, runCliFn);
@@ -2038,11 +2042,11 @@ describe("assess hotkey (s/S)", () => {
     await tick();
     r.stdin.write("A");
     await until(() => runs.length > 0);
-    expect(runs).toEqual([["assess", ["acme/api#7", "--auto-plan"]]]);
+    expect(runs).toEqual([["audit", ["acme/api#7", "--auto-plan"]]]);
   });
 });
 
-describe("review view (e)", () => {
+describe("review view (v)", () => {
   const wl8 = () => join(mkdtempSync(join(tmpdir(), "junco-review-")), "wl.json");
 
   const reviewBatch = {
@@ -2077,12 +2081,12 @@ describe("review view (e)", () => {
     footer: true,
   };
 
-  it("e opens the review view and enter drills into a batch's findings", async () => {
+  it("v opens the review view and enter drills into a batch's findings", async () => {
     const { client } = makeClient({ "acme/api": [] });
     (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("e");
+    r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r")); // batch listed
     r.stdin.write("\r"); // enter → checklist
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
@@ -2093,14 +2097,14 @@ describe("review view (e)", () => {
     );
   });
 
-  it("no pending batches: e shows the empty state; esc returns to main", async () => {
+  it("no pending batches: v shows the empty state; esc returns to main", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("e");
-    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("no pending audit reviews"));
     r.stdin.write(ESC);
-    await until(() => !(r.lastFrame() ?? "").includes("no pending assess reviews"));
+    await until(() => !(r.lastFrame() ?? "").includes("no pending audit reviews"));
     expect(r.lastFrame()).toContain("acme/api");
   });
 
@@ -2160,7 +2164,7 @@ describe("review view (e)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("e");
+    r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r"); // open batch (all unfiled → all pre-checked)
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
@@ -2231,7 +2235,7 @@ describe("review view (e)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("e");
+    r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r");
     // f1 is filed → ✓ (not pre-checked); f2 unfiled → pre-checked [x].
@@ -2252,24 +2256,24 @@ describe("review view (e)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("e");
+    r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r"));
     r.stdin.write("\r");
     await until(() => (r.lastFrame() ?? "").includes("SQL injection"));
     r.stdin.write("D"); // Discard (guarded mnemonic)
     await until(() => discarded.length === 1);
     expect(discarded[0]).toBe("assess-x-1");
-    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+    await until(() => (r.lastFrame() ?? "").includes("no pending audit reviews"));
   });
 
-  it("e lists a comment draft row alongside a batch; enter on it opens the preview", async () => {
+  it("v lists a comment draft row alongside a batch; enter on it opens the preview", async () => {
     const { client } = makeClient({ "acme/api": [] });
     (client as { listReview: () => Promise<unknown> }).listReview = async () => okv([reviewBatch]);
     (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
       okv([commentDraft]);
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("e");
+    r.stdin.write("v");
     // Both rows present: the batch (o/r + finding count) and the draft (o/r#5 + comment badge).
     await until(
       () => (r.lastFrame() ?? "").includes("o/r#5") && (r.lastFrame() ?? "").includes("comment"),
@@ -2296,7 +2300,7 @@ describe("review view (e)", () => {
     };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("e");
+    r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
     r.stdin.write("\r"); // no batches → cursor 0 opens the draft preview
     await until(() => (r.lastFrame() ?? "").includes("Broken build"));
@@ -2305,7 +2309,7 @@ describe("review view (e)", () => {
     expect(posted[0]).toBe(commentDraft.id);
     await until(() => (r.lastFrame() ?? "").includes("posted")); // success toast
     // Optimistic removal → combined empty state.
-    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+    await until(() => (r.lastFrame() ?? "").includes("no pending audit reviews"));
   });
 
   it("x discards the open draft and drops the row", async () => {
@@ -2320,7 +2324,7 @@ describe("review view (e)", () => {
       };
     const r = renderApp(client, wl8());
     await until(() => (r.lastFrame() ?? "").includes("acme/api"));
-    r.stdin.write("e");
+    r.stdin.write("v");
     await until(() => (r.lastFrame() ?? "").includes("o/r#5"));
     r.stdin.write("\r"); // → draft preview
     await until(() => (r.lastFrame() ?? "").includes("Broken build"));
@@ -2328,7 +2332,7 @@ describe("review view (e)", () => {
     await until(() => discarded.length === 1);
     expect(discarded[0]).toBe(commentDraft.id);
     await until(() => (r.lastFrame() ?? "").includes("discarded")); // toast
-    await until(() => (r.lastFrame() ?? "").includes("no pending assess reviews"));
+    await until(() => (r.lastFrame() ?? "").includes("no pending audit reviews"));
   });
 });
 
@@ -2617,7 +2621,7 @@ describe("queue system row", () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = renderApp(client, join(dir, "wl.json"));
     await until(() => (r.lastFrame() ?? "").includes("repos")); // mounted
-    r.stdin.write("u");
+    r.stdin.write("e"); // queue mnemonic (surface-legibility Task 2 shifted it off `u`, now `audit`)
     await until(() => (r.lastFrame() ?? "").includes("running (1/1)"));
     expect(r.lastFrame()).toContain("waiting (1)");
     // esc returns focus to the rail; the queue body stays (body follows the
@@ -2661,7 +2665,7 @@ describe("queue system row", () => {
       async () => cheapTall,
     );
     await until(() => (r.lastFrame() ?? "").includes("repos"));
-    r.stdin.write("u");
+    r.stdin.write("e"); // queue mnemonic (surface-legibility Task 2 shifted it off `u`, now `audit`)
     await until(() => (r.lastFrame() ?? "").includes("running (1/1)"));
     // G parks the section cursor on the LAST selectable row — the window
     // follows it to the bottom and the pane never blanks.
@@ -2714,13 +2718,13 @@ describe("workspace filter + pane navigation (medium)", () => {
 
   it("→ / ← jump panes — the footer follows the focused pane", async () => {
     // Frames strip ANSI, so accent-title focus is asserted via the pane-specific
-    // footer (pane 1 → unwatch; pane 2 → dispatch) rather than color.
+    // footer (pane 1 → unwatch; pane 2 → import) rather than color.
     const { client } = makeClient({ "acme/api": [upl] });
     const r = renderApp(client, wl5());
     // "unwatch" is guarded — the winning char (U) renders uppercased in place.
     await until(() => (r.lastFrame() ?? "").includes("Unwatch")); // pane 1 footer
     r.stdin.write(ESC + "[C"); // →
-    await until(() => (r.lastFrame() ?? "").includes("dispatch")); // pane 2 footer
+    await until(() => (r.lastFrame() ?? "").includes("import")); // pane 2 footer
     expect(r.lastFrame()).not.toContain("Unwatch");
     r.stdin.write(ESC + "[D"); // ←
     await until(() => (r.lastFrame() ?? "").includes("Unwatch"));
@@ -2734,12 +2738,12 @@ describe("workspace filter + pane navigation (medium)", () => {
     await tick();
     r.stdin.write("G"); // last → #7 (raw)
     await tick();
-    r.stdin.write("d"); // dispatch is valid only on the raw issue
+    r.stdin.write("m"); // dispatch is valid only on the raw issue
     await until(() => actions.length === 1);
     expect(actions).toEqual([["acme/api", 7, "dispatch", ["junco"]]]);
     r.stdin.write("g"); // first → #9 (plan-ready)
     await tick();
-    r.stdin.write("d"); // not allowed there → refusal toast, no new action
+    r.stdin.write("m"); // not allowed there → refusal toast, no new action
     await until(() => r.lastFrame()!.toLowerCase().includes("not available"));
     expect(actions).toHaveLength(1);
   });
@@ -2750,11 +2754,11 @@ describe("workspace filter + pane navigation (medium)", () => {
     const r = renderApp(client, wl5());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
     r.stdin.write(ESC + "[C"); // → focus issues pane
-    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[C"); // →
     await tick();
     expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint never leaked in
-    expect(r.lastFrame()).toContain("dispatch"); // still on pane 2
+    expect(r.lastFrame()).toContain("import"); // still on pane 2
   });
 });
 
@@ -2978,14 +2982,14 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
     r.stdin.write(ESC + "[C"); // → focus issues pane
-    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write("\r");
     // The detail view's exact footer (scroll · browser · esc back) — pane
     // 3's hint set never produces this combo (no "esc back" there).
     await until(() => (r.lastFrame() ?? "").includes("↑/↓ scroll · browser · esc back"));
     expect(r.lastFrame()).toContain("#7 Fix uploads");
     r.stdin.write(ESC);
-    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("import"));
   });
 
   // Proves the autoload machinery is gone, not just unused: on the OLD code a
@@ -3004,7 +3008,7 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("Fix uploads"));
     r.stdin.write(ESC + "[C"); // → focus issues pane
-    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write("j");
     await tick();
     r.stdin.write("k");
@@ -3085,9 +3089,9 @@ describe("workspace wide mode", () => {
     r.stdin.write(ESC + "[C"); // → pane 3
     await until(() => (r.lastFrame() ?? "").includes("← issues")); // pane-3 footer hints
     r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
-    // Pane 2's footer hint set is back — d dispatch is the reliable marker
+    // Pane 2's footer hint set is back — m import is the reliable marker
     // regardless of the enter-key wording.
-    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("import"));
     expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint is gone
   });
 
@@ -3099,12 +3103,12 @@ describe("workspace wide mode", () => {
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write(ESC + "[C"); // → focus issues pane
-    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[C"); // → focuses pane 3
     await until(() => (r.lastFrame() ?? "").includes("← issues"));
     expect(r.lastFrame()).toContain("← issues"); // pane 3 footer still carries ←
     r.stdin.write(ESC + "[D"); // ← back to pane 2
-    await until(() => (r.lastFrame() ?? "").includes("dispatch"));
+    await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[D"); // ← back to pane 1
     await until(() => (r.lastFrame() ?? "").includes("Unwatch")); // guarded: U renders uppercase
   });

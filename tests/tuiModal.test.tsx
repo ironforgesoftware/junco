@@ -72,15 +72,16 @@ describe("HelpModal — derived mnemonics (#shortcut overhaul)", () => {
         bindings={buildContextBindings({ kind: "main", body: "issues" }, 2, "wide")}
       />,
     ).lastFrame()!;
-    // Derived keys render as key → label rows: analyze is n, approve is o.
+    // Derived keys render as key → label rows: investigate (was analyze) is
+    // n, approve is o.
     // (Rows sit inside the modal's ║ border — strip it before matching.)
     const rows = f.split("\n").map((l) => l.replace(/║/g, "").trim());
-    expect(rows.some((l) => l.startsWith("n") && l.includes("analyze"))).toBe(true);
+    expect(rows.some((l) => l.startsWith("n") && l.includes("investigate"))).toBe(true);
     expect(rows.some((l) => l.startsWith("o") && l.includes("approve"))).toBe(true);
     // Hidden shift variants surface in help (never in the footer).
-    expect(f).toContain("dispatch as ask");
-    expect(rows.some((l) => l.startsWith("D") && l.includes("dispatch as ask"))).toBe(true);
-    expect(rows.some((l) => l.startsWith("A") && l.includes("assess auto-plan"))).toBe(true);
+    expect(f).toContain("import as ask");
+    expect(rows.some((l) => l.startsWith("I") && l.includes("import as ask"))).toBe(true);
+    expect(rows.some((l) => l.startsWith("A") && l.includes("audit auto-plan"))).toBe(true);
     // No stale hand-assigned letters.
     expect(f).not.toContain("c analyze");
     expect(f).not.toContain("o browser");

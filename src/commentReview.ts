@@ -1,8 +1,8 @@
 /**
- * Durable review queue for `junco analyze` comment drafts — one JSON file per
+ * Durable review queue for `junco investigate` comment drafts — one JSON file per
  * draft under <dataDir>/review/comments/ (atomic tmp+rename, watchlist/outbox
  * pattern). The analysis (analyzeFlow.ts) PARKS a draft here; a human-confirmed
- * post step (`junco analyze post`) posts it. Never throws on read: missing →
+ * post step (`junco investigate post`) posts it. Never throws on read: missing →
  * empty/null, corrupt → skipped (list) / `error` (read). Reviewed drafts
  * archive to posted/ or discarded/.
  *

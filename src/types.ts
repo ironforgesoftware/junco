@@ -61,12 +61,12 @@ export interface GithubConfig {
   plannerModelId: string | null; // planning-session model id override (same endpoint)
   externalReposRoot: string; // managed clones of unowned repos (fork-PR flow)
 }
-/** [assess] — knobs for `junco assess` runs (vulnerability audit → GitHub issues). */
+/** [assess] — knobs for `junco audit` runs (vulnerability audit → GitHub issues). */
 export interface AssessConfig {
   maxIssuesPerRun: number; // cap on issues filed per assessment run
   minSeverity: "critical" | "high" | "medium" | "low"; // findings below this are dropped
   npmBin: string; // binary for the dependency scan (`npm audit --json`)
-  fileAs: "me" | "bot"; // identity `junco assess file` posts under ("bot" = the dedicated bot account; fails loud when its login is missing)
+  fileAs: "me" | "bot"; // identity `junco audit file` posts under ("bot" = the dedicated bot account; fails loud when its login is missing)
 }
 /** Skill-link distribution (spec 2026-08-19): harness skills dirs that get a
  * junco-dispatch symlink via <dataDir>/skills. Presence in this list is the
@@ -282,13 +282,19 @@ export interface Ticket {
    * the worker fulfills it and stamps `github:` provenance itself, keeping
    * that block worker-managed (githubIssueRequest.ts). Null = no request. */
   githubRequest: { createIssue: boolean } | null;
-  /** Assessment flavor options (null = regular PR/Q&A flow). `issue` scopes the
-   * audit to a single GitHub issue when set by `junco assess owner/repo#N`.
+  /** Assessment flavor options (null = regular PR/Q&A flow), normalized from
+   * either the canonical `audit:` frontmatter key or the permanently accepted
+   * legacy `assess:` key (parseTicket picks `audit:` when both are present).
+   * `issue` scopes the audit to a single GitHub issue when set by
+   * `junco audit owner/repo#N` (or the legacy `junco assess owner/repo#N`).
    * The frontmatter also carries `issue_title` (self-documentation for anyone
    * reading the ticket file), but it is intentionally NOT parsed through here:
    * nothing renders it, so there is nothing to keep sanitized (#104). */
   assess: { autoPlan: boolean; issue?: number } | null;
-  /** Analysis flavor options (null = regular PR/Q&A flow). */
+  /** Analysis flavor options (null = regular PR/Q&A flow), normalized from
+   * either the canonical `investigate:` frontmatter key or the permanently
+   * accepted legacy `analyze:` key (parseTicket picks `investigate:` when
+   * both are present). */
   analyze: { issue: number; title: string } | null;
   /** Q&A only: directory the session runs in (read-only tools). Null = default. */
   workdir: string | null;

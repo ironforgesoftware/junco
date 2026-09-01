@@ -800,7 +800,7 @@ export const LEVERS: Lever[] = [
     min: 1,
     editable: true,
     reload: "live",
-    description: "Cap on issues filed per `junco assess` run.",
+    description: "Cap on issues filed per `junco audit` run.",
   },
   {
     path: "assess.minSeverity",
@@ -827,7 +827,7 @@ export const LEVERS: Lever[] = [
     editable: true,
     reload: "live",
     description:
-      "Identity `junco assess file` posts under: me (your gh login) or bot (the dedicated bot account; fails loud when its login is missing).",
+      "Identity `junco audit file` posts under: me (your gh login) or bot (the dedicated bot account; fails loud when its login is missing).",
   },
 
   // --- skills.* ---

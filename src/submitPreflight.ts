@@ -144,7 +144,16 @@ export async function runLint(
   deps: PreflightDeps = {},
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
-  const parsed = parseTicket(fileArg, content, cfg.defaultTimeoutMinutes);
+  // Both-keys collisions (audit:/assess:, investigate:/analyze:) are an
+  // authoring smell lint exists to catch — surface parseTicket's warning as a
+  // lint-style warning instead of the silent default warnFn, so a ticket that
+  // carries both keys doesn't lint "ok" (see runOnce.ts/ticketDeps.ts for the
+  // daemon-side sibling wiring; this is the authoring-time gap they didn't
+  // close — final-review I-5).
+  const collisions: LintViolation[] = [];
+  const parsed = parseTicket(fileArg, content, cfg.defaultTimeoutMinutes, (msg) =>
+    collisions.push({ rule: "key_collision", severity: "warning", message: msg }),
+  );
 
   const env = await environmentChecks(cfg, parsed.frontmatter, parsed.id, deps);
   const lint = lintTicket(parsed.body, parsed.frontmatter, {
@@ -155,7 +164,7 @@ export async function runLint(
     fetchLabels: deps.fetchLabels,
   });
 
-  const violations = [...env.violations, ...lint.violations];
+  const violations = [...collisions, ...env.violations, ...lint.violations];
   if (violations.length > 0) print(formatViolations(violations) + "\n");
   const errors = violations.filter((x) => x.severity === "error").length;
   const warnings = violations.filter((x) => x.severity === "warning").length;
@@ -264,7 +273,13 @@ export async function runSubmitDryRun(
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const existsFn = deps.existsFn ?? existsSync;
-  const parsed = parseTicket(fileArg, content, cfg.defaultTimeoutMinutes);
+  // See runLint's identical comment: surface the both-keys collision warning
+  // in the printed lint report instead of swallowing it via the silent
+  // default warnFn (final-review I-5).
+  const collisions: LintViolation[] = [];
+  const parsed = parseTicket(fileArg, content, cfg.defaultTimeoutMinutes, (msg) =>
+    collisions.push({ rule: "key_collision", severity: "warning", message: msg }),
+  );
 
   const route = await decideRoute(cfg, parsed.frontmatter, deps);
   print(`destination: ${route.destination}\n`);
@@ -308,7 +323,7 @@ export async function runSubmitDryRun(
           v.rule === "branch_exists" ? { ...v, severity: "warning" as const } : v,
         )
       : env.violations;
-  const violations = [...envViolations, ...lint.violations];
+  const violations = [...collisions, ...envViolations, ...lint.violations];
   if (violations.length > 0) print(formatViolations(violations) + "\n");
   const errors = violations.filter((x) => x.severity === "error").length;
   const warnings = violations.filter((x) => x.severity === "warning").length;

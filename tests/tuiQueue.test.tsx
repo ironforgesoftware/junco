@@ -13,6 +13,7 @@ import {
   fmtAssessIndicator,
   fmtDurShort,
   fmtSpark,
+  fmtQueueKind,
   oldestQueuedAt,
 } from "../src/tui/queueFmt.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
@@ -107,6 +108,16 @@ describe("queueFmt", () => {
     expect(queueLabel({ nwo: "a/b", issue: 3, kind: "ask", external: false }, "x")).toBe("#3 ask");
     expect(queueLabel(null, "manual-tide-fix")).toBe("manual-tide-fix");
     expect(queueLabel(null, "a".repeat(30))).toBe("a".repeat(23) + "…");
+  });
+
+  // surface-legibility Task 2: QueueWaiting.kind keeps its internal "assess"
+  // value (mirrors TaskRecord.kind — out of this task's scope), but a local
+  // (non-github) row's rendered kind badge must track the renamed CLI verb.
+  it("fmtQueueKind: renames the local `assess` badge to `audit`; other kinds pass through", () => {
+    expect(fmtQueueKind("assess")).toBe("audit");
+    expect(fmtQueueKind("pr")).toBe("pr");
+    expect(fmtQueueKind("ask")).toBe("ask");
+    expect(fmtQueueKind("plan")).toBe("plan");
   });
 
   it("fmtElapsed buckets and guards", () => {
@@ -406,6 +417,17 @@ describe("QueueView", () => {
     expect(frame).toContain("✓ #44 exec");
     expect(frame).toContain("12m ago");
     expect(frame).toContain("✗ #40 exec");
+  });
+
+  // surface-legibility Task 2: a local (non-github) waiting row's kind badge
+  // is the internal QueueWaiting.kind value (queueSnapshot.ts, unchanged) run
+  // through fmtQueueKind for display — pin that a running `junco audit`
+  // ticket's badge reads "audit", never the retired "assess".
+  it("renders a local `assess`-kind waiting row's badge as `audit`", () => {
+    const frame = frameOf({ ...IDLE, waiting: [wRow({ id: "audit-x", kind: "assess" })] });
+    expect(frame).toContain("audit-x");
+    expect(frame).toContain("audit");
+    expect(frame).not.toMatch(/\bassess\b/);
   });
 
   it("renders dim placeholders for empty sections", () => {

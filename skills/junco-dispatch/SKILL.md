@@ -1,15 +1,19 @@
 ---
 name: junco-dispatch
-description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it — as a parked GitHub issue when GitHub integration and the bot account are on and the target repo is bridge-watched (plain fresh tickets only), otherwise to the configured inbox — for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses), or "junco-local: <brief>" (forces the local inbox even when the repo is bridge-watched). Also handles repo audits: phrases like "assess this repo", "have junco audit this repo", or "junco assess <repo>" run junco assess — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Assess mode). Also handles issue investigation: phrases like "analyze issue #N", "have junco look into this issue", or "junco analyze <issue>" run junco analyze — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Analyze mode).'
+description: 'Use when the user wants to dispatch work to the local junco task-queue worker. Scaffolds a structured plan file with junco frontmatter, applies anti-loop conventions, and submits it — as a parked GitHub issue when GitHub integration and the bot account are on and the target repo is bridge-watched (plain fresh tickets only), otherwise to the configured inbox — for the local agent to execute. Triggered by phrases like "send to junco", "dispatch to junco", "/junco", "junco: <brief>", or "junco-batch: <brief>" (batch mode skips the preview gate for headless/non-interactive harnesses), or "junco-local: <brief>" (forces the local inbox even when the repo is bridge-watched). Also handles repo audits: phrases like "assess this repo", "audit this repo", "have junco audit this repo", or "junco audit <repo>" run `junco audit` — a read-only audit, on any watched repo owned or not, that parks findings for a human-confirmed review before anything is filed (see Audit mode). Also handles issue investigation: phrases like "analyze issue #N", "investigate issue #N", "have junco look into this issue", or "junco investigate <issue>" run `junco investigate` — a read-only investigation of one issue that parks a draft comment for human-confirmed posting (see Investigate mode). The trigger phrases keep the old words on purpose, since people still ask for this with "assess"/"analyze" — but the commands this skill actually runs are the renamed CLI verbs, `junco audit` and `junco investigate`; that mismatch is deliberate, not a stale doc.'
 ---
 
 # Junco dispatch
 
 Package a unit of work into a plan-shaped markdown file with junco frontmatter, then submit it to its destination. The destination is decided by a probe, not a phrase: when GitHub integration and the bot account are both on and the target repo is bridge-watched, the ticket is filed as a parked, unlabeled GitHub issue via `junco submit --as-issue`; otherwise it goes to the configured inbox via `junco submit`. A `junco-local:` trigger, or a brief that says "to the inbox" / "local inbox", forces the inbox; "park it on github" / "junco as issue: …" / "dispatch as issue" forces the issue destination even when the probe would not pick it (the CLI's refusal then says why it cannot). See "Dispatch procedure" below. Either way the junco worker claims the resulting ticket, then either applies its patch series directly (apply mode) or runs it through the configured coding agent (plan mode), and opens a draft PR either way; the issue destination just adds one more human gate before that first claim — nothing runs until a human applies the trigger label.
 
+This skill's own name and its "dispatch to junco" / "send to junco" triggers name the act of **authoring and sending new work** — a fresh ticket, a wrapped plan, an amendment, or a patch series. That is distinct from `junco import <owner/repo#N>`, the CLI's separate verb for pulling an **existing** GitHub issue into the queue as a ticket. Don't conflate the two: this skill never runs `junco import` on the user's behalf.
+
 **Why this skill exists:** plan quality is the single biggest lever on the agent's performance. In testing, a well-structured plan ran several times faster and used far fewer tokens than a loose prompt doing the same work. This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
 
-**Two families of work.** Most of this skill is about _authoring_ a ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR, or (when you already know the exact bytes) emitting a pre-built patch series instead of prose Steps — see "Apply mode" below. Two modes are different, and author nothing: _assess_ triggers `junco assess`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an assess run never opens a PR. See "Assess mode" below. _analyze_ triggers `junco analyze`, a read-only investigation of a single issue that parks a drafted comment for review; posting it is a separate, human-confirmed step, and an analyze run never opens a PR either. See "Analyze mode" below.
+**Two families of work.** Most of this skill is about _authoring_ a ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR, or (when you already know the exact bytes) emitting a pre-built patch series instead of prose Steps — see "Apply mode" below. Two modes are different, and author nothing: _audit_ triggers `junco audit`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an audit run never opens a PR. See "Audit mode" below. _investigate_ triggers `junco investigate`, a read-only investigation of a single issue that parks a drafted comment for review; posting it is a separate, human-confirmed step, and an investigate run never opens a PR either. See "Investigate mode" below.
+
+The two are not interchangeable: audit sweeps a **repo** and produces findings that become issues, while investigate reads **one** issue and produces a comment. Audit generates backlog; investigate deepens one item already on it.
 
 ## When to trigger
 
@@ -19,12 +23,12 @@ Fire this skill when the user explicitly asks to dispatch work:
 - **Batch tickets (no preview, headless mode):** "junco-batch: <brief>" — used for automated load tests; skips the preview gate (see "Batch mode" under Dispatch procedure)
 - **Local-inbox tickets (skip the destination probe):** "junco-local: <brief>" — a fresh ticket that is always submitted to the configured inbox, even when the target repo is bridge-watched (see step 2 of "Interactive mode" under Dispatch procedure)
 - **Amend tickets (follow-ups on existing PRs):** "amend junco PR #N: <what to fix>", "junco: fix PR #N by ...", "follow up on PR #N via junco", "dispatch an amendment to #N"
-- **Assess (audit a repo, park findings for review):** "assess this repo", "have junco audit this repo", "junco assess <repo>", "scan this repo and file issues", "junco: assess <repo>" — this runs `junco assess`, not a plan dispatch (see "Assess mode")
-- **Analyze (investigate an issue, park a comment draft for review):** "analyze issue #N with junco", "have junco look into this issue", "junco analyze <owner/repo#N|url>", "investigate this issue and draft a comment", "junco: analyze <issue>" — this runs `junco analyze`, not a plan dispatch (see "Analyze mode")
+- **Audit (sweep a repo, park findings for review):** "assess this repo", "audit this repo", "have junco audit this repo", "junco audit <repo>", "scan this repo and file issues", "junco: audit <repo>" — this runs `junco audit`, not a plan dispatch (see "Audit mode")
+- **Investigate (deep-read one issue, park a comment draft for review):** "analyze issue #N with junco", "investigate issue #N", "have junco look into this issue", "junco investigate <owner/repo#N|url>", "investigate this issue and draft a comment", "junco: investigate <issue>" — this runs `junco investigate`, not a plan dispatch (see "Investigate mode")
 
 **Do NOT fire** when the user is:
 
-- debugging or configuring junco itself (e.g. "why did junco fail?", "why did the assess run fail?", "fix the junco worker")
+- debugging or configuring junco itself (e.g. "why did junco fail?", "why did the audit run fail?", "fix the junco worker")
 - asking what junco is or how it works
 - discussing the `junco` skill in the abstract
 
@@ -51,15 +55,25 @@ Ask the minimum needed — autodetect where possible, ask inline when not.
    - `pyproject.toml` / `pytest.ini` → `pytest -v`, possibly `ruff check`, `mypy`
    - `Cargo.toml` → `cargo build`, `cargo test`
    - If the tooling is unclear or the task is doc-only, use `test` / `grep` / existence checks.
-6. **Timeout** — pick by scope, don't ask unless unusual:
+6. **Timeout** — `timeout_minutes` **sizes** a ticket that's already scoped to one unit of work; pick by scope, don't ask unless unusual:
    - 30 min: trivial (1 file, 1 commit, no tests)
    - 60 min: small (2–4 files, build or test run)
    - 90–120 min: moderate (feature work, refactor)
-   - 180 min: large. If you'd pick more than 180, **decompose into a ticket set** instead — see "Ticket sets" below.
+   - 180 min: large — the top of the range for one ticket.
+   - This is sizing, not the decomposition trigger. Whether the work should be more than one ticket is decided by the seams in the work itself, not by how long it'll take — see "Ticket sets" below (including its one clock-based smell test).
 
 ## Ticket sets
 
-When a task naturally decomposes into 2+ tickets with real dependency ordering (e.g. "add the API, then the UI that calls it, then the docs"), author them as a SET rather than one oversized ticket:
+Decomposition is a judgment call about the SHAPE of the work, not its duration. Split into a SET of tickets — rather than one oversized ticket — when ANY of these seams is present:
+
+- **Independent reviewability** — a reviewer could accept one part and reject another. That boundary is a ticket boundary.
+- **Ordering dependency** — one part must land before another can be written against it (API → caller → docs). That's `depends_on:`, not one ticket.
+- **Separate verification** — the parts prove themselves with different commands, or touch subsystems with different failure modes.
+- **Mixed certainty** — you know the exact bytes for one part but not another. Split so the known part ships as a patch ticket (zero model turns — see "Apply mode (patch tickets)" below) and only the uncertain part gets an agent. A combined ticket forces the whole thing through an agent, even for the half you could have shipped as a diff.
+
+**Smell test, not the rule.** A single ticket that genuinely needs ~3 hours usually means one of the seams above was missed — go find it rather than defensively inflating `timeout_minutes` to cover it. The inverse matters just as much: decomposing work that has none of these seams only multiplies overhead — more PRs to review, more `depends_on` edges to satisfy, for no gain. Work that is merely long, with no seam in it, is still one ticket.
+
+Once you've decided to split:
 
 - Give each ticket an explicit `id:` — short and stable, since sibling tickets reference it.
 - Reference sibling ids in `depends_on:`. The worker won't claim a ticket until every id in its `depends_on:` list has finished successfully AND (if it opened a PR) that PR merged.
@@ -314,15 +328,15 @@ The ergonomic door: `junco submit --patch <file> --repo <path> [--title T] [--wh
 
 The parked issue or ticket shows the exact diff before anything runs — that is the point of the label gate in apply mode. Keep `## Why` short and above the fence, so the reviewer reads the rationale first and then the literal bytes that would land, instead of a prose description standing in for them.
 
-## Assess mode (audit a repo → review → file)
+## Audit mode (sweep a repo → review → file)
 
-Triggered by "assess this repo", "have junco audit this repo", "junco assess <repo>", and similar. This mode is **not** plan authoring — do not draft a ticket. `junco assess` composes its own machine-owned ticket; the daemon then runs a read-only audit (a dependency scan plus a read-only agent audit) and **parks** the findings in a durable review queue — nothing is filed yet. A separate, human-confirmed step (`junco assess review` / `junco assess file`) files the findings you select as GitHub issues. An assess run **never opens a pull request**.
+Triggered by "assess this repo", "audit this repo", "have junco audit this repo", "junco audit <repo>", and similar. This mode is **not** plan authoring — do not draft a ticket. `junco audit` composes its own machine-owned ticket; the daemon then runs a read-only audit (a dependency scan plus a read-only agent audit) and **parks** the findings in a durable review queue — nothing is filed yet. A separate, human-confirmed step (`junco audit review` / `junco audit file`) files the findings you select as GitHub issues. An audit run **never opens a pull request**.
 
 **Works on any watched repo, owned or not.** On a repo you own, filed issues get `junco:finding` + `severity/<level>` labels (best-effort). On a repo you don't own, filed issues are label-free — junco never assumes triage rights it doesn't have on someone else's tracker; the severity and fingerprint still live in the issue title and a body marker.
 
-**An issue reference scopes the audit and auto-provisions.** `junco assess owner/repo#N` (or an issue URL) steers the audit to the code that issue implicates and, unlike the bare `owner/repo` form above, **auto-provisions** an unwatched repo — fork, clone, watchlist add, the same as `junco dispatch`/`junco analyze` — instead of requiring it be watched already. Findings filed from a scoped audit carry a `**Context:** owner/repo#N` line that GitHub cross-references onto the issue's timeline automatically; no comment is posted on the issue itself (that's Analyze mode, below).
+**An issue reference scopes the audit and auto-provisions.** `junco audit owner/repo#N` (or an issue URL) steers the audit to the code that issue implicates and, unlike the bare `owner/repo` form above, **auto-provisions** an unwatched repo — fork, clone, watchlist add, the same as `junco import`/`junco investigate` — instead of requiring it be watched already. Findings filed from a scoped audit carry a `**Context:** owner/repo#N` line that GitHub cross-references onto the issue's timeline automatically; no comment is posted on the issue itself (that's Investigate mode, below).
 
-Your job here is only: resolve the target, decide whether to pass `--auto-plan`, confirm, run the CLI, and set expectations — including that a review step still stands between the audit and anything landing on GitHub. Do NOT use `TEMPLATE.md`, plan-lint, or any of the authoring discipline above — none of it applies to assess (`junco assess` owns the ticket shape, not you).
+Your job here is only: resolve the target, decide whether to pass `--auto-plan`, confirm, run the CLI, and set expectations — including that a review step still stands between the audit and anything landing on GitHub. Do NOT use `TEMPLATE.md`, plan-lint, or any of the authoring discipline above — none of it applies to audit (`junco audit` owns the ticket shape, not you).
 
 ### Inputs to gather
 
@@ -334,48 +348,48 @@ Your job here is only: resolve the target, decide whether to pass `--auto-plan`,
 
 ### Preconditions (check before running; fail fast with a useful message)
 
-- **The daemon must be running.** `junco assess` only _queues_ a ticket — nothing is audited and nothing is parked for review until the daemon claims it on its next poll (~15 s). Unlike a dispatch there is no PR to watch; the payoff is a reviewable batch of findings appearing a little later. If the user isn't running the daemon, say so up front.
+- **The daemon must be running.** `junco audit` only _queues_ a ticket — nothing is audited and nothing is parked for review until the daemon claims it on its next poll (~15 s). Unlike a dispatch there is no PR to watch; the payoff is a reviewable batch of findings appearing a little later. If the user isn't running the daemon, say so up front.
 - **The repo needs a GitHub `origin` remote.** The daemon resolves the destination repo from `origin`; a repo with no GitHub `origin` fails the run (any filed issues need a home). Pre-check with `git -C <path> remote get-url origin` before queuing.
 
 ### Interactive procedure (default)
 
-1. **Confirm.** Use `AskUserQuestion`: "Run `junco assess <target> [--auto-plan]`? This queues a read-only audit; findings are parked for your review, not filed automatically." with options `Yes, run` / `Edit first` / `Cancel`.
-2. **Run.** `junco assess <target> [--auto-plan]` (or `npx junco assess <target> [--auto-plan]` if `junco` isn't on PATH).
+1. **Confirm.** Use `AskUserQuestion`: "Run `junco audit <target> [--auto-plan]`? This queues a read-only audit; findings are parked for your review, not filed automatically." with options `Yes, run` / `Edit first` / `Cancel`.
+2. **Run.** `junco audit <target> [--auto-plan]` (or `npx junco audit <target> [--auto-plan]` if `junco` isn't on PATH).
 3. **Report** the `queued: <ticket-path>` line the command prints, plus:
    - the daemon must be running for the audit to happen;
    - once it's done, findings sit in a review queue — nothing is filed yet;
-   - to see what's pending: `junco assess review` (list) or `junco assess review <id>` (one batch's findings with fingerprints);
-   - to file the ones worth keeping: `junco assess file <id> --all` or `junco assess file <id> --only <fingerprint,…>`;
+   - to see what's pending: `junco audit review` (list) or `junco audit review <id>` (one batch's findings with fingerprints);
+   - to file the ones worth keeping: `junco audit file <id> --all` or `junco audit file <id> --only <fingerprint,…>`;
    - on a repo the user owns, filed issues carry `junco:finding` + `severity/<level>` labels; on a repo they don't own, issues file label-free;
    - with `--auto-plan` on an owned, bridge-watched repo, filed issues also carry the trigger label, taking them into the label → plan → approve → PR loop.
 
 ### Batch / headless procedure
 
-When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool available): skip the confirm gate, run `junco assess <target> [--auto-plan]`, and print one line for the calling shell to grep — `ASSESS_QUEUED <id> -> <ticket-path>` (id and path come from the command's output). Filing still requires a separate, explicit `junco assess file <id> --all|--only <fp,…>` — batch mode does not auto-file.
+When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool available): skip the confirm gate, run `junco audit <target> [--auto-plan]`, and print one line for the calling shell to grep — `AUDIT_QUEUED <id> -> <ticket-path>` (id and path come from the command's output). Filing still requires a separate, explicit `junco audit file <id> --all|--only <fp,…>` — batch mode does not auto-file.
 
 ### Caveats to surface
 
-- **A review step always sits between the audit and any filed issue.** `junco assess` no longer files anything by itself; `junco assess file` does, and it requires an explicit `--all` or `--only <fingerprints>` — there's no bare default.
+- **A review step always sits between the audit and any filed issue.** `junco audit` no longer files anything by itself; `junco audit file` does, and it requires an explicit `--all` or `--only <fingerprints>` — there's no bare default.
 - **`--auto-plan` is inert unless the repo is owned, bridge-watched, and GitHub integration is enabled.** The label lands on filed issues from that batch, but only a watched repo (with the bridge on) turns a labeled issue into a plan; an unowned repo never gets the label regardless of the flag.
 - **Closing a finding issue suppresses it forever.** Dedup scans your own most recent 500 issues on the repo (author-scoped, closed ones included) for the finding marker, so closing an issue (even as wontfix) stops that finding from ever re-filing — including a genuine future regression that hashes the same. To let it re-file, delete the issue or edit the `<!-- junco:finding:... -->` marker line out of its body.
 - **A parked-but-unreviewed finding is not suppressed** — it just re-parks on the next audit, since no issue exists yet.
 - **The auto-provisioning asymmetry is deliberate.** `owner/repo#N` auto-provisions an unwatched repo; bare `owner/repo` does not — it still errors if the repo isn't already watched. Don't "fix" this by watching a repo first when the user gave an issue reference; just run the command.
-- For the authoritative flag list and config knobs (`[assess]`), point the user at `junco assess --help` and the project README.
+- For the authoritative flag list and config knobs (`[assess]`), point the user at `junco audit --help` and the project README.
 
 ### Do NOT
 
-- Hand-author an assess ticket, or bolt `assess:` frontmatter onto a plan — `junco assess` owns that machine-owned shape.
-- Apply `TEMPLATE.md` / plan-lint / the anti-loop authoring rules — they are for plan tickets, not assess.
-- Treat assess as PR dispatch — it never opens a PR.
+- Hand-author an audit ticket, or bolt `audit:` frontmatter onto a plan — `junco audit` owns that machine-owned shape.
+- Apply `TEMPLATE.md` / plan-lint / the anti-loop authoring rules — they are for plan tickets, not audit.
+- Treat audit as PR dispatch — it never opens a PR.
 - File findings on the user's behalf without them choosing `--all` or specific fingerprints — that selection is the human confirmation gate, and it isn't yours to make for them.
 
-## Analyze mode (investigate an issue → reviewed comment)
+## Investigate mode (deep-read an issue → reviewed comment)
 
-Triggered by "analyze issue #N", "have junco look into this issue", "junco analyze <owner/repo#N|url>", and similar. Like assess, this mode is **not** plan authoring — do not draft a ticket. `junco analyze` composes its own machine-owned ticket; the daemon then runs a read-only investigation of the named issue against the repo and **parks** the resulting comment draft in a durable review queue — nothing posts yet. A separate, human-confirmed step (`junco analyze review` / `junco analyze edit` / `junco analyze post`) posts the draft as a comment on the issue. An analyze run **never opens a pull request** and posts **no comment other than the one you explicitly confirm**.
+Triggered by "analyze issue #N", "investigate issue #N", "have junco look into this issue", "junco investigate <owner/repo#N|url>", and similar. Like audit, this mode is **not** plan authoring — do not draft a ticket. `junco investigate` composes its own machine-owned ticket; the daemon then runs a read-only investigation of the named issue against the repo and **parks** the resulting comment draft in a durable review queue — nothing posts yet. A separate, human-confirmed step (`junco investigate review` / `junco investigate edit` / `junco investigate post`) posts the draft as a comment on the issue. An investigate run **never opens a pull request** and posts **no comment other than the one you explicitly confirm**.
 
-**Works on any issue, owned repo or not.** An unwatched repo is auto-forked and provisioned exactly like `junco dispatch` — no separate "watch it first" step. Every posted comment carries a disclosure footer by default (`_Analysis drafted with [junco](https://github.com/ironforgesoftware/junco) and human-reviewed before posting._`); `junco analyze post <id> --no-footer` omits it.
+**Works on any issue, owned repo or not.** An unwatched repo is auto-forked and provisioned exactly like `junco import` — no separate "watch it first" step. Every posted comment carries a disclosure footer by default (`_Analysis drafted with [junco](https://github.com/ironforgesoftware/junco) and human-reviewed before posting._`); `junco investigate post <id> --no-footer` omits it.
 
-Your job here is only: resolve the issue reference, confirm, run the CLI, and set expectations — including that a review (and optional edit) step always stands between the investigation and anything posted to GitHub. Do NOT use `TEMPLATE.md`, plan-lint, or any of the authoring discipline above — none of it applies to analyze (`junco analyze` owns the ticket shape, not you).
+Your job here is only: resolve the issue reference, confirm, run the CLI, and set expectations — including that a review (and optional edit) step always stands between the investigation and anything posted to GitHub. Do NOT use `TEMPLATE.md`, plan-lint, or any of the authoring discipline above — none of it applies to investigate (`junco investigate` owns the ticket shape, not you).
 
 ### Inputs to gather
 
@@ -383,37 +397,37 @@ Your job here is only: resolve the issue reference, confirm, run the CLI, and se
 
 ### Preconditions (check before running; fail fast with a useful message)
 
-- **The daemon must be running.** `junco analyze` only _queues_ a ticket — nothing is investigated and nothing is parked for review until the daemon claims it on its next poll (~15 s). If the user isn't running the daemon, say so up front.
-- **One draft per issue.** If a previous analysis of the same issue is still queued or running (not yet parked or failed), re-running `junco analyze` on it fails loud (`ticket already queued`) rather than silently duplicating work — mention this if the user asks to re-run one they just triggered.
+- **The daemon must be running.** `junco investigate` only _queues_ a ticket — nothing is investigated and nothing is parked for review until the daemon claims it on its next poll (~15 s). If the user isn't running the daemon, say so up front.
+- **One draft per issue.** If a previous analysis of the same issue is still queued or running (not yet parked or failed), re-running `junco investigate` on it fails loud (`ticket already queued`) rather than silently duplicating work — mention this if the user asks to re-run one they just triggered.
 
 ### Interactive procedure (default)
 
-1. **Confirm.** Use `AskUserQuestion`: "Run `junco analyze <target>`? This queues a read-only investigation; the drafted comment is parked for your review, not posted automatically." with options `Yes, run` / `Edit first` / `Cancel`.
-2. **Run.** `junco analyze <target>` (or `npx junco analyze <target>` if `junco` isn't on PATH).
+1. **Confirm.** Use `AskUserQuestion`: "Run `junco investigate <target>`? This queues a read-only investigation; the drafted comment is parked for your review, not posted automatically." with options `Yes, run` / `Edit first` / `Cancel`.
+2. **Run.** `junco investigate <target>` (or `npx junco investigate <target>` if `junco` isn't on PATH).
 3. **Report** the `queued: <ticket-path>` line the command prints, plus:
    - the daemon must be running for the investigation to happen;
    - once it's done, the draft sits in a review queue — nothing is posted yet;
-   - to preview it: `junco analyze review` (list) or `junco analyze review <id>` (full draft, exactly as it would post, footer included);
-   - to revise it: `junco analyze edit <id>` (opens `$EDITOR`/`$VISUAL`; re-sanitizes on save);
-   - to post it: `junco analyze post <id>` (add `--no-footer` to omit the disclosure line) — this is the human confirm step, and it's the only outward write in the whole flow.
+   - to preview it: `junco investigate review` (list) or `junco investigate review <id>` (full draft, exactly as it would post, footer included);
+   - to revise it: `junco investigate edit <id>` (opens `$EDITOR`/`$VISUAL`; re-sanitizes on save);
+   - to post it: `junco investigate post <id>` (add `--no-footer` to omit the disclosure line) — this is the human confirm step, and it's the only outward write in the whole flow.
 
 ### Batch / headless procedure
 
-When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool available): skip the confirm gate, run `junco analyze <target>`, and print one line for the calling shell to grep — `ANALYZE_QUEUED <id> -> <ticket-path>` (id and path come from the command's output). Posting still requires a separate, explicit `junco analyze post <id>` — batch mode does not auto-post.
+When invoked headlessly (`junco-batch:` prefix, or no interactive ask tool available): skip the confirm gate, run `junco investigate <target>`, and print one line for the calling shell to grep — `INVESTIGATE_QUEUED <id> -> <ticket-path>` (id and path come from the command's output). Posting still requires a separate, explicit `junco investigate post <id>` — batch mode does not auto-post.
 
 ### Caveats to surface
 
-- **A review step always sits between the investigation and any posted comment.** `junco analyze` never posts anything itself; `junco analyze post` does, and it's a deliberate per-draft action — there's no bare "post everything" shortcut.
+- **A review step always sits between the investigation and any posted comment.** `junco investigate` never posts anything itself; `junco investigate post` does, and it's a deliberate per-draft action — there's no bare "post everything" shortcut.
 - **The issue text is untrusted input the agent read, not instructions.** The investigation prompt frames it as data; a hostile or mistaken issue can't redirect what the agent does, but the review step is still worth taking seriously before posting on someone else's tracker.
-- **Re-analyzing an issue overwrites its pending draft**, not additive — `junco analyze review <id>` always reflects the latest investigation.
-- For the authoritative flag list, point the user at `junco analyze --help` and the project README.
+- **Re-investigating an issue overwrites its pending draft**, not additive — `junco investigate review <id>` always reflects the latest investigation.
+- For the authoritative flag list, point the user at `junco investigate --help` and the project README.
 
 ### Do NOT
 
-- Hand-author an analyze ticket, or bolt `analyze:` frontmatter onto a plan — `junco analyze` owns that machine-owned shape.
-- Apply `TEMPLATE.md` / plan-lint / the anti-loop authoring rules — they are for plan tickets, not analyze.
-- Treat analyze as PR dispatch — it never opens a PR.
-- Post a comment on the user's behalf without them running `junco analyze post <id>` explicitly — that confirmation is the human gate, and it isn't yours to make for them.
+- Hand-author an investigate ticket, or bolt `investigate:` frontmatter onto a plan — `junco investigate` owns that machine-owned shape.
+- Apply `TEMPLATE.md` / plan-lint / the anti-loop authoring rules — they are for plan tickets, not investigate.
+- Treat investigate as PR dispatch — it never opens a PR.
+- Post a comment on the user's behalf without them running `junco investigate post <id>` explicitly — that confirmation is the human gate, and it isn't yours to make for them.
 
 ## Error handling
 

@@ -1,12 +1,12 @@
 /**
- * `junco analyze` orchestrator — an analyze ticket runs through here. It mirrors
+ * `junco investigate` orchestrator — an investigate ticket runs through here. It mirrors
  * the assess path (assessFlow.ts) for containment, nwo resolution, read-only
  * tools, the supervisor/guard wiring, the transcript, the transient requeue,
  * and the finalize — but the analyze-specific work is smaller: extract the
  * agent's investigation comment from a `junco-comment` fence, sanitize it
  * (stripping any spoofed HTML markers), and PARK it in the durable comment
  * review store (commentReview.ts) for a separate, human-confirmed post step
- * (`junco analyze post <id>`). There is no npm audit, no findings parse/dedup,
+ * (`junco investigate post <id>`). There is no npm audit, no findings parse/dedup,
  * and no GitHub read — analysis is a single read-only agent run plus a park.
  *
  * Design posture (ported from assessFlow.ts / prFlow.ts): expected failures
@@ -101,9 +101,9 @@ export async function runAnalyzeFlow(
   const warnings: string[] = [];
 
   const buildSummary = (phaseError: string | null): string => {
-    const parts: string[] = ["## junco analyze", `_Analyzed ${nowFn().toISOString()}_`];
+    const parts: string[] = ["## junco investigate", `_Analyzed ${nowFn().toISOString()}_`];
     if (phaseError) parts.push(`**Failed:** ${phaseError}`);
-    if (parked) parts.push(`draft parked — junco analyze review ${ticket.id}`);
+    if (parked) parts.push(`draft parked — junco investigate review ${ticket.id}`);
     if (warnings.length > 0) {
       parts.push("### Warnings\n\n" + warnings.map((w) => `- ${w}`).join("\n"));
     }
