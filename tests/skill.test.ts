@@ -68,9 +68,12 @@ describe("junco-dispatch SKILL.md", () => {
     // How to produce the series: the exact command, and the fence-length rule
     // with its reason (not just the word "fence").
     expect(SKILL).toContain("git format-patch <base>..HEAD --stdout");
-    expect(SKILL).toContain("junco-patch");
+    // The instruction to wrap the series in a `junco-patch` fence, together
+    // with why the fence must be longer than any backtick run inside it —
+    // one assertion so a rewrite can't keep the word "junco-patch" while
+    // dropping either the instruction or its reason.
     expect(SKILL).toMatch(
-      /fence LONGER than any backtick run[^\n]*close your fence early and silently truncate the series/,
+      /Wrap it in a `junco-patch` fence LONGER than any backtick run[^\n]*close your fence early and silently truncate the series/,
     );
     // The ergonomic door from Task 5, described as an alternative to
     // hand-authoring the fence — not the only way in.

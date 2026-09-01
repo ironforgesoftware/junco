@@ -5,7 +5,7 @@ description: 'Use when the user wants to dispatch work to the local junco task-q
 
 # Junco dispatch
 
-Package a unit of work into a plan-shaped markdown file with junco frontmatter, then submit it to its destination. The destination is decided by a probe, not a phrase: when GitHub integration and the bot account are both on and the target repo is bridge-watched, the ticket is filed as a parked, unlabeled GitHub issue via `junco submit --as-issue`; otherwise it goes to the configured inbox via `junco submit`. A `junco-local:` trigger, or a brief that says "to the inbox" / "local inbox", forces the inbox; "park it on github" / "junco as issue: …" / "dispatch as issue" forces the issue destination even when the probe would not pick it (the CLI's refusal then says why it cannot). See "Dispatch procedure" below. Either way the junco worker claims the resulting ticket, runs it through its configured coding agent, and opens a draft PR on completion; the issue destination just adds one more human gate before that first claim — nothing runs until a human applies the trigger label.
+Package a unit of work into a plan-shaped markdown file with junco frontmatter, then submit it to its destination. The destination is decided by a probe, not a phrase: when GitHub integration and the bot account are both on and the target repo is bridge-watched, the ticket is filed as a parked, unlabeled GitHub issue via `junco submit --as-issue`; otherwise it goes to the configured inbox via `junco submit`. A `junco-local:` trigger, or a brief that says "to the inbox" / "local inbox", forces the inbox; "park it on github" / "junco as issue: …" / "dispatch as issue" forces the issue destination even when the probe would not pick it (the CLI's refusal then says why it cannot). See "Dispatch procedure" below. Either way the junco worker claims the resulting ticket, then either applies its patch series directly (apply mode) or runs it through the configured coding agent (plan mode), and opens a draft PR either way; the issue destination just adds one more human gate before that first claim — nothing runs until a human applies the trigger label.
 
 **Why this skill exists:** plan quality is the single biggest lever on the agent's performance. In testing, a well-structured plan ran several times faster and used far fewer tokens than a loose prompt doing the same work. This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
 
@@ -30,7 +30,7 @@ Fire this skill when the user explicitly asks to dispatch work:
 
 ## Supporting files
 
-- `TEMPLATE.md` — the canonical plan template. Every ticket uses this exact shape.
+- `TEMPLATE.md` — the canonical ticket shapes: the full plan-ticket template (Steps/Files/Scope) that most tickets use, plus the minimal apply-ticket shape for when you already know the exact bytes (see "Apply mode" below).
 - `EXAMPLE.md` — three worked examples (trivial 1-commit; moderate 2-commit; amend). Use as shape anchors when generating.
 
 Read these via the Read tool when you need to quote or reference the template.
@@ -148,13 +148,15 @@ Empirical lessons from repeated testing. Bake these into every plan body:
 
 ## Plan-lint (automatic pre-dispatch check)
 
-The junco worker runs a deterministic linter on every ticket before claiming it. Tickets that fail lint move directly to `failed/` with a `phase_error` like `plan-lint: no_cd_in_verification: ...` — they never reach the agent. Rules currently enforced:
+The junco worker runs a deterministic linter on every ticket before claiming it. Tickets that fail lint move directly to `failed/` with a `phase_error` like `plan-lint: no_cd_in_verification: ...` — they never run, whether that would have meant an agent turn (plan mode) or `git am` (apply mode). Rules currently enforced on a plan ticket's Steps/Files prose:
 
 - No `cd ` lines inside the `## Verification` fenced bash block
 - Every `### Step N` block contains exactly one `git commit` line
 - Every path in the Files table appears in at least one Step body
 - Every label in frontmatter exists on the GitHub repo (`gh label list`)
 - No forbidden phrases (`TBD`, `Similar to Step N`, `think carefully`, `consider all cases`)
+
+An apply ticket (see "Apply mode" below) has no Steps/Files section for these rules to check; lint validates its `junco-patch` fence instead — a well-formed series with in-repo paths and no binary hunk — plus a warning if it's missing a `## Verification` block.
 
 If you generate a ticket and lint rejects it, fix the specific rule cited and re-dispatch. The linter exists to catch known foot-guns _before_ spawning a 5-minute agent run.
 
