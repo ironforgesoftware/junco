@@ -49,6 +49,34 @@ function fakeTtyStreams(log: Ev[]): {
   return { stdin, stdout };
 }
 
+/** Like fakeTtyStreams, but stdout keeps every chunk so the bytes written
+ * after the alt-screen re-entry can be inspected. */
+function recordingTtyStreams(chunks: string[]): {
+  stdin: NodeJS.ReadStream;
+  stdout: NodeJS.WriteStream;
+} {
+  const { stdin } = fakeTtyStreams([]);
+  const stdout = new EventEmitter() as unknown as NodeJS.WriteStream;
+  Object.assign(stdout, {
+    isTTY: true,
+    columns: 80,
+    rows: 24,
+    write: (chunk: string) => {
+      chunks.push(chunk);
+      return true;
+    },
+  });
+  return { stdin, stdout };
+}
+
+function lastAltEnter(chunks: string[]): number {
+  let idx = -1;
+  chunks.forEach((c, i) => {
+    if (c.includes("\x1b[?1049h")) idx = i;
+  });
+  return idx;
+}
+
 let unmountFn: (() => void) | null = null;
 afterEach(() => {
   unmountFn?.();
@@ -95,5 +123,78 @@ describe("useSuspend on a real tty with a mounted useInput holder", () => {
     expect(after.filter((e) => e.startsWith("raw:")).at(-1)).toBe("raw:true");
     expect(after).toContain("alt:enter");
     expect(after).toContain("resume");
+  });
+});
+
+describe("useSuspend under incrementalRendering", () => {
+  it("repaints the whole UI after resume, not a diff against the pre-suspend frame", async () => {
+    const chunks: string[] = [];
+    let done = false;
+    function Probe(): React.JSX.Element {
+      const suspend = useSuspend();
+      useEffect(() => {
+        // Realistic timing, deliberately: Ink throttles frames to one per
+        // ~33 ms window (maxFps 30). Suspending inside the MOUNT frame's
+        // window and resuming from an instant child lets the blank frame and
+        // the resume frame coalesce into one trailing render whose output
+        // equals the last written one — so nothing is written at all, in
+        // either mode. A real handoff (gh's device flow) is seconds long; a
+        // throttle-window gap on both sides reproduces that shape.
+        const t = setTimeout(() => {
+          void suspend(async () => {
+            await new Promise((r) => setTimeout(r, 100));
+          }).then(() => {
+            done = true;
+          });
+        }, 100);
+        return () => clearTimeout(t);
+      }, []);
+      return (
+        <>
+          <Text>line-alpha</Text>
+          <Text>line-bravo</Text>
+          <Text>line-charlie</Text>
+        </>
+      );
+    }
+    const { stdin, stdout } = recordingTtyStreams(chunks);
+    const app = render(
+      <SuspendProvider>
+        <Probe />
+      </SuspendProvider>,
+      // interactive: true — Ink resolves the default as `!isInCi && stdout.isTTY`
+      // (ink/build/ink.js resolveInteractiveOption), and GitHub Actions sets
+      // CI=true, so without the override Ink writes NO frames on CI and this
+      // test (which observes Ink's own writes) can never see the repaint.
+      {
+        stdin,
+        stdout,
+        exitOnCtrlC: false,
+        patchConsole: false,
+        incrementalRendering: true,
+        interactive: true,
+      },
+    );
+    unmountFn = () => app.unmount();
+    await until(() => done);
+    // Let the post-resume commit land (bounded): the resumed frame must be on the wire.
+    await until(() =>
+      chunks
+        .slice(lastAltEnter(chunks) + 1)
+        .join("")
+        .includes("line-charlie"),
+    );
+
+    const after = chunks.slice(lastAltEnter(chunks) + 1).join("");
+    // Incremental log-update diffs against the EMPTY frame written during
+    // suspension (the erase sequence lands BEFORE the alt-screen leave), so
+    // every line is rewritten on resume — the cleared alt screen shows
+    // nothing to diff against. All three lines must be present after re-entry.
+    const leave = chunks.findIndex((c) => c.includes("\x1b[?1049l"));
+    expect(leave).toBeGreaterThan(-1);
+    expect(chunks.slice(0, leave).join("")).toContain("\x1b[2K"); // the blank frame's erase
+    expect(after).toContain("line-alpha");
+    expect(after).toContain("line-bravo");
+    expect(after).toContain("line-charlie");
   });
 });

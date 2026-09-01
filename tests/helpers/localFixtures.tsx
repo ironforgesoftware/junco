@@ -278,6 +278,7 @@ export function makeAppProps(over: Partial<AppProps> = {}): AppProps {
     refreshPollMs: 999999,
     healthPollMs: 999999,
     queuePollMs: 999999,
+    clockMs: 999_999,
     queueFn: async () => EMPTY_QUEUE,
     assessHistoryFn: async () => [],
     localCheapFn: async () => CHEAP,

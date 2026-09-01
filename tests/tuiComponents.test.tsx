@@ -22,6 +22,37 @@ describe("cursor + spinner polish", () => {
     r.unmount();
   });
 
+  it("two Spinners stay in lockstep on Ink's shared animation timer", async () => {
+    const { Spinner, SPINNER_FRAMES } = await import("../src/tui/components/Spinner.js");
+    const { Text } = await import("ink");
+    const r = render(
+      <Text>
+        <Spinner />|<Spinner />
+      </Text>,
+    );
+    const glyphs = (f: string): string[] => f.split("|").map((s) => s.trim());
+    const idx = (g: string): number => SPINNER_FRAMES.indexOf(g);
+    const first = r.lastFrame()!;
+    await until(() => r.lastFrame() !== first);
+    // useAnimation drives every spinner from ONE timer (ink 7.1), but each
+    // subscriber derives `frame` from ITS OWN start time
+    // (ink/build/hooks/use-animation.js: Math.floor(elapsed / interval)), so
+    // two spinners mounted a few ms apart may legitimately sit one frame
+    // apart near an interval boundary — CI reproduced exactly that skew.
+    // What the shared timer guarantees is lockstep within one frame and
+    // both advancing; that is what we pin, not glyph identity.
+    for (let i = 0; i < 5; i++) {
+      const [a, b] = glyphs(r.lastFrame()!);
+      expect(SPINNER_FRAMES).toContain(a);
+      expect(SPINNER_FRAMES).toContain(b);
+      const skew = (idx(a) - idx(b) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length;
+      expect(skew === 0 || skew === 1 || skew === SPINNER_FRAMES.length - 1).toBe(true);
+      const cur = r.lastFrame();
+      await until(() => r.lastFrame() !== cur);
+    }
+    r.unmount();
+  });
+
   it("TextField shows a block cursor on the focused field — even when empty", async () => {
     const { TextField } = await import("../src/tui/components/TextField.js");
     const focusedEmpty = render(

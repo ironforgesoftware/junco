@@ -5,6 +5,7 @@ import type { DashIssue } from "../state.js";
 import { filterIssues, sortIssues } from "../state.js";
 import type { DashPr } from "../prState.js";
 import { sortPrs } from "../prState.js";
+import { keepIfEqual } from "./keepIfEqual.js";
 import type { WatchedMapping } from "../railModel.js";
 import type { ToastKind } from "../theme.js";
 import type { View } from "../App.js";
@@ -155,8 +156,10 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
     (nwo: string): Promise<Delivery> => {
       return client.listIssues(nwo).then((res) => {
         if (res.ok) {
-          setIssues((prev) => ({ ...prev, [nwo]: sortIssues(res.value.issues, trigger) }));
-          setStaleAt((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
+          setIssues((prev) =>
+            keepIfEqual(prev, { ...prev, [nwo]: sortIssues(res.value.issues, trigger) }),
+          );
+          setStaleAt((prev) => keepIfEqual(prev, { ...prev, [nwo]: res.value.staleAt }));
           return { delivered: true, staleAt: res.value.staleAt };
         }
         // Only surface the error toast when an issues body is on screen — this
@@ -190,8 +193,8 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
           const s = res.value.staleAt;
           if (s !== null && (oldest === null || Date.parse(s) < Date.parse(oldest))) oldest = s;
         });
-        setPrs(sortPrs(all));
-        setPrStaleByRepo(staleMap);
+        setPrs((prev) => keepIfEqual(prev, sortPrs(all)));
+        setPrStaleByRepo((prev) => keepIfEqual(prev, staleMap));
         return { delivered, staleAt: oldest };
       });
     },
@@ -204,8 +207,10 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
     (nwo: string, isAlive: () => boolean = () => true): Promise<Delivery> => {
       return client.listPrs(nwo).then((res) => {
         if (!isAlive() || !res.ok) return { delivered: false, staleAt: null };
-        setPrs((prev) => sortPrs([...prev.filter((p) => p.nwo !== nwo), ...res.value.prs]));
-        setPrStaleByRepo((prev) => ({ ...prev, [nwo]: res.value.staleAt }));
+        setPrs((prev) =>
+          keepIfEqual(prev, sortPrs([...prev.filter((p) => p.nwo !== nwo), ...res.value.prs])),
+        );
+        setPrStaleByRepo((prev) => keepIfEqual(prev, { ...prev, [nwo]: res.value.staleAt }));
         return { delivered: true, staleAt: res.value.staleAt };
       });
     },

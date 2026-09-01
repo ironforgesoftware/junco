@@ -32,7 +32,15 @@ import type React from "react";
  * inkCollect host's rationale. `alternateScreen`: fullscreen alt buffer, zero
  * scrollback pollution, terminal restored on exit.
  */
-export const INK_RENDER_OPTIONS = { exitOnCtrlC: false, alternateScreen: true } as const;
+export const INK_RENDER_OPTIONS = {
+  exitOnCtrlC: false,
+  alternateScreen: true,
+  // Line-diff writes: an animation frame (spinner) rewrites only the changed
+  // line(s) — measured 15.6 KiB → 0.4 KiB per frame — CPU unchanged (spec
+  // 2026-09-01-ink-render-perf-design.md, tier 2). Safe with useSuspend's
+  // blank-frame handoff: tests/useSuspendTty.test.tsx pins the full repaint.
+  incrementalRendering: true,
+} as const;
 
 export interface DashboardDeps {
   isTTY?: boolean;
