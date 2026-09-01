@@ -111,12 +111,15 @@ re-litigate them.
 
 ### 1.1 Layout
 
-Two new layout keys, both created lazily so `dataMigrate` needs no step:
+Two new layout keys. Both are **materialized eagerly by `ensureDataTree`** (the module's
+eager-tree invariant: on bwrap a deny whose target does not exist is skipped, so a lazily-created
+denied dir would be a real hole), and both join `flatToV2Pairs` in `dataMigrate.ts` so a flat tree
+that already holds chats migrates them:
 
-| key          | v2                 | flat          |
-| ------------ | ------------------ | ------------- |
-| `chats`      | `data/chats`       | `chats`       |
-| `chatDrafts` | `data/chat-drafts` | `chat-drafts` |
+| key          | v2                 | flat          | `ensureDataTree` makes                             |
+| ------------ | ------------------ | ------------- | -------------------------------------------------- |
+| `chats`      | `data/chats`       | `chats`       | `<chats>`                                          |
+| `chatDrafts` | `data/chat-drafts` | `chat-drafts` | `<chatDrafts>/submitted`, `<chatDrafts>/discarded` |
 
 Per session, under `<chats>/<slug>/`:
 
@@ -215,8 +218,25 @@ interface ChatTranscriptDegradedRecord {
 }
 ```
 
-SDK events pass through as today (`message_start`, `message_update`, `message_end`,
-`turn_start`, `turn_end`, `tool_execution_*`, `agent_*`, `compaction_start`, `compaction_end`).
+SDK events pass through as today (`message_start`, `message_end`, `turn_start`, `turn_end`,
+`tool_execution_*`, `agent_*`, `compaction_start`, `compaction_end`) — with one deliberate
+exception that `runAgent` already makes: **`message_update` is never written to the file.** It
+is fanned out live on the record bus (§5.2) so the pane streams token by token, but the
+persisted transcript records turns, tools, and results, exactly as ticket transcripts do; a
+reconnecting client rebuilds the text from `turn_end`'s full assistant message. This keeps the
+file small and keeps `summarizeTranscript` unchanged in what it reads.
+
+The chat transcript is written **regardless of `transcriptsEnabled`**: it is the session's
+replay log and the SSE source, not optional observability.
+
+**Viewer awareness.** `summarizeTranscript` and `renderTranscriptRows` (the transcript
+viewer's pure core) learn the chat records so the dashboard pane and `junco transcript --chat`
+share one renderer: `junco_chat_turn_start`/`_end`/`_aborted` frame a run exactly as
+`junco_run_start`/`_end` do (`RunSummary.flow === "chat"`), `junco_chat_prompt` becomes
+`RunSummary.prompt: string | null` (rendered as a `you:` row ahead of the run), and the
+remaining `junco_chat_*` records become `RunSummary.notes: ChatNote[]` rendered as one row
+each — a `junco_chat_draft` note carries `anchor: "draft:<draftId>"` so the cursor can land on
+it. Every existing ticket transcript renders byte-identically (`prompt` null, `notes` empty).
 
 ---
 
@@ -239,20 +259,44 @@ export interface SessionOverrides {
 
 The factory passes it through to `createAgentSession` in place of `SessionManager.inMemory(cwd)`.
 The runtime `await import` stays inside `session.ts`; `chatManager` receives a
-`makeSessionManager: (mode: {create: cwd, dir} | {open: path, dir}) => Promise<unknown>` dep
-that `session.ts` exports (the doctor/wizard-helper precedent for a second SDK-touching
-helper in that file).
+`makeSessionManager: (mode: {create: cwd, dir} | {open: path, dir}) => Promise<{manager:
+unknown; file: string}>` dep that `session.ts` exports (the doctor/wizard-helper precedent for a
+second SDK-touching helper in that file), `file` being `getSessionFile()`.
+
+**The seam widens by extension, not mutation.** `AgentSessionLike` stays as it is (every
+existing fake keeps compiling). `session.ts` adds
+
+```ts
+export interface ChatSessionLike extends AgentSessionLike {
+  steer(text: string): Promise<void>;
+  readonly isStreaming: boolean;
+  readonly isIdle: boolean;
+  readonly messages: unknown[];
+}
+export function makeChatSessionFactory(
+  cfg: Config,
+  cwd: string,
+  overrides: SessionOverrides,
+): () => Promise<ChatSessionLike>;
+```
+
+`makeChatSessionFactory` runs the same build as `makePiSessionFactory` and returns the SDK
+session, which structurally satisfies the wider type — the cast lives at the SDK boundary only.
 
 ### 2.2 cwd resolution (`src/chat/chatCwd.ts`)
 
-`resolveChatCwd(cfg, key)`:
+`resolveChatCwd(cfg, key, deps)` — every watched entry already carries a `path`
+(`GithubRepoMapping.path`: the managed clone or the operator's checkout), so there are two
+branches, not three:
 
-1. Watched key with a mapped local checkout (watchlist entry / `repoMappings`) → that path.
-2. Watched key without a mapping → `externalClonePath(cfg, nwo)` if it exists on disk, else
-   `{error: "no_checkout"}` (HTTP 409; the pane offers the existing clone action).
-3. Local key → the path itself, after: it exists, `git rev-parse --show-toplevel` (via the
-   injectable `gitFn`) resolves to it, and its realpath is not under `dataDir`. Otherwise
-   `{error: "not_a_repo"}` (409).
+1. Watched key (contains `/`) → the entry from `resolveWatchedReposForPrs(cfg)` (the
+   `external:true` fork entries included — chat is read-only, so the bridge's poll-injection
+   exclusion does not apply) whose `nwo.toLowerCase()` matches; its `path` must exist on disk,
+   else `{error: "no_checkout"}` (HTTP 409; the pane offers the existing clone action). An
+   unknown nwo is `{error: "unknown_key"}` (404).
+2. Local key (absolute path) → the path itself, after: it exists, `git rev-parse
+--show-toplevel` (via the injectable `gitFn`) resolves to it, and its realpath is not under
+   `dataDir`. Otherwise `{error: "not_a_repo"}` (409).
 
 The result is stored in `meta.json`; re-resolved on every open so a moved clone is picked up.
 
@@ -297,8 +341,9 @@ signal force-stops as today.
 - If `session.isStreaming` → `session.steer(text)`; record `mode:"steer"`; return (the running
   turn's completion covers it). Else → `session.prompt(text)`; record `mode:"prompt"` and
   `junco_chat_turn_start`.
-- Every SDK event is serialized to the bus/sink as today. `message_end` usage is summed exactly
-  as `RunAccumulator` does (`agent/runResult.ts`).
+- Every SDK event goes to the bus; every event except `message_update` goes to the sink (§1.3).
+  A fresh `RunAccumulator` (`agent/runResult.ts`) observes the turn: it sums usage on
+  `turn_end`, banks `errorMessage`, and its `allText`/`finalText` is what the fence scan reads.
 - Completion is `agent_settled` (or the `prompt()` promise resolving, whichever is later —
   the SDK resolves `prompt()` after the loop finishes; `agent_settled` also covers queued
   follow-ups).
@@ -306,7 +351,7 @@ signal force-stops as today.
   `session.abort()` (soft), `junco_chat_turn_aborted{reason:"timeout"}`. Operator abort → the
   same with `"operator"`. The `ABORT_GRACE_MS`-style settle wait from `runAgent` applies.
 - On settle → `junco_chat_turn_end{status:"ok", usage, durationMs}` → `spend.recordUsd(usage.costUsd)`
-  (in-process; the ledger keeps one writer) → `metrics.recordChatTurn(usage)`.
+  (in-process; the ledger keeps one writer) → the manager's own counters (§4).
 - On a thrown provider error → `classifyProviderFailure(message)`; if the class is in
   `GATE_CLASSES` → `gate.reportFailure(cls, message)` (symmetric with `runOnce`);
   `junco_chat_turn_end{status:"error", errorClass, errorMessage}`.
@@ -323,8 +368,11 @@ then `gate.claimBlockReason()`. A block → no model call, `junco_chat_turn_reje
 until}`, HTTP 200 (the rejection is a record, not an error — the stream delivers it). The daemon
 hands `ChatManager` the same `gate`, `spend`, and `activeCfg()` closures the poll loop uses.
 
-**Metrics** (`RunMetrics`): `chatTurns`, `chatCostUsd`, `chatTokensIn`, `chatTokensOut`, and
-`chats: ChatStatus[]` in the snapshot, where
+**Metrics** live on the `ChatManager`, not on `RunMetrics`: `MetricsSnapshot` is a literal in
+ten test fixtures, and the `gate`/`spend` precedent already exists for a sibling key on the
+`/health` body that an older daemon simply omits. `startHealthServer` gains
+`chatStatus?: () => ChatHealth` (beside `gateStatus`/`spendStatus`); `/health` surfaces it as
+`chats`, and `HealthBody.chats?: ChatHealth | null`:
 
 ```ts
 interface ChatStatus {
@@ -333,11 +381,19 @@ interface ChatStatus {
   streaming: boolean;
   turns: number; // this daemon lifetime
   lastActivityAt: string | null;
-  draftsParked: number; // from the draft store, cached per snapshot
+  draftsParked: number; // from the draft store
+}
+interface ChatHealth {
+  enabled: boolean;
+  sessions: ChatStatus[];
+  turns: number;
+  costUsd: number;
+  tokensIn: number;
+  tokensOut: number;
 }
 ```
 
-`/health` surfaces them; `totalCostUsd` keeps meaning "tickets".
+`totalCostUsd` keeps meaning "tickets".
 
 ---
 
@@ -372,8 +428,10 @@ beginning, and echoing the last id received resumes exactly after it. On connect
 seeks `transcript.jsonl` to that offset, emits complete lines only (a torn tail is held until
 its newline arrives), then attaches to the
 session's **record bus** — the in-memory fan-out `ChatSession` writes to at the same moment it
-writes the sink. Fan-out supports N subscribers (two dashboards). A `: ping` comment goes out
-every 15 s. Terminal events: `event: end` with `data: {reason:"daemon_stopped"|"session_reset"}`.
+writes the sink. Bus-only events (`message_update`, §1.3) are sent with `data:` and **no `id:`
+line**, so `Last-Event-ID` always names a persisted line. Fan-out supports N subscribers (two
+dashboards). A `: ping` comment goes out every 15 s. Terminal events: `event: end` with
+`data: {reason:"daemon_stopped"|"session_reset"}`.
 
 If the sink is dead (`defaultTranscriptSink`'s degrade path), live delivery continues from the
 bus and a `junco_chat_transcript_degraded` record is emitted once; replay after a reconnect
@@ -412,6 +470,18 @@ Wrapping an existing plan is `ticket` with the body verbatim — a prompt rule, 
 `planSet` parks with `blocked: "plan_sets_disabled"` when `planSets.enabled` is false. A message
 with both a `junco-plan` fence and `junco-ticket` fences parks two drafts.
 
+**Frontmatter allowlist — the planner's security boundary, kept.** The GitHub planner emits a
+ticket _body only_ because "model output can never set `repo:`/`workdir:`/`tools:`/`network:`"
+(`planPrompt.ts`). Chat needs model-authored frontmatter to express kinds, so the boundary
+moves from "none" to "an allowlist": `fenceExtract` parses the fence's frontmatter and keeps
+only `id`, `pr_title`, `branch_name`, `base_branch`, `priority`, `labels`, `reviewers`, `draft`,
+`depends_on`, `amends_pr`, `timeout_minutes`, `github_request`, `assess`, `analyze`. Junco
+sets `repo:` itself from the session (`nwo` for a watched repo, `cwd` for a local one) and
+**drops** everything else — `tools`, `network`, `workdir`, `push_remote`, `not_before`,
+`retry_count`, `deps_satisfied`, `plan`, and any unknown key — recording the dropped names as
+`DraftFile.droppedKeys` so the card shows them. An operator who wants one of those adds it in
+`e` edit, which is operator-authored input. The prompt tells the model the allowlist.
+
 ### 6.2 `PendingDraft` and the store
 
 ```ts
@@ -419,9 +489,10 @@ type DraftKind = "ticket" | "amend" | "apply" | "assess" | "analyze" | "ticketSe
 
 interface DraftFile {
   name: string; // <ticket id>.md, or plan.md for planSet
-  content: string; // byte-identical to what lint saw
-  lint: LintResult; // lintTicket(...) — for planSet, the compiler's parse errors
+  content: string; // byte-identical to what lint saw (allowlisted frontmatter + repo: + body)
+  lint: LintViolation[]; // lintTicket(...).violations — for planSet, the compiler's parse errors as error rows
   route: RouteDecision | null; // decideRoute(...) — null for assess/analyze (command route)
+  droppedKeys: string[]; // model frontmatter keys removed by the allowlist (§6.1)
 }
 
 interface PendingDraft {
@@ -526,14 +597,17 @@ the daemon is down or three consecutive reconnects fail. `prContext`/`issueConte
 
 ---
 
-## 8. Dashboard view (`src/tui/hooks/useChat.ts`, `src/tui/components/ChatView.tsx`, `Composer.tsx`, `MouseProvider.tsx`, `App.tsx`)
+## 8. Dashboard view (`src/tui/hooks/useChat.ts`, `src/tui/components/ChatView.tsx`, `Composer.tsx`, `viewActions.ts`, `App.tsx`)
 
 ### 8.1 Navigation
 
-`View` gains `"chat"`. A repo row's context bindings gain a `chat` option (mnemonic derived by
-`mnemonics.ts` like every other). The view is full-screen like `transcript`. The session shown
-is the current rail row's key; moving the rail selection while in the view switches the
-subscription. System rows have no chat; the option is absent there.
+`View` and `OverlayView` gain `"chat"`. The `chat` verb is a **body verb** of the two repo-row
+bodies (`BODY_VERBS.issues` and `BODY_VERBS.repoDetail` in `viewActions.ts`), not a
+`MAIN_GLOBAL`: a global would claim `t` ahead of the queue body's `retry`, which owns `t` by a
+deliberate earlier fix. As a body verb it derives `t` in both repo bodies (`c`, `h`, `a` are
+taken or excluded) and never appears on a system row. The view is full-screen like
+`transcript`. The session shown is the current rail row's key; moving the rail selection while
+in the view switches the subscription.
 
 ### 8.2 Layout
 
@@ -544,24 +618,34 @@ subscription. System rows have no chat; the option is absent there.
   render inline at their `junco_chat_draft` record; `j`/`k` walks tool rows and cards alike.
   Compaction shows as one dim row. When the 2000-record ring overflows, the header shows
   `showing last 2000`.
-- **Composer:** multiline. `enter` submits; newline chord `alt+enter` with `ctrl+j` as the
-  fallback (both verified on the maintainer's terminals during implementation; the chosen
-  chord is shown in the composer's hint line). A leading `/` opens an inline completion list:
-  `/draft`, `/assess`, `/analyze N`, `/pr N`, `/issue N`, `/abort`, `/new`.
+- **Composer:** multiline. `enter` submits. Two newline chords, both deterministic in Ink 7's
+  keypress parser (`parse-keypress.js`): alt+enter arrives as `\x1b\r` → `key.return &&
+key.meta`; ctrl+j arrives as `\n` → `input === "\n"` with `key.return` false. Both insert a
+  newline; the hint line names `ctrl+j` (it needs no terminal option-as-meta setting). A
+  leading `/` opens an inline completion list: `/draft`, `/assess`, `/analyze N`, `/pr N`,
+  `/issue N`, `/abort`, `/new`.
 
 ### 8.3 Focus and keys
 
 While the composer is focused it is the only active `useGuardedInput` handler: App's cascade
-checks `view === "chat" && composerFocused` first, so no mnemonic fires from typed prose. `esc`
-is stateful: **streaming → abort the turn; idle and focused → blur; blurred → leave the view.**
-Blurred, the chat-view keys are live: `j`/`k`, `enter` (expand tool result), `t`, `f`, `[`/`]`,
-`y`/`e`/`d`/`r` on the selected card, `i` (re-focus composer), `q`/`esc` (leave).
+checks `view === "chat" && composerFocused` first, and `bindingContext` becomes
+`{kind: "structuralOnly", view: "chatCompose"}` (chips: `type`, `enter send`, `ctrl+j newline`,
+`/ commands`, `esc blur/abort`), so no mnemonic fires from typed prose. `esc` is stateful:
+**streaming → abort the turn; idle and focused → blur; blurred → leave the view.**
+
+Blurred, the view's bindings are the `VIEW_OPTIONS.chat` list — every key derived by
+`mnemonics.ts` from its label, in this order: `submit` → `s`, `edit` → `e`, `discard`
+(guarded) → `D`, `route` → `r`, `thinking` → `t`, `follow` → `f`, `close` (hidden) → `q`.
+Structural: `i` (focus composer), `↑/↓`/`j`/`k` (move over tool rows and draft cards),
+`enter` (expand), `[`/`]` (scroll), `esc` (leave). The pinned keymap test in
+`tests/tuiViewActions.test.ts` gains the `chat` context.
 
 ### 8.4 Bracketed paste
 
-`MouseProvider`'s stdin pipeline enables mode 2004 alongside SGR mouse reporting and routes an
-`ESC[200~ … ESC[201~` span to a `paste` store the composer subscribes to, as one insertion. The
-span never reaches `useInput`, so it cannot trip mnemonics or the CSI guard.
+Ink 7.1 ships bracketed paste natively: `usePaste(handler, {isActive})` enables mode 2004
+while active and delivers a paste as **one string on a separate channel** — "paste content is
+never forwarded to `useInput` handlers when `usePaste` is active". `Composer` uses it with
+`isActive: focused`; no stdin-pipeline change and no CSI-guard change is needed.
 
 ### 8.5 `useChat`
 
@@ -573,9 +657,21 @@ Probe component with a fake client.
 
 ### 8.6 Ambient signals
 
-The rail row shows a `Badge` (`●` streaming, or a drafts count) from `/health.chats[]` via the
-existing health poll. `HelpModal` lists the chat bindings. `ReviewView` gains the chat-drafts
-kind, with the same `y`/`e`/`d`/`r`.
+The rail row shows a `Badge` (`●` streaming, or a drafts count) from `/health.chats` via the
+existing health poll (`HealthInfo` gains `chats: ChatHealth | null`). `HelpModal` lists the
+chat bindings.
+
+**`ReviewView`** gains `chatDrafts: PendingDraft[]` as a third list after batches and comment
+drafts (combined cursor, `open: {kind: "chatDraft", idx}`), and `VIEW_OPTIONS.review` gains
+`submit`, `edit`, `route` **appended after** the existing four so their keys stay pinned
+(`a`/`n`/`f`/`D`); the new ones derive `s`/`e`/`r`. `discard` (`D`) already exists and applies.
+The same `submitChatDraft`/`editChatDraft`/`cycleChatDraftRoute`/`discardChatDraft` handlers
+serve both the pane's card and the review row.
+
+**`$EDITOR`** for `e` runs through `useSuspend`, which needs `SuspendProvider` mounted around
+the dashboard `App` (today only `WizardApp` mounts it); `Root.tsx` adds it. The spawn itself
+is `AppProps.editFileFn?: (path: string) => Promise<void>` (default: `spawn($EDITOR ?? "vi",
+[path], {stdio: "inherit"})`), injectable so tests never open an editor.
 
 ---
 
@@ -606,8 +702,10 @@ chat: {
 ```
 
 `chat.enabled` is a live lever (`configLevers.ts`); the rest read at session creation. The
-fields are added to `tests/helpers/config.ts` and nowhere else; `chat.enabled` joins
-`ConfigSeams` as a feature toggle. `src/ticketSchema.ts` is untouched.
+fields are added to `tests/helpers/config.ts` **as ballast** (`chat: {enabled: true, modelId:
+null, thinkingLevel: null, turnTimeoutMinutes: null}`), not as a `ConfigSeams` key: `makeConfig`
+has 38 call sites, and no existing test's meaning changes with chat on. The few chat tests that
+need it off pass `overrides`. `src/ticketSchema.ts` is untouched.
 
 ---
 
@@ -664,20 +762,25 @@ exists or is introduced in this spec.
   `event: end` on drain, 202/200/204/404/409/413/503 contracts, `Origin` → 403, and both
   branches of the injected `isLoopback`.
 - **`parseTranscriptLine`:** every `junco_chat_*` record classifies as `junco`; version
-  unchanged. `transcriptSummary` treats chat turns as runs for the viewer.
-- **`chatClient`:** SSE parser over a scripted `ReadableStream` (no server): ids, multi-line
-  data, comments, partial chunks; reconnect sends `Last-Event-ID`; `down` after three failures.
+  unchanged. **`summarizeTranscript`/`renderTranscriptRows`:** chat turn records frame runs
+  with `flow: "chat"`, `prompt` and `notes` populate, a draft note carries its anchor, and
+  every existing ticket-transcript fixture renders byte-identically.
+- **`chatClient`:** SSE parser over a scripted `ReadableStream` (no server): ids, id-less
+  events, multi-line data, comments, partial chunks; reconnect sends `Last-Event-ID`; `down`
+  after three failures.
 - **TUI:** `useChat` through a Probe with a fake client (coalescing, ring overflow, cards
-  derivation, status); `Composer` (multiline, submit, slash list, paste-span insertion); App —
-  the view opens from a repo row and is absent on system rows, a focused composer swallows
-  every mnemonic, the `esc` state machine, rail switch re-subscribes, each card action spawns
-  the right verb through a fake `runCliCommand`, `ReviewView` lists chat drafts. Every
-  keystroke gated on `until()` (the Ink stdin batching trap); loop-until-condition, never a
-  fixed tick.
-- **Drift guards:** `dataTree` has `chats`/`chatDrafts` in both layouts; `sandboxDenyPaths`
-  includes both; `planUnwatch` includes the chat dir and drafts; `FlowKind` includes `"chat"`;
-  new `Config` fields appear in `tests/helpers/config.ts` only; `ConfigSeams` has
-  `chatEnabled`.
+  derivation, status); `Composer` (multiline via `\x1b\r` and `\n`, submit on `\r`, slash
+  list, a paste delivered through Ink's paste channel lands as one insertion); App — the view
+  opens from a repo row via `t` and the verb is absent on system rows, a focused composer
+  swallows every mnemonic, the `esc` state machine, rail switch re-subscribes, each card action
+  spawns the right verb through a fake `runCliFn`, `ReviewView` lists chat drafts, `e` calls
+  the injected `editFileFn`. Every keystroke gated on `until()` (the Ink stdin batching trap);
+  loop-until-condition, never a fixed tick.
+- **Drift guards:** `dataTree` has `chats`/`chatDrafts` in both layouts, `ensureDataTree`
+  materializes them, `flatToV2Pairs` moves them; `sandboxDenyPaths` includes both;
+  `planUnwatch` includes the chat dir and drafts; `FlowKind` includes `"chat"`; new `Config`
+  fields appear in `tests/helpers/config.ts` only; the pinned keymap test covers the `chat`
+  view, the `chatCompose` structural context, and the review view's three appended verbs.
 - **Coverage floor** (`vitest.config.ts`) must not drop.
 
 ---
@@ -700,10 +803,10 @@ branch for review`.
 
 - Worktree: `.claude/worktrees/dashboard-chat`, branch `feat/dashboard-chat`, based on
   `origin/main` @ `09cb4d5`. Merge `origin/main` between plan tasks.
-- Natural task ordering: records + data tree → `SessionOverrides.sessionManager` +
-  `makeSessionManager` → `chatKey`/`chatCwd` → `chatTurn` → `chatManager` (+ daemon wiring,
-  gates, spend, metrics) → routes + auth → drafts (extract, store, prompt) → client → `useChat`
-  - `Composer` + paste → `ChatView` + App wiring + `ReviewView` → CLI/doctor/unwatch → docs.
-    Every task lands with a failing test first and a commit; the suite is green at every commit.
-- The `alt+enter` / `ctrl+j` newline chord is verified on a real terminal in the `Composer`
-  task, not assumed; whichever works is what the hint line shows.
+- Natural task ordering: records + data tree → config → `ChatSessionLike` +
+  `SessionOverrides.sessionManager` + `makeSessionManager` → `chatKey`/`chatCwd` → `chatTurn`
+  → `chatSession` → `chatManager` (+ daemon wiring, gates, spend) → routes + auth → fence
+  extraction → draft store + parking → prompt → transcript viewer awareness → client →
+  `useChat` → `Composer` → `ChatView` + App wiring → `ReviewView` + editor → CLI/doctor/unwatch
+  → docs. Every task lands with a failing test first and a commit; the suite is green at every
+  commit.
