@@ -214,6 +214,48 @@ describe("applyPatchSeries", () => {
     expect(existsSync(join(work, ".git", "rebase-apply"))).toBe(false);
   });
 
+  // -------------------------------------------------------------------------
+  // final-review follow-up: on a real content conflict, git's substantive
+  // lines (Applying:/Using index info/Falling back to 3-way/Auto-merging/
+  // CONFLICT (content):.../Patch failed at) land on STDOUT; stderr carries
+  // only a generic "error: Failed to merge in the changes." plus `hint:`
+  // boilerplate. `stderr || stdout` (the old code) picked stderr whenever it
+  // was non-empty — always, on a content conflict — so `reason` never named
+  // the conflicting file. This discriminates against that: it fails on the
+  // old code, whose `reason` is just the generic stderr message.
+  // -------------------------------------------------------------------------
+
+  it("a real content conflict's reason names the conflicting file (CONFLICT line) and drops hint: noise", async () => {
+    const { root, work } = setup();
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "two", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+
+    const raw = buildRealSeries(work, [
+      {
+        file: "game.js",
+        content: levelsFile(["one", "TWO-CHANGED", "three"]),
+        message: "feat: rename two",
+      },
+    ]);
+    const conflicting = toPatchSeries(raw);
+
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "dos", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "chore: rename two differently"]);
+
+    const cfg = cfgFor(root);
+    const out = await applyPatchSeries(cfg, work, "t1", conflicting);
+
+    expect(out.ok).toBe(false);
+    const reason = (out as { reason: string }).reason;
+    // Before the fix: reason was just "git am --3way failed (exit 128):
+    // error: Failed to merge in the changes." plus hint: lines — this file
+    // name and CONFLICT marker were never present anywhere in it.
+    expect(reason).toMatch(/CONFLICT \(content\): Merge conflict in game\.js/);
+    expect(reason).not.toMatch(/hint:/i);
+  });
+
   it("reports zero usage and an apply stopReason on success", async () => {
     const { root, work } = setup();
     writeFileSync(join(work, "game.js"), levelsFile(["easy", "hard"]), "utf8");

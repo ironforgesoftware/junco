@@ -1580,8 +1580,54 @@ describe("apply-mode tickets (2026-08-31)", () => {
     const body = readFileSync(capture, "utf8");
     expect(body).toContain("Apply-mode fallback");
     expect(body).toMatch(/did not apply/);
-    expect(body).toMatch(/git am/);
+    // The banner now names the actual CONFLICT line (final-review follow-up:
+    // pickInformativeReasonLine + the stdout+stderr capture fix), not a bare
+    // "git am" substring — asserted precisely by the dedicated test below.
+    expect(body).toMatch(/conflict/i);
     expect(body).toMatch(/agent completed/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // final-review follow-up: a real content conflict's disclosure reason must
+  // name the conflicting file (git's CONFLICT line), not git's own
+  // least-informative "Applying: <subject>" progress line — end-to-end
+  // through the real PR body gh receives, not just the unit-level pickers.
+  // -------------------------------------------------------------------------
+
+  it("the disclosure banner surfaces the real CONFLICT line from a real git am conflict, not git's 'Applying:' line", async () => {
+    const capture = join(h.root, "pr-body-fallback-conflict-line-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1010"; exit 0`;
+    const cfg = makeConfig(h, {
+      ghBin: ghShim(h.root, "gh-apply-fallback-conflict-line.sh", prCreate),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback-conflict-line.md",
+      `---\nid: apply-fallback-conflict-line\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => commitFactory({ commit: true })(fcfg, cwd),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    const body = readFileSync(capture, "utf8");
+    // Before the (stdout+stderr) capture fix: `reason` was just git's generic
+    // "error: Failed to merge in the changes." (plus hint: noise), so the
+    // banner's parenthetical never named conflict.txt at all. Before the
+    // line-picker fix (previous round): the banner would have quoted git's
+    // "Applying: <subject>" line instead of the CONFLICT line even once the
+    // CONFLICT text WAS captured.
+    expect(body).toMatch(/CONFLICT \(content\): Merge conflict in conflict\.txt/);
+    expect(body).not.toMatch(/\(git am --3way failed \(exit \d+\): Applying:/);
+    expect(body).not.toMatch(/hint:/i);
   });
 
   it("a failed apply followed by its Stage-2a fallback appends ONE chronological transcript — apply frames (carrying the failure), then the fallback session's", async () => {

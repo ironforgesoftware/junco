@@ -94,7 +94,27 @@ export async function applyPatchSeries(
       // Leave the worktree in a clean, inspectable state — an interrupted am
       // would otherwise strand .git/rebase-apply and wedge later git calls.
       await gitFn(cfg, ["am", "--abort"], { cwd: wtPath, timeoutMs: 30_000, check: false });
-      const detail = (r.stderr || r.stdout || "").split("\n").slice(0, 20).join("\n").trim();
+      // final-review follow-up: on a real content conflict, git's substantive
+      // lines — "Applying: <subject>", "Using index info…", "Falling back to
+      // …3-way merge…", "Auto-merging <file>", "CONFLICT (content): Merge
+      // conflict in <file>", "Patch failed at 0001 <subject>" — all land on
+      // STDOUT, while stderr carries only a generic "error: Failed to merge
+      // in the changes." plus five `hint:` lines telling a human how to drive
+      // an interactive `am` (`--show-current-patch`/`--continue`/`--skip`/
+      // `--abort`/disabling the advice) that junco never exposes. `stderr ||
+      // stdout` picked stderr whenever it was non-empty — which it always is
+      // on a content conflict — so the conflicting file was NEVER captured in
+      // `reason`, the transcript's errorMessage, the fallback prompt, or the
+      // PR disclosure banner. Concatenate both streams (stdout first — that's
+      // where the substance is) and drop the hint/advice noise BEFORE the
+      // line cap, so the cap isn't spent on boilerplate instead of the cause.
+      const combined = [r.stdout, r.stderr].filter((s) => s.length > 0).join("\n");
+      const detail = combined
+        .split("\n")
+        .filter((line) => !/^\s*(hint:|advice\.)/i.test(line))
+        .slice(0, 20)
+        .join("\n")
+        .trim();
       const reason = `git am --3way failed (exit ${r.code})${detail ? `: ${detail}` : ""}`;
       writeRunEnd(sink, {
         errorMessage: reason,
