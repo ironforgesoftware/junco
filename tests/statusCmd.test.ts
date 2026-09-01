@@ -330,7 +330,7 @@ describe("runStatusCommand", () => {
     await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
     const text = out.join("");
     expect(text).toContain("assess review");
-    expect(text).toMatch(/1 pending \(junco assess review\)/);
+    expect(text).toMatch(/1 pending \(junco audit review\)/);
   });
 
   it("omits the assess line when no repo has history", async () => {
@@ -392,7 +392,7 @@ describe("runStatusCommand", () => {
     await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => null });
     const text = out.join("");
     expect(text).toContain("analyze review");
-    expect(text).toMatch(/1 pending \(junco analyze review\)/);
+    expect(text).toMatch(/1 pending \(junco investigate review\)/);
   });
 
   it("lock held but /health unreachable → 'not responding'", async () => {

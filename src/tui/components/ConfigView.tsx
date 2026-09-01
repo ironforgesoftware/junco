@@ -57,6 +57,16 @@ function sectionKeyFor(path: string): string {
   return TOP_LEVEL_KEYS.has(top) ? "general" : top;
 }
 
+/** Display-only rename: the `assess` section groups config.json's `assess.*`
+ * keys (assess.fileAs, …) — that config namespace is out of surface-legibility
+ * Task 2's scope (a persisted user config.json key, unlike the CLI verb), so
+ * `sectionKeyFor`/`SECTION_ORDER`/`Lever.path` all keep saying "assess". Only
+ * the rendered tab text tracks the renamed CLI verb (`junco audit`) so the
+ * dashboard's config view doesn't visibly resurrect the retired word. */
+function sectionLabel(key: string): string {
+  return key === "assess" ? "audit" : key;
+}
+
 function buildSections(): Section[] {
   const byKey = new Map<string, Lever[]>();
   for (const l of LEVERS) {
@@ -370,7 +380,7 @@ export function ConfigView({
               >
                 <Text color={sel ? theme.accent : undefined} bold={sel} wrap="truncate-end">
                   {sel ? "▌ " : "  "}
-                  {s.key}
+                  {sectionLabel(s.key)}
                 </Text>
               </ClickableBox>
             );

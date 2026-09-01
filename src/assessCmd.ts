@@ -1,5 +1,5 @@
 /**
- * `junco assess <path|owner/repo|owner/repo#N> [--auto-plan]` — compose and submit a
+ * `junco audit <path|owner/repo|owner/repo#N> [--auto-plan]` — compose and submit a
  * machine-owned assessment ticket. This command's only job is target
  * resolution + ticket authoring; the daemon's normal claim/execute path
  * (src/assessFlow.ts) runs the actual audit and files issues.
@@ -58,7 +58,7 @@ function isDirectory(p: string): boolean {
  * prompt. The nwo is unknown at authoring time for a plain path/nwo target
  * (it's resolved from the repo's origin remote when the ticket actually
  * runs), so the prompt gets `nwo: null` in that case. When `issueContext`
- * is set (an issue-ref target, `junco assess owner/repo#N`), the nwo is
+ * is set (an issue-ref target, `junco audit owner/repo#N`), the nwo is
  * already known from the resolved issue, and the `assess:` block also
  * carries `issue`/`issue_title` so the daemon's assessFlow.ts can scope the
  * audit and filed findings can reference the issue.
@@ -110,7 +110,7 @@ export async function runAssessCommand(
   const nowFn = deps.nowFn ?? ((): Date => new Date());
 
   if (!target) {
-    print(`Usage: junco assess <path|owner/repo|owner/repo#N> [--auto-plan]\n`);
+    print(`Usage: junco audit <path|owner/repo|owner/repo#N> [--auto-plan]\n`);
     return 2;
   }
 
@@ -118,7 +118,7 @@ export async function runAssessCommand(
   let issueContext: { nwo: string; issue: number; title: string; body: string } | undefined;
 
   // Issue-ref target (owner/repo#N or an issue URL) — resolved via the same
-  // fail-fast fetch + auto-provisioning as `junco analyze`/dispatch. Checked
+  // fail-fast fetch + auto-provisioning as `junco investigate`/import. Checked
   // ahead of the plain NWO/path branches below, which stay untouched: a bare
   // `owner/repo` still requires the repo be already watched (the documented
   // asymmetry — an issue ref is an explicit, single-issue ask; a bare repo
@@ -128,29 +128,29 @@ export async function runAssessCommand(
     const resolveFn = deps.resolveFn ?? resolveIssueTarget;
     let t: IssueTarget;
     try {
-      // assess is read-only — never a push target — so it provisions fork-less
+      // audit is read-only — never a push target — so it provisions fork-less
       // (skip `gh repo fork`) when the repo isn't already watched (#105).
       t = await resolveFn(cfg, target, deps.resolveDeps ?? {}, { fork: false });
     } catch (e) {
-      print(`junco assess: ${e instanceof Error ? e.message : String(e)}\n`);
+      print(`junco audit: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
     repoPath = t.clonePath;
     issueContext = { nwo: t.nwo, issue: t.issue, title: t.title, body: t.body };
   } else if (NWO_RE.test(target) && !isDirectory(target)) {
-    // Include EXTERNAL entries: assess now files (via review) on repos the operator
+    // Include EXTERNAL entries: audit now files (via review) on repos the operator
     // does not own, so external clones are valid targets (unlike the bridge poll,
     // which still excludes them via resolveWatchedRepos).
     const fromConfig = cfg.github.repos.find((r) => r.nwo.toLowerCase() === target.toLowerCase());
     const { entries, error: watchErr } = readWatchlist(watchlistPath(cfg));
     if (watchErr) {
-      print(`junco assess: watchlist unreadable (${watchErr}); using config repos only\n`);
+      print(`junco audit: watchlist unreadable (${watchErr}); using config repos only\n`);
     }
     const fromWatch = entries.find((e) => e.nwo.toLowerCase() === target.toLowerCase());
     const match = fromConfig ?? fromWatch;
     if (!match) {
       print(
-        `junco assess: '${target}' is not watched — add it under github.repos in config.json, or watch it from the dashboard, then retry\n`,
+        `junco audit: '${target}' is not watched — add it under github.repos in config.json, or watch it from the dashboard, then retry\n`,
       );
       return 2;
     }
@@ -158,7 +158,7 @@ export async function runAssessCommand(
   } else {
     const candidate = resolve(expandHome(target));
     if (!isDirectory(candidate)) {
-      print(`junco assess: not a directory: ${candidate}\n`);
+      print(`junco audit: not a directory: ${candidate}\n`);
       return 2;
     }
     repoPath = candidate;
@@ -170,14 +170,14 @@ export async function runAssessCommand(
   try {
     dst = submitFn(cfg, content, { idHint: id });
   } catch (e) {
-    print(`junco assess: ${e instanceof Error ? e.message : String(e)}\n`);
+    print(`junco audit: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
 
   print(`queued: ${dst}\n`);
   print(
     "queued — the worker will audit the repo and park findings for review on its next claim; " +
-      "run `junco assess review` then `junco assess file <id>` to file them\n",
+      "run `junco audit review` then `junco audit file <id>` to file them\n",
   );
   if (opts.autoPlan) {
     print(
@@ -188,10 +188,10 @@ export async function runAssessCommand(
 }
 
 /**
- * `junco assess review [<id>]` — read side of the durable review queue
+ * `junco audit review [<id>]` — read side of the durable review queue
  * (src/assessReview.ts). No id lists pending batches parked by the audit
  * flow; an id prints each finding's fingerprint/severity/title so the
- * operator can decide what to file (junco assess file — added next).
+ * operator can decide what to file (junco audit file — added next).
  */
 export async function runAssessReviewCommand(
   cfg: Config,
@@ -203,7 +203,7 @@ export async function runAssessReviewCommand(
   if (id === undefined) {
     const pending = listPending(cfg);
     if (pending.length === 0) {
-      print("no pending assess reviews\n");
+      print("no pending audit reviews\n");
       return 0;
     }
     for (const b of pending) {
@@ -214,17 +214,17 @@ export async function runAssessReviewCommand(
         `${b.id}  ${b.nwo} (${scope})  ${b.findings.length} findings  ${b.createdAt}${filedCol}\n`,
       );
     }
-    print(`\nreview one: junco assess review <id> · file: junco assess file <id> --all\n`);
+    print(`\nreview one: junco audit review <id> · file: junco audit file <id> --all\n`);
     return 0;
   }
 
   const { batch, error } = readPending(cfg, id);
   if (error) {
-    print(`junco assess review: ${error}\n`);
+    print(`junco audit review: ${error}\n`);
     return 1;
   }
   if (!batch) {
-    print(`junco assess review: no pending batch '${id}'\n`);
+    print(`junco audit review: no pending batch '${id}'\n`);
     return 2;
   }
   print(`${batch.id}  ${batch.nwo} (${batch.external ? "external" : "owned"})\n`);
@@ -233,14 +233,14 @@ export async function runAssessReviewCommand(
     const note = rec ? `  [filed ${rec.how} ${rec.at}]` : "";
     print(`  ${f.fingerprint}  [${f.severity}]  ${f.title}${note}\n`);
   }
-  print(`\nfile all: junco assess file ${batch.id} --all\n`);
+  print(`\nfile all: junco audit file ${batch.id} --all\n`);
   print(
-    `file some: junco assess file ${batch.id} --only ${batch.findings
+    `file some: junco audit file ${batch.id} --only ${batch.findings
       .map((f) => f.fingerprint)
       .slice(0, 2)
       .join(",")}\n`,
   );
-  print(`discard: junco assess discard ${batch.id}\n`);
+  print(`discard: junco audit discard ${batch.id}\n`);
   return 0;
 }
 
@@ -252,10 +252,10 @@ export interface AssessFileDeps {
 }
 
 /**
- * `junco assess file <id> --all | --only <fp,...>` — the human confirm step:
- * files a SELECTION of the findings parked by `junco assess` (assessReview.ts)
+ * `junco audit file <id> --all | --only <fp,...>` — the human confirm step:
+ * files a SELECTION of the findings parked by `junco audit` (assessReview.ts)
  * as GitHub issues via assessFiling.ts; the batch stays parked with per-finding
- * `filed` stamps — `junco assess discard` is the explicit end-of-life. Requires
+ * `filed` stamps — `junco audit discard` is the explicit end-of-life. Requires
  * an explicit selection (no bare default) — these writes land on someone
  * else's tracker.
  */
@@ -268,20 +268,20 @@ export async function runAssessFileCommand(
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const fileFn = deps.fileFindingsFn ?? fileFindings;
   if (!id) {
-    print("Usage: junco assess file <id> --all | --only <fp,fp,...>\n");
+    print("Usage: junco audit file <id> --all | --only <fp,fp,...>\n");
     return 2;
   }
   if (!opts.all && !opts.only) {
-    print("junco assess file: choose findings with --all or --only <fp,...>\n");
+    print("junco audit file: choose findings with --all or --only <fp,...>\n");
     return 2;
   }
   const { batch, error } = readPending(cfg, id);
   if (error) {
-    print(`junco assess file: ${error}\n`);
+    print(`junco audit file: ${error}\n`);
     return 1;
   }
   if (!batch) {
-    print(`junco assess file: no pending batch '${id}'\n`);
+    print(`junco audit file: no pending batch '${id}'\n`);
     return 2;
   }
   const known = new Set(batch.findings.map((f) => f.fingerprint));
@@ -305,25 +305,26 @@ export async function runAssessFileCommand(
     // selection chose nothing has not succeeded. (#138)
     if (selected.size === 0) {
       print(
-        `junco assess file: --only selected no findings — pass one or more fingerprints, e.g. --only <fp,fp,...>\n`,
+        `junco audit file: --only selected no findings — pass one or more fingerprints, e.g. --only <fp,fp,...>\n`,
       );
       return 2;
     }
     const unknown = [...selected].filter((fp) => !known.has(fp));
     if (unknown.length > 0) {
-      print(`junco assess file: unknown fingerprint(s): ${unknown.join(", ")}\n`);
+      print(`junco audit file: unknown fingerprint(s): ${unknown.join(", ")}\n`);
       return 2;
     }
   }
 
-  // assess.fileAs: attach the bot identity to the WHOLE filing pass (dedup
-  // scan, label ensure, issue creates all flow through gh(cfg, …)) — or fail
-  // loud before anything posts. The batch stays parked either way.
+  // assess.fileAs (config.json — internal/legacy key name, out of this task's
+  // scope): attach the bot identity to the WHOLE filing pass (dedup scan,
+  // label ensure, issue creates all flow through gh(cfg, …)) — or fail loud
+  // before anything posts. The batch stays parked either way.
   let fileCfg = cfg;
   try {
     fileCfg = await withFileAsAuth(cfg, deps.authDeps ?? {});
   } catch (e) {
-    print(`junco assess file: ${e instanceof Error ? e.message : String(e)}\n`);
+    print(`junco audit file: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
 
@@ -334,7 +335,7 @@ export async function runAssessFileCommand(
     // fileFindings rethrows on the fatal-dedup path before stamping or
     // rewriting anything, so the batch is preserved untouched — surface the
     // reason cleanly, don't swallow it.
-    print(`junco assess file: ${e instanceof Error ? e.message : String(e)}\n`);
+    print(`junco audit file: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
   print(
@@ -350,9 +351,9 @@ export interface AssessDiscardDeps {
 }
 
 /**
- * `junco assess discard <id>` — the explicit end-of-life for a parked batch:
+ * `junco audit discard <id>` — the explicit end-of-life for a parked batch:
  * archive to review/assess/filed/ without filing anything further. Filing no
- * longer archives, so this is the only way a batch leaves `assess review`.
+ * longer archives, so this is the only way a batch leaves `audit review`.
  * Discarding an already-gone id is a no-op success (ENOENT-safe).
  */
 export async function runAssessDiscardCommand(
@@ -362,13 +363,13 @@ export async function runAssessDiscardCommand(
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   if (!id) {
-    print("Usage: junco assess discard <id>\n");
+    print("Usage: junco audit discard <id>\n");
     return 2;
   }
   if (discardPending(cfg, id)) {
     print(`discarded '${id}'\n`);
   } else {
-    print(`junco assess discard: no pending batch '${id}' (already discarded?)\n`);
+    print(`junco audit discard: no pending batch '${id}' (already discarded?)\n`);
   }
   return 0;
 }

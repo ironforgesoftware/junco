@@ -3,14 +3,20 @@ import { buildContextBindings, type BindingContext } from "../src/tui/viewAction
 
 const km = (c: BindingContext): Record<string, string> =>
   Object.fromEntries(buildContextBindings(c, 2, "wide").keymap);
+// surface-legibility Task 2: `assess`'s label became "audit" and `dispatch`'s
+// became "import" (ids unchanged — see viewActions.ts's MAIN_GLOBALS/BODY_VERBS).
+// Mnemonics derive from the LABEL, so this rebinds the whole cascade: "audit"
+// claims 'a's runner-up 'u' (ahead of "queue"), pushing queue to 'e' and
+// review to 'v' — a label edit that re-binds, exactly as this file's own
+// docstring warns.
 const GLOBALS = {
   a: "addRepo",
   U: "unwatch",
   b: "browser",
   r: "refresh",
-  s: "assess",
-  u: "queue",
-  e: "review",
+  u: "assess",
+  e: "queue",
+  v: "review",
   p: "prs",
   c: "commands",
   q: "quit",
@@ -21,10 +27,10 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
   it("main:issues", () => {
     expect(km({ kind: "main", body: "issues" })).toEqual({
       ...GLOBALS,
-      d: "dispatch",
+      m: "dispatch",
       o: "approve",
       n: "analyze",
-      D: "dispatchAsk",
+      I: "dispatchAsk",
       A: "assessAutoPlan",
       R: "replan",
     });

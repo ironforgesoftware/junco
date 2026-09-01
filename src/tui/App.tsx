@@ -301,7 +301,7 @@ export function App(props: AppProps): React.JSX.Element {
   // issue detail overlay) sets this to "detail".
   const [transcriptFrom, setTranscriptFrom] = useState<"main" | "detail">("main");
   // Flips false on unmount so every async `.then`/`await` continuation below can
-  // bail before touching state after the dashboard has exited. `assess` and the
+  // bail before touching state after the dashboard has exited. `audit` and the
   // other spawned CLIs can resolve up to cliRunner's 120s timeout past unmount;
   // the optimistic/browser/detail handlers resolve fast but carry the same guard
   // for consistency (post-unmount setState is a silent no-op under React 19, so
@@ -752,8 +752,13 @@ export function App(props: AppProps): React.JSX.Element {
     (action: DashAction) => {
       if (!currentNwo || !currentIssue) return;
       const st = deriveState(currentIssue.labels, trigger);
+      // Display text only: `action` ("dispatch"/…) is the internal DashAction id
+      // (ghClient.ts, unchanged — see viewActions.ts's id/label split), but its
+      // dashboard LABEL is "import" (surface-legibility Task 2) — surface that,
+      // not the raw id, so a toast never re-says the retired word.
+      const actionLabel = action === "dispatch" ? "import" : action;
       if (!allowedActions(st).includes(action)) {
-        showToast("error", `${action} not available in state ${st}`);
+        showToast("error", `${actionLabel} not available in state ${st}`);
         return;
       }
       const nwo = currentNwo;
@@ -771,7 +776,7 @@ export function App(props: AppProps): React.JSX.Element {
           // bridge will reconcile once flushed), so this is NOT a rollback.
           showToast("info", `offline — action queued (⇡${queueSnap?.outboxDepth ?? "?"})`);
         } else {
-          showToast("success", `${action} applied`);
+          showToast("success", `${actionLabel} applied`);
         }
       });
     },
@@ -891,7 +896,7 @@ export function App(props: AppProps): React.JSX.Element {
     });
   }, [client, prDetail, showToast]);
 
-  // Repos currently mid-`assess` — guards a second `s`/`S` press on the same
+  // Repos currently mid-`audit` — guards a second `u`/`A` press on the same
   // repo from double-spawning the CLI while the first run is still going.
   const assessInFlightRef = useRef<Set<string>>(new Set());
 
@@ -960,25 +965,25 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (assessInFlightRef.current.has(target)) {
-        showToast("info", "assess already running");
+        showToast("info", "audit already running");
         return;
       }
       assessInFlightRef.current.add(target);
-      showToast("info", `assessing ${target}…`);
+      showToast("info", `auditing ${target}…`);
       const args = autoPlan ? [target, "--auto-plan"] : [target];
-      void runCliFn("assess", args).then((r) => {
+      void runCliFn("audit", args).then((r) => {
         assessInFlightRef.current.delete(target);
         if (!aliveRef.current) return;
         const line = firstNonEmptyLine(r.output);
         if (r.code === 0) {
           showToast(
             "success",
-            line ? `${target}: ${line} · v to review` : `assessed ${target} · v to review`,
+            line ? `${target}: ${line} · v to review` : `audited ${target} · v to review`,
           );
         } else {
           // Nonzero exit: assessCmd's first line carries the reason ("not
           // watched", "already queued", etc.) — relay it as-is.
-          showToast("error", line ?? `assess failed for ${target}`);
+          showToast("error", line ?? `audit failed for ${target}`);
         }
       });
     },
@@ -1537,7 +1542,7 @@ export function App(props: AppProps): React.JSX.Element {
             }
             void openBrowser();
           },
-          // Pane-aware like the old `s`: issues pane with a selection scopes
+          // Pane-aware like the old `u`: issues pane with a selection scopes
           // to the issue; everywhere else repo-scoped.
           assess: () => {
             if (pane === 2 && body?.kind === "issues" && currentNwo && currentIssue) {
@@ -1556,7 +1561,7 @@ export function App(props: AppProps): React.JSX.Element {
             if (!currentExternal) return void runAction("dispatch");
             if (!currentNwo || !currentIssue) return;
             const num = currentIssue.number;
-            showToast("info", `dispatching ${currentNwo}#${num}…`);
+            showToast("info", `importing ${currentNwo}#${num}…`);
             void client.dispatchTicket(currentNwo, num).then((res) => {
               if (!aliveRef.current) return;
               if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
@@ -1568,7 +1573,7 @@ export function App(props: AppProps): React.JSX.Element {
             if (currentExternal) {
               return void showToast(
                 "error",
-                "not available for external repos — dispatch queues a fork-PR ticket",
+                "not available for external repos — import queues a fork-PR ticket",
               );
             }
             void runAction("dispatchAsk");
@@ -1578,7 +1583,7 @@ export function App(props: AppProps): React.JSX.Element {
             if (currentExternal) {
               return void showToast(
                 "error",
-                "not available for external repos — dispatch queues a fork-PR ticket",
+                "not available for external repos — import queues a fork-PR ticket",
               );
             }
             void runAction("approve");
@@ -1588,7 +1593,7 @@ export function App(props: AppProps): React.JSX.Element {
             if (currentExternal) {
               return void showToast(
                 "error",
-                "not available for external repos — dispatch queues a fork-PR ticket",
+                "not available for external repos — import queues a fork-PR ticket",
               );
             }
             const st = currentIssue ? deriveState(currentIssue.labels, trigger) : "raw";

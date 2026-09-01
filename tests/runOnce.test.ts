@@ -1694,7 +1694,7 @@ esac
     expect(body).toContain("<!-- junco-result");
     // The audit PARKS the finding — the summary points at the file step, and
     // no issue URL appears (nothing was filed).
-    expect(body).toContain("junco assess file assess-e2e");
+    expect(body).toContain("junco audit file assess-e2e");
     expect(body).not.toContain("https://github.com/acme/demo/issues/1");
 
     // The finding landed in the review store, keyed by ticket id, flagged owned.

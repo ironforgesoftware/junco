@@ -231,7 +231,7 @@ describe("runAssessFlow", () => {
     expect(doneFiles).toHaveLength(1);
     const body = readFileSync(join(j, "done", doneFiles[0]), "utf8");
     expect(body).toContain("awaiting review");
-    expect(body).toContain("junco assess file assess-1");
+    expect(body).toContain("junco audit file assess-1");
     expect(body).toContain("Parked for review: 2");
   });
 

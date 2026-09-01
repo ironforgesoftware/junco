@@ -282,14 +282,14 @@ Subcommands:
   prs                 List junco-authored pull requests across watched repos
   data [--json]  Print the data tree (paths, counts, provenance); 'data migrate' unifies legacy roots
   config path|list|get <path>|set <path> <value>|init  Inspect/edit config.json knobs; init scaffolds defaults
-  assess <path|owner/repo|owner/repo#N> [--auto-plan]  audit a repo — or scoped to one issue; findings await review
-  assess review [<id>]                    list pending assess reviews, or show one
-  assess file <id> --all | --only <fp,...>  file reviewed findings as issues
-  assess discard <id>                     discard a pending batch without filing
-  analyze <owner/repo#N|url>          investigate an issue and park a comment draft for review
-  analyze review [<id>]                   list pending comment drafts, or preview one
-  analyze edit <id>                       edit a pending draft in $EDITOR
-  analyze post <id> [--no-footer]        post an approved draft as a comment on its issue
+  audit <path|owner/repo|owner/repo#N> [--auto-plan]  sweep a repo — or scoped to one issue; findings await review
+  audit review [<id>]                     list pending audit reviews, or show one
+  audit file <id> --all | --only <fp,...>  file reviewed findings as issues
+  audit discard <id>                      discard a pending batch without filing
+  investigate <owner/repo#N|url>      deep-read one issue and park a comment draft for review
+  investigate review [<id>]               list pending comment drafts, or preview one
+  investigate edit <id>                   edit a pending draft in $EDITOR
+  investigate post <id> [--no-footer]    post an approved draft as a comment on its issue
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   auth login | auth grant <owner/repo>   Bot-account login / grant the bot write access to a repo
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
@@ -1168,10 +1168,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
-  // assess: compose + submit a machine-owned vulnerability-assessment ticket
-  // (src/assessCmd.ts) — the daemon's assessFlow.ts runs the actual audit.
+  // audit (was `assess` — surface-legibility Task 2, no alias): compose +
+  // submit a machine-owned vulnerability-assessment ticket (src/assessCmd.ts,
+  // internal names unchanged) — the daemon's assessFlow.ts runs the actual
+  // audit. `audit` names a systematic repo sweep producing findings (junco
+  // runs `npm audit` inside it); distinct from `investigate`, which deep-reads
+  // ONE issue and produces a comment.
   // ------------------------------------------------------------
-  if (subcommand === "assess") {
+  if (subcommand === "audit") {
     const cfg = loadConfigFn(configPath);
     const sub = positionals[1];
     if (sub === "review") {
@@ -1201,12 +1205,14 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
-  // analyze: compose + submit a machine-owned issue-investigation ticket
-  // (src/analyzeCmd.ts) — the daemon's analyzeFlow.ts investigates and parks
-  // a comment draft. review/edit read and refine a parked draft; post is the
-  // human-confirmed outward write, through the same outbox seam as assess.
+  // investigate (was `analyze` — surface-legibility Task 2, no alias):
+  // compose + submit a machine-owned issue-investigation ticket
+  // (src/analyzeCmd.ts, internal names unchanged) — the daemon's
+  // analyzeFlow.ts investigates and parks a comment draft. review/edit read
+  // and refine a parked draft; post is the human-confirmed outward write,
+  // through the same outbox seam as audit.
   // ------------------------------------------------------------
-  if (subcommand === "analyze") {
+  if (subcommand === "investigate") {
     const cfg = loadConfigFn(configPath);
     const sub = positionals[1];
     if (sub === "review") {
@@ -1215,7 +1221,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     if (sub === "edit") {
       if (positionals[2] === undefined) {
-        printFn(`Usage: junco analyze edit <id>\n`);
+        printFn(`Usage: junco investigate edit <id>\n`);
         return 2;
       }
       const { runAnalyzeEditCommand } = await import("./analyzeCmd.js");
@@ -1395,7 +1401,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // config: inspect/edit config.json knobs via the lever registry
   // (src/configLevers.ts) — path/list/get/set (src/configCmd.ts). Lazy
   // import keeps it off every other subcommand's require graph, matching
-  // `prs`/`assess`. daemonRunningFn reuses the same lock-holder liveness
+  // `prs`/`audit`. daemonRunningFn reuses the same lock-holder liveness
   // check as `status`/`restart` so `set` on a restart-kind lever only warns
   // when a daemon is actually up to restart.
   // ------------------------------------------------------------

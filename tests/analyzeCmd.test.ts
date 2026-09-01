@@ -141,7 +141,7 @@ describe("runAnalyzeCommand", () => {
     expect(submittedIdHint).toBe("analyze-up-stream-7");
     expect(submittedContent).toContain("analyze:\n  issue: 7");
     expect(out.join("")).toContain("queued: /inbox/analyze-up-stream-7.md");
-    expect(out.join("")).toMatch(/junco analyze review/);
+    expect(out.join("")).toMatch(/junco investigate review/);
   });
 
   it("resolveFn throws (bad ref / gh failure) -> exit 1, message surfaced", async () => {
@@ -158,7 +158,7 @@ describe("runAnalyzeCommand", () => {
     });
 
     expect(code).toBe(1);
-    expect(out.join("")).toContain("junco analyze:");
+    expect(out.join("")).toContain("junco investigate:");
     expect(out.join("")).toContain("not a GitHub issue reference");
   });
 
@@ -213,7 +213,7 @@ describe("runAnalyzeReviewCommand", () => {
     expect(code).toBe(0);
     expect(out).toContain("Full analysis body here.");
     expect(out).toContain(ANALYSIS_FOOTER);
-    expect(out).toContain("post: junco analyze post analyze-o-r-42");
+    expect(out).toContain("post: junco investigate post analyze-o-r-42");
   });
 
   it("with id: footer:false omits the footer line", async () => {
@@ -490,7 +490,7 @@ describe("runAnalyzePostCommand", () => {
     );
 
     expect(code).toBe(1);
-    expect(out).toContain("junco analyze post:");
+    expect(out).toContain("junco investigate post:");
     expect(out).toMatch(/403/);
     const { draft } = readDraft(c, "analyze-o-r-42");
     expect(draft).not.toBeNull();

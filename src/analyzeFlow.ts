@@ -101,9 +101,9 @@ export async function runAnalyzeFlow(
   const warnings: string[] = [];
 
   const buildSummary = (phaseError: string | null): string => {
-    const parts: string[] = ["## junco analyze", `_Analyzed ${nowFn().toISOString()}_`];
+    const parts: string[] = ["## junco investigate", `_Analyzed ${nowFn().toISOString()}_`];
     if (phaseError) parts.push(`**Failed:** ${phaseError}`);
-    if (parked) parts.push(`draft parked — junco analyze review ${ticket.id}`);
+    if (parked) parts.push(`draft parked — junco investigate review ${ticket.id}`);
     if (warnings.length > 0) {
       parts.push("### Warnings\n\n" + warnings.map((w) => `- ${w}`).join("\n"));
     }

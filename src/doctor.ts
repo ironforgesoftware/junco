@@ -836,7 +836,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // not a health problem), independent of the github.enabled bridge gate.
     const reviews = pendingCount(cfg);
     if (reviews > 0) {
-      report("ok", "assess review", `${reviews} pending (junco assess review)`);
+      report("ok", "assess review", `${reviews} pending (junco audit review)`);
     }
 
     // 7d-bis. Per-repo assess history — informational only (a never-assessed
@@ -851,7 +851,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
     // state, not a health problem), independent of the github.enabled gate.
     const drafts = draftCount(cfg);
     if (drafts > 0) {
-      report("ok", "analyze drafts", `${drafts} pending (junco analyze review)`);
+      report("ok", "analyze drafts", `${drafts} pending (junco investigate review)`);
     }
 
     // 8. daemon (informational) — and, since #310, the two shared-root claims

@@ -67,7 +67,7 @@ describe("summarizeUnwatchPlan", () => {
     };
     expect(summarizeUnwatchPlan(all)).toBe(
       "Will delete: managed clone · 1 queued ticket(s) · worktrees · 1 outbox op(s) · " +
-        "2 pending assess batch(es) · 1 pending comment draft(s) · assess history · mirror · " +
+        "2 pending audit batch(es) · 1 pending comment draft(s) · audit history · mirror · " +
         "github cache Continue?",
     );
   });

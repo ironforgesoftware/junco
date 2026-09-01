@@ -121,11 +121,11 @@ export async function runAssessFlow(
   let recordNwo: string | null = null;
 
   const buildSummary = (phaseError: string | null): string => {
-    const parts: string[] = ["## junco assess", `_Assessed ${nowFn().toISOString()}_`];
+    const parts: string[] = ["## junco audit", `_Assessed ${nowFn().toISOString()}_`];
     if (phaseError) parts.push(`**Failed:** ${phaseError}`);
     if (counts.parked > 0) {
       parts.push(
-        `**${counts.parked} findings awaiting review — run \`junco assess file ${ticket.id}\`**`,
+        `**${counts.parked} findings awaiting review — run \`junco audit file ${ticket.id}\`**`,
       );
     }
     parts.push(

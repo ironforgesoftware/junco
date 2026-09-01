@@ -208,7 +208,7 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   }
   const reviews = pendingCount(cfg);
   if (reviews > 0) {
-    print(`assess review: ${reviews} pending (junco assess review)\n`);
+    print(`assess review: ${reviews} pending (junco audit review)\n`);
   }
   // Per-repo assess history (#193): age + outcome for every repo ever audited.
   // Silent when nothing has been assessed — same "only when non-empty" rule as
@@ -222,7 +222,7 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   }
   const drafts = draftCount(cfg);
   if (drafts > 0) {
-    print(`analyze review: ${drafts} pending (junco analyze review)\n`);
+    print(`analyze review: ${drafts} pending (junco investigate review)\n`);
   }
   // npm update nudge (spec 2026-07-16) — best-effort; silent unless newer.
   const update = await (deps.checkUpdateFn ?? ((c: Config) => checkForUpdate(c)))(cfg);

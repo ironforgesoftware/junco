@@ -161,7 +161,7 @@ describe("review view: mouse", () => {
     const client = { ...stubClient, listReview: async () => okv([batch1, batch2]) };
     const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("repos"));
-    r.stdin.write("e");
+    r.stdin.write("v"); // review mnemonic (surface-legibility Task 2 shifted it off `e`)
     await until(() => (r.lastFrame() ?? "").includes("o/r2")); // both batches listed
     const x = 5;
     const y = lineOf(r.lastFrame() ?? "", "o/r2");
@@ -277,7 +277,7 @@ describe("footer chips: mouse", () => {
     expect(issueOpens).toBe(0); // the old flat map would have opened the issue here
   });
 
-  it("pane 2: the 'c analyze' chip drafts an analysis for the selected issue", async () => {
+  it("pane 2: the 'n investigate' chip drafts an analysis for the selected issue", async () => {
     let analyzeCalls = 0;
     const client = {
       ...stubClient,
@@ -288,11 +288,11 @@ describe("footer chips: mouse", () => {
     };
     const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("repos"));
-    r.stdin.write("l"); // pane 2 — the only chip row carrying "analyze"
-    await until(() => (r.lastFrame() ?? "").includes("analyze"));
+    r.stdin.write("l"); // pane 2 — the only chip row carrying "investigate"
+    await until(() => (r.lastFrame() ?? "").includes("investigate"));
     const f = r.lastFrame() ?? "";
     const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("analyze");
+    const x = f.split("\n")[footerY].indexOf("investigate");
     await fireUntil(r.stdin, press(x, footerY), () => analyzeCalls === 1); // counted-once = idempotent-safe
     expect(analyzeCalls).toBe(1);
     // The keyboard recipe's success toast lands once the stubbed promise

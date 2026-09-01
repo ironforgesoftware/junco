@@ -1941,7 +1941,7 @@ describe("runDoctor assess review checks", () => {
     );
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the review count must still surface.
-    expect(lines.join("")).toMatch(/✓ assess review — 1 pending \(junco assess review\)/);
+    expect(lines.join("")).toMatch(/✓ assess review — 1 pending \(junco audit review\)/);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });
@@ -1970,7 +1970,7 @@ describe("runDoctor analyze review checks", () => {
     );
     expect(code).toBe(0);
     // okConfig has github.enabled = false — the draft count must still surface.
-    expect(lines.join("")).toMatch(/✓ analyze drafts — 1 pending \(junco analyze review\)/);
+    expect(lines.join("")).toMatch(/✓ analyze drafts — 1 pending \(junco investigate review\)/);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
 });

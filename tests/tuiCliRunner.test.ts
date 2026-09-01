@@ -47,7 +47,7 @@ describe("PALETTE_COMMANDS roster", () => {
     const excluded = PALETTE_COMMANDS.filter((c) => c.excluded !== null);
     expect(runnable.map((c) => c.name).sort()).toEqual(
       [
-        "assess",
+        "audit",
         "doctor",
         "inbox-path",
         "list",
@@ -80,8 +80,8 @@ describe("PALETTE_COMMANDS roster", () => {
 });
 
 describe("per-command timeouts", () => {
-  it("assess and run-once carry long budgets; everything else keeps the default", () => {
-    expect(timeoutFor("assess")).toBe(600_000);
+  it("audit and run-once carry long budgets; everything else keeps the default", () => {
+    expect(timeoutFor("audit")).toBe(600_000);
     expect(timeoutFor("run-once")).toBe(3_600_000);
     expect(timeoutFor("status")).toBe(DEFAULT_TIMEOUT_MS);
     expect(timeoutFor("not-a-command")).toBe(DEFAULT_TIMEOUT_MS);

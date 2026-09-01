@@ -1380,6 +1380,38 @@ describe("run(['--help'])", () => {
     expect(out).toContain("import <ref>");
     expect(out).not.toContain("dispatch <ref>");
   });
+
+  // surface-legibility Task 2: `assess` was renamed to `audit`, `analyze` to
+  // `investigate` (no aliases) — pin that help lists ONLY the new verbs.
+  it("lists `audit`/`investigate` and never `assess <path...>`/`analyze <owner/repo#N...>`", async () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    try {
+      await run(["--help"], makeDeps());
+    } finally {
+      spy.mockRestore();
+    }
+    const out = lines.join("");
+    expect(out).toContain("audit <path|owner/repo|owner/repo#N> [--auto-plan]");
+    expect(out).toContain("audit review [<id>]");
+    expect(out).toContain("audit file <id> --all");
+    expect(out).toContain("audit discard <id>");
+    expect(out).toContain("investigate <owner/repo#N|url>");
+    expect(out).toContain("investigate review [<id>]");
+    expect(out).toContain("investigate edit <id>");
+    expect(out).toContain("investigate post <id>");
+    expect(out).not.toContain("assess <path");
+    expect(out).not.toContain("analyze <owner/repo#N");
+    expect(out).not.toMatch(/\bassess review\b/);
+    expect(out).not.toMatch(/\bassess file\b/);
+    expect(out).not.toMatch(/\bassess discard\b/);
+    expect(out).not.toMatch(/\banalyze review\b/);
+    expect(out).not.toMatch(/\banalyze edit\b/);
+    expect(out).not.toMatch(/\banalyze post\b/);
+  });
 });
 
 describe("run(['-h'])", () => {
@@ -2785,19 +2817,21 @@ describe("run(['prs'])", () => {
   });
 });
 
-describe("run(['assess']) — routing", () => {
-  it("routes `assess <path> --auto-plan` to runAssessCommand, threading the flag into the queued ticket", async () => {
+describe("run(['audit']) — routing", () => {
+  it("routes `audit <path> --auto-plan` to runAssessCommand, threading the flag into the queued ticket", async () => {
     const { cfg, vaultRoot } = freshDispatchVault();
     const repoDir = mkdtempSync(join(tmpdir(), "junco-cli-assess-repo-"));
     const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
-    const code = await run(["assess", repoDir, "--auto-plan"], {
+    const code = await run(["audit", repoDir, "--auto-plan"], {
       loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
       env: { HOME: vaultRoot },
     });
     expect(code).toBe(0);
 
+    // The on-disk ticket id keeps its internal `assess-` prefix (buildAssessTicket,
+    // src/assessCmd.ts) — only the CLI verb and user-facing text renamed to `audit`.
     const inboxDir = join(vaultRoot, "Junco", "inbox");
     const files = readdirSync(inboxDir).filter((f) => f.startsWith("assess-"));
     expect(files).toHaveLength(1);
@@ -2807,17 +2841,95 @@ describe("run(['assess']) — routing", () => {
     expect(captured.join("")).toMatch(/auto-plan/i);
   });
 
-  it("no target -> exit 2, usage line", async () => {
+  it("no target -> exit 2, usage line naming `junco audit`", async () => {
     const { cfg, vaultRoot } = freshDispatchVault();
     const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
     const captured: string[] = [];
-    const code = await run(["assess"], {
+    const code = await run(["audit"], {
       loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),
       env: { HOME: vaultRoot },
     });
     expect(code).toBe(2);
     expect(captured.join("")).toMatch(/usage/i);
+    expect(captured.join("")).toContain("junco audit <path|owner/repo|owner/repo#N>");
+  });
+});
+
+describe("run(['investigate', ref]) — routing", () => {
+  it("routes `investigate <ref>` into runAnalyzeCommand's resolve step (not the no-ref usage path)", async () => {
+    const { cfg, vaultRoot } = freshDispatchVault();
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
+    const captured: string[] = [];
+    // cli.ts has no injectable seam for analyze/investigate (unlike `import`'s
+    // dispatchIssueFn), so this exercises the real lazy import + resolveIssueTarget,
+    // which fails fast on the sandbox's `ghBin: /nonexistent/gh` (ENOENT) — exit 1,
+    // prefixed `junco analyze:` (runAnalyzeCommand's own error prefix — an
+    // internal identifier, out of this task's rename scope). What this test
+    // discriminates: routing reached the resolve step at all, i.e. NOT the
+    // "missing ref" usage error (exit 2), which is what a mis-wired `investigate`
+    // subcommand block would fall into.
+    const code = await run(["investigate", "up/stream#7"], {
+      loadConfigFn: () => cfgWithDataDir,
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(code).toBe(1);
+    expect(captured.join("")).not.toMatch(/^Usage: junco investigate/);
+  });
+
+  it("missing ref -> exit 2, usage line naming `junco investigate`", async () => {
+    const { cfg, vaultRoot } = freshDispatchVault();
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
+    const captured: string[] = [];
+    const code = await run(["investigate"], {
+      loadConfigFn: () => cfgWithDataDir,
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(code).toBe(2);
+    expect(captured.join("")).toContain("Usage: junco investigate <owner/repo#N|url>");
+  });
+});
+
+// --- assess/analyze (removed — renamed to `audit`/`investigate` above,
+// deliberately with NO alias; pin this so nobody "helpfully" adds either old
+// verb back). `assess`/`analyze` are dictionary synonyms, near-identical in
+// shape — the whole defect `audit`/`investigate` fixes. ---
+
+describe("run(['assess']) — removed, no alias", () => {
+  it("falls through to the unknown-subcommand path: exit 2", async () => {
+    const errLines: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await run(["assess", "/some/repo"], { env: { HOME: "/x" } });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(code).toBe(2);
+    expect(errLines.join("")).toContain("Unknown subcommand: assess");
+  });
+});
+
+describe("run(['analyze']) — removed, no alias", () => {
+  it("falls through to the unknown-subcommand path: exit 2", async () => {
+    const errLines: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await run(["analyze", "owner/repo#1"], { env: { HOME: "/x" } });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(code).toBe(2);
+    expect(errLines.join("")).toContain("Unknown subcommand: analyze");
   });
 });
 

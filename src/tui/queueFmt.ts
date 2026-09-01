@@ -11,6 +11,16 @@ export function queueLabel(github: TicketGithub | null, id: string): string {
   return id.length > ID_MAX ? id.slice(0, ID_MAX - 1) + "…" : id;
 }
 
+/** Display-only rename for a local (non-github) queue row's `kind` badge
+ * (QueueView.tsx) — QueueWaiting.kind (queueSnapshot.ts) keeps its internal
+ * `"assess"` value (mirrors TaskRecord.kind; out of surface-legibility Task
+ * 2's scope), but the CLI verb that produces those tickets is now `junco
+ * audit`, so the rendered badge tracks that rename instead of resurrecting
+ * the retired word. */
+export function fmtQueueKind(kind: string): string {
+  return kind === "assess" ? "audit" : kind;
+}
+
 export function fmtElapsed(startedAt: string | null, now: Date): string | null {
   if (!startedAt) return null;
   const ms = now.getTime() - Date.parse(startedAt);
