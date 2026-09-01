@@ -22,8 +22,8 @@
  * - files_table_referenced: every path in the Files table appears in a Step body [prose only]
  * - files_paths_exist:     filesystem-aware Files-table path validation [prose only]
  * - patch_parses:          `junco-patch` fence must be a well-formed `git format-patch`
- *                          series (mbox header + `diff --git` hunk, under MAX_PATCH_BYTES)
- *                          [apply only]
+ *                          series (mbox header + plain-path `diff --git` hunk, under
+ *                          MAX_PATCH_BYTES) [apply only]
  * - patch_paths_sane:      patch series must not touch traversal/absolute paths or carry
  *                          a binary hunk [apply only]
  * - patch_has_verification (warn): apply ticket should still carry a ## Verification block
@@ -412,8 +412,8 @@ function checkPatchSeries(body: string): LintViolation[] {
       severity: "error",
       message:
         "the `junco-patch` fence is not a well-formed `git format-patch` series (needs an mbox " +
-        "`From <sha> …` header and at least one `diff --git` hunk, under " +
-        `${Math.round(MAX_PATCH_BYTES / 1024)} KB)`,
+        "`From <sha> …` header and at least one `diff --git a/… b/…` hunk — a path git had to " +
+        `C-quote ("…") is refused — under ${Math.round(MAX_PATCH_BYTES / 1024)} KB)`,
     });
     return violations;
   }
