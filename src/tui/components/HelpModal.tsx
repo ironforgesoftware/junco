@@ -74,6 +74,7 @@ export function HelpModal({
           ["[ / ]", "scroll (alias of ↑/↓ in views)"],
           ["g/G", "first / last"],
           ["enter", "open detail — repo (rail), issue (list), PR (monitor / PRs view)"],
+          ["t on an issue", "transcript of the ticket junco built for it (live while it runs)"],
           ["/", "filter issues (esc clears)"],
           [",", "config editor"],
           [":", "command palette (alias of the commands chip)"],

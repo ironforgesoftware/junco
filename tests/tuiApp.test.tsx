@@ -8,6 +8,7 @@ import { App } from "../src/tui/App.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { NWO_MAX_WIDTH } from "../src/tui/components/PrList.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
+import { githubTicketId } from "../src/githubInbox.js";
 import type { DashboardClient, HealthInfo, Result } from "../src/tui/ghClient.js";
 import type { DashIssue } from "../src/tui/state.js";
 import type { DashPr } from "../src/tui/prState.js";
@@ -3388,5 +3389,180 @@ describe("transcript view", () => {
     await fireUntil(r.stdin, click(x, yIdx + 1), () =>
       (r.lastFrame() ?? "").includes("transcript ▸ assess-x-1"),
     );
+  });
+});
+
+describe("t on an issue opens its ticket transcript (#330)", () => {
+  const wl = () => join(mkdtempSync(join(tmpdir(), "junco-t330-")), "wl.json");
+  const NWO = "acme/api";
+  const ISSUE_NUMBER = 7; // rawIssue's number
+  // Bridged ticket ids (`gh-<owner>-<repo>-<hash>-<n>`) carry no leading
+  // stamp — unlike local queue rows (`stripStamp`'d elsewhere) — so a direct
+  // id compare against githubTicketId's own output is correct.
+  const TICKET_ID = githubTicketId(NWO, ISSUE_NUMBER);
+
+  const focusIssues = async (r: {
+    stdin: { write: (s: string) => void };
+    lastFrame: () => string | undefined;
+  }) => {
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    r.stdin.write("\t"); // focus issues pane
+    await tick();
+  };
+
+  it("opens the transcript for a running bridged ticket", async () => {
+    const { client } = makeClient({ [NWO]: [rawIssue] });
+    const snap: QueueSnapshot = {
+      ...QUEUE_SNAP,
+      running: [
+        {
+          id: TICKET_ID,
+          github: { nwo: NWO, issue: ISSUE_NUMBER, kind: "pr", external: false },
+          turns: 1,
+          lastTool: null,
+          outputTokens: null,
+          startedAt: "2026-07-07T10:00:00Z",
+          updatedAt: null,
+          stale: false,
+          repoPath: null,
+        },
+      ],
+      waiting: [],
+      recent: [],
+    };
+    const r = renderApp(client, wl(), 999999, undefined, async () => snap);
+    await focusIssues(r);
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("transcript"));
+    expect(r.lastFrame()).toContain(TICKET_ID);
+  });
+
+  it("toasts instead of opening when no ticket is in flight for the issue", async () => {
+    const { client } = makeClient({ [NWO]: [rawIssue] });
+    const emptySnap: QueueSnapshot = { ...QUEUE_SNAP, running: [], waiting: [], recent: [] };
+    const r = renderApp(client, wl(), 999999, undefined, async () => emptySnap);
+    await focusIssues(r);
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("no ticket in flight"));
+    expect(r.lastFrame()).not.toContain("transcript");
+  });
+
+  it("toasts 'not started yet' for a waiting ticket", async () => {
+    const { client } = makeClient({ [NWO]: [rawIssue] });
+    const waitingSnap: QueueSnapshot = {
+      ...QUEUE_SNAP,
+      running: [],
+      recent: [],
+      waiting: [
+        {
+          id: TICKET_ID,
+          github: { nwo: NWO, issue: ISSUE_NUMBER, kind: "pr", external: false },
+          kind: "pr",
+          priority: "normal",
+          retryCount: 0,
+          notBefore: null,
+          deferred: false,
+          queuedAt: null,
+          repoPath: null,
+        },
+      ],
+    };
+    const r = renderApp(client, wl(), 999999, undefined, async () => waitingSnap);
+    await focusIssues(r);
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("not started yet"));
+  });
+
+  it("opens the transcript for the issue from the open issue-detail view, and esc returns to that detail, not main (R4)", async () => {
+    const { client } = makeClient({ [NWO]: [rawIssue] });
+    const snap: QueueSnapshot = {
+      ...QUEUE_SNAP,
+      running: [
+        {
+          id: TICKET_ID,
+          github: { nwo: NWO, issue: ISSUE_NUMBER, kind: "pr", external: false },
+          turns: 1,
+          lastTool: null,
+          outputTokens: null,
+          startedAt: "2026-07-07T10:00:00Z",
+          updatedAt: null,
+          stale: false,
+          repoPath: null,
+        },
+      ],
+      waiting: [],
+      recent: [],
+    };
+    const r = renderApp(client, wl(), 999999, undefined, async () => snap);
+    await focusIssues(r);
+    r.stdin.write("\r"); // medium layout → issue detail view
+    await until(() => (r.lastFrame() ?? "").includes("the body"));
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("transcript"));
+    expect(r.lastFrame()).toContain(TICKET_ID);
+    r.stdin.write(ESC);
+    // Detail's `from` is the issue-detail overlay, not main — the frozen
+    // detail state was never cleared while the transcript was open, so esc
+    // lands right back on the body the user came from (prDetail.from's
+    // recipe, mirrored for the transcript, #330/R4).
+    await until(() => (r.lastFrame() ?? "").includes("the body"));
+  });
+
+  it("esc from a LIST-opened transcript still lands on main, not detail (R4)", async () => {
+    const { client } = makeClient({ [NWO]: [rawIssue] });
+    const snap: QueueSnapshot = {
+      ...QUEUE_SNAP,
+      running: [
+        {
+          id: TICKET_ID,
+          github: { nwo: NWO, issue: ISSUE_NUMBER, kind: "pr", external: false },
+          turns: 1,
+          lastTool: null,
+          outputTokens: null,
+          startedAt: "2026-07-07T10:00:00Z",
+          updatedAt: null,
+          stale: false,
+          repoPath: null,
+        },
+      ],
+      waiting: [],
+      recent: [],
+    };
+    const r = renderApp(client, wl(), 999999, undefined, async () => snap);
+    await focusIssues(r);
+    r.stdin.write("t"); // opened straight from the issue list, no detail view
+    await until(() => (r.lastFrame() ?? "").includes("transcript"));
+    r.stdin.write(ESC);
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    expect(r.lastFrame()).not.toContain("the body"); // never opened the detail overlay
+  });
+
+  it("opens the -plan-suffixed transcript for a junco:planning issue (R3)", async () => {
+    const planningIssue: DashIssue = { ...rawIssue, labels: ["junco", "junco:planning"] };
+    const { client } = makeClient({ [NWO]: [planningIssue] });
+    const PLAN_TICKET_ID = githubTicketId(NWO, ISSUE_NUMBER, "plan");
+    const snap: QueueSnapshot = {
+      ...QUEUE_SNAP,
+      running: [
+        {
+          id: PLAN_TICKET_ID,
+          github: { nwo: NWO, issue: ISSUE_NUMBER, kind: "plan", external: false },
+          turns: 1,
+          lastTool: null,
+          outputTokens: null,
+          startedAt: "2026-07-07T10:00:00Z",
+          updatedAt: null,
+          stale: false,
+          repoPath: null,
+        },
+      ],
+      waiting: [],
+      recent: [],
+    };
+    const r = renderApp(client, wl(), 999999, undefined, async () => snap);
+    await focusIssues(r);
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("transcript"));
+    expect(r.lastFrame()).toContain(PLAN_TICKET_ID);
   });
 });

@@ -8,6 +8,7 @@
  * discarded here — loudly.
  */
 import { basename } from "node:path";
+import { randomBytes } from "node:crypto";
 import type { Config, GithubRepoMapping } from "./types.js";
 import { parseTicket } from "./ticket.js";
 import { resolveWatchedRepos } from "./watchlist.js";
@@ -16,7 +17,12 @@ import { createIssueLive } from "./assessFiling.js";
 import { gh, git } from "./git.js";
 import { expandHome } from "./config.js";
 import { canonPath } from "./unwatchCmd.js";
-import { extractPlanSetBody, nwoFromRemoteUrl, timeoutMarker } from "./githubInbox.js";
+import {
+  extractPlanSetBody,
+  nwoFromRemoteUrl,
+  timeoutMarker,
+  ticketMarkers,
+} from "./githubInbox.js";
 import { parsePlanSet } from "./planCompiler.js";
 import { slugifyId } from "./slug.js";
 
@@ -45,31 +51,16 @@ export function wrapInFence(tag: string, body: string): string {
   return `${fence}${tag}\n${body.trimEnd()}\n${fence}`;
 }
 
-/** GitHub caps issue bodies at 65536 characters; past this budget the parked
- * issue keeps only the machine fence rather than truncating either copy. */
-const PARKED_BODY_BUDGET = 60_000;
-
-/** Compose the parked single-ticket issue body: the plan rendered as normal
- * markdown for the human reviewer, then the machine fence collapsed in a
- * <details> block, then the markers. The fence stays the ONLY thing the
- * bridge queues (it extracts the last junco-ticket-tagged fence), and the
- * summary says so — a pre-label edit that desyncs the two copies cannot
- * silently redirect execution, and the edited-after-label guard re-vouches
- * everything anyway. The junco-plan (--plan) route deliberately keeps its
- * fence-only shape: its payload is YAML, which monospace presents correctly
- * and unfenced markdown would mangle. */
+/** Compose the parked single-ticket issue body (#329): the plan rendered as
+ * normal markdown ONCE, wrapped in invisible nonce-stamped delimiters the
+ * bridge extracts, then the markers. There is no second machine copy — the
+ * rendered bytes ARE what queues, so what the reviewer reads is exactly what
+ * runs and a pre-label edit in GitHub's UI is a supported workflow. The
+ * junco-plan (--plan) route keeps its fence on purpose: its payload is YAML,
+ * which monospace presents correctly. */
 function parkedIssueBody(header: string, body: string, markers: string): string {
-  const fenced = wrapInFence("junco-ticket", body);
-  const readable =
-    header +
-    "\n\n" +
-    body.trimEnd() +
-    "\n\n<details><summary>machine copy — this fenced block is what queues; the prose above is a rendered duplicate</summary>\n\n" +
-    fenced +
-    "\n\n</details>\n\n" +
-    markers;
-  if (readable.length <= PARKED_BODY_BUDGET) return readable;
-  return header + "\n\n" + fenced + "\n\n" + markers;
+  const { start, end } = ticketMarkers(randomBytes(4).toString("hex"));
+  return `${header}\n\n${start}\n${body.trimEnd()}\n${end}\n${markers}`;
 }
 
 function firstHeading(body: string): string | null {

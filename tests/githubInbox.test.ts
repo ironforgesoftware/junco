@@ -11,6 +11,7 @@ import {
   newBridgeState,
   extractPlanBody,
   extractPlanSetBody,
+  ticketMarkers,
   buildPlanComment,
   buildExecutionTicket,
   timeoutMarker,
@@ -1451,6 +1452,65 @@ describe("extractPlanBody", () => {
   });
 });
 
+describe("marked ticket blocks (#329)", () => {
+  const m = ticketMarkers("a3f81c2e");
+
+  it("extracts the body between a matched marker pair", () => {
+    const body = `_header_\n\n${m.start}\n# Plan\n\n## Why\n\nbecause\n${m.end}\n<!-- junco:as-issue -->\n`;
+    expect(extractPlanBody(body)).toBe("# Plan\n\n## Why\n\nbecause");
+  });
+
+  it("survives a body that contains a marker-shaped comment with a different nonce", () => {
+    const inner = ticketMarkers("deadbeef");
+    const body = `${m.start}\n# Plan\n\nquoting an older parked issue:\n${inner.start}\nold\n${inner.end}\n${m.end}\n`;
+    // The outer start is seen first and its matching end (same nonce) closes
+    // the block, so the differently-nonced inner pair rides through as text.
+    const got = extractPlanBody(body);
+    expect(got).toContain("# Plan");
+    expect(got).toContain("quoting an older parked issue");
+  });
+
+  it("ignores an unterminated marker (no end) and falls back to a fence", () => {
+    const body = `${m.start}\n# Half\n\n\`\`\`junco-ticket\n# Fenced\n\`\`\`\n`;
+    expect(extractPlanBody(body)).toBe("# Fenced");
+  });
+
+  it("still reads an old-format fenced parked body (back-compat)", () => {
+    const body =
+      "_header_\n\n````junco-ticket\n# Old\n\n```bash\necho hi\n```\n````\n\n<!-- junco:as-issue -->\n";
+    expect(extractPlanBody(body)).toContain("# Old");
+    expect(extractPlanBody(body)).toContain("echo hi");
+  });
+
+  it("normalizes CRLF and strips smuggled frontmatter, exactly like the fence path", () => {
+    const body = `${m.start}\r\n---\r\nrepo: /evil\r\n---\r\n# Plan\r\n${m.end}\r\n`;
+    const got = extractPlanBody(body);
+    expect(got).toBe("# Plan");
+    expect(got).not.toContain("repo:");
+    expect(got).not.toContain("\r");
+  });
+
+  it("an empty marked block is not a usable body", () => {
+    expect(extractPlanBody(`${m.start}\n\n${m.end}\n`)).toBe(null);
+  });
+
+  it("ignores a marker pair fenced INSIDE the plan; the outer pair still delimits the whole body, quoted example included (B1)", () => {
+    // The quoted example deliberately reuses the OUTER nonce: that is the only
+    // shape that discriminates fence-aware scanning from the fence-blind
+    // original. Without fence tracking the fenced `end` closes the outer block
+    // early and the extract stops at "old", losing the rest of the plan; with
+    // it, the fenced markers are literal text and the outer pair delimits.
+    const body = `${m.start}\n# Plan\n\nExample of the marker format:\n\n\`\`\`\n${m.start}\nold\n${m.end}\n\`\`\`\n${m.end}\n`;
+    const got = extractPlanBody(body);
+    expect(got).toContain("# Plan");
+    expect(got).toContain(m.start); // fenced quote rides through as literal text
+    expect(got).toContain("old");
+    // The discriminating assertion: the body runs to the closing fence, which
+    // sits AFTER the fenced `end` marker a fence-blind scan would stop at.
+    expect(got?.endsWith("```")).toBe(true);
+  });
+});
+
 describe("buildPlanComment", () => {
   it("carries the marker, the fenced plan, and approval instructions", () => {
     const c = buildPlanComment("# Plan\n## Steps", {
@@ -1492,6 +1552,17 @@ describe("buildPlanComment", () => {
     expect(
       buildPlanComment("x".repeat(70_000), { issue: 1, trigger: "junco", requireApproval: true }),
     ).toBeNull();
+  });
+
+  it("a plan whose fenced CONTENT quotes a complete marker pair still round-trips the FENCED plan, not the quoted span (B1)", () => {
+    const plan =
+      "# Plan\n\nExample of the marker format:\n\n```\n" +
+      "<!-- junco:ticket:start:ab12cd34 -->\nthe plan text\n<!-- junco:ticket:end:ab12cd34 -->\n```";
+    const c = buildPlanComment(plan, { issue: 1, trigger: "junco", requireApproval: true });
+    expect(c).not.toBeNull();
+    const got = extractPlanBody(c!);
+    expect(got).toBe(plan); // the whole fenced plan, quoted example included
+    expect(got).not.toBe("the plan text"); // NOT the misextracted quoted span
   });
 });
 
