@@ -68,6 +68,22 @@ describe("runChatTurn (spec 2026-09-01 §3)", () => {
     expect(r.abortReason).toBe("operator");
   });
 
+  it("a pre-aborted signal skips the turn entirely (no prompt, no abort call)", async () => {
+    const s = await fakeChatSession([chatScriptText("never")])();
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const r = await runChatTurn(s, {
+      text: "x",
+      timeoutMs: 1_000,
+      emit: () => {},
+      abortSignal: ctrl.signal,
+    });
+    expect(r.status).toBe("aborted");
+    expect(r.abortReason).toBe("operator");
+    expect(s.prompts).toEqual([]);
+    expect(s.aborted).toBe(0);
+  });
+
   it("a thrown provider error becomes status error with the message", async () => {
     const s = await fakeChatSession([
       { events: [], throws: "fetch failed: 429 too many requests" },

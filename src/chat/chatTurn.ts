@@ -60,6 +60,24 @@ export async function runChatTurn(
     };
   }
 
+  // Pre-aborted signal means "do not run": the SDK does not latch aborts —
+  // session.abort() with no active run is a no-op (see runAgent's identical
+  // preAbortedResult short-circuit at src/agent/session.ts:214-229) — so
+  // without this check the turn would run to completion (or its own timeout)
+  // regardless of the operator's already-signalled abort.
+  if (opts.abortSignal?.aborted) {
+    return {
+      mode: "prompt",
+      status: "aborted",
+      abortReason: "operator",
+      errorMessage: null,
+      usage: ZERO_USAGE,
+      durationMs: now() - start,
+      finalText: "",
+      allText: "",
+    };
+  }
+
   const acc = new RunAccumulator();
   let abortReason: "timeout" | "operator" | null = null;
   let wedged = false;
@@ -82,8 +100,7 @@ export async function runChatTurn(
   };
   const timer = setTimeout(() => softAbort("timeout"), opts.timeoutMs);
   const onExternalAbort = (): void => softAbort("operator");
-  if (opts.abortSignal?.aborted) onExternalAbort();
-  else opts.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
+  opts.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
 
   let unsubscribe: (() => void) | undefined;
   let thrown: string | null = null;
