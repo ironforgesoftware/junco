@@ -196,6 +196,13 @@ export interface Config {
   // Whether to sweep uncommitted leftovers into a final commit
   // (`worker.commitLeftovers`). Pi-strict default is false (fail-loud).
   commitLeftoversEnabled: boolean;
+  // Escalation ladder Stage 2a (apply-tickets-design.md, `worker.applyFallbackToAgent`):
+  // when a patch-ticket's junco-patch series fails to apply, fall back to the
+  // agent — using the patch as spec — instead of failing the ticket
+  // terminally. Default true; buildPrBody's disclosure banner covers the
+  // approval-semantics gap this creates (the PR is no longer byte-identical
+  // to what a human approved on the GitHub route).
+  applyFallbackToAgent: boolean;
   // Daily USD spend cap (`worker.dailyBudgetUsd`); 0 = off, spend ledger never
   // consulted. See providerGate.ts's budget_exhausted state.
   dailyBudgetUsd: number;

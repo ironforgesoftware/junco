@@ -9,12 +9,15 @@
  * errorMessage + zero commits as transient and would requeue a deterministic
  * patch conflict until the retry budget burned. The caller (prFlow.ts Phase 4)
  * terminates the ticket directly on a `{ok:false}` outcome instead of routing
- * it through Phase 5's transient classifier.
+ * it through Phase 5's transient classifier — UNLESS `worker.applyFallbackToAgent`
+ * is on (default), in which case Phase 4 escalates to the agent using
+ * `buildApplyFallbackPrompt` (below) instead of terminating (Stage 2a of the
+ * escalation ladder).
  */
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Config, RunResult, Usage } from "./types.js";
+import type { Config, RunResult, Ticket, Usage } from "./types.js";
 import { git } from "./git.js";
 import type { PatchSeries } from "./patchTicket.js";
 
@@ -72,4 +75,44 @@ export async function applyPatchSeries(
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------------------
+// buildApplyFallbackPrompt — Stage 2a escalation ladder (apply-tickets-design.md).
+// ---------------------------------------------------------------------------
+
+/**
+ * Prompt for the fallback agent turn dispatched when a ticket's junco-patch
+ * series either failed to apply, or applied but the ticket's own
+ * `## Verification` block then failed. Mirrors buildCorrectivePrompt's shape
+ * (critic.ts) but frames the patch as a SPECIFICATION to implement against
+ * current reality, not bytes to replay — the series has already been tried
+ * (and rolled back on an apply failure), so re-running `git am`/`git apply`
+ * would just fail again identically.
+ */
+export function buildApplyFallbackPrompt(
+  task: Ticket,
+  series: PatchSeries,
+  failure: { kind: "apply" | "verification"; detail: string },
+): string {
+  const what =
+    failure.kind === "apply"
+      ? "The ticket carried a patch series, but it did not apply to the current tree."
+      : "The ticket's patch series applied cleanly, but the ticket's `## Verification` block failed.";
+  return (
+    "## Apply-mode fallback — finish this ticket yourself\n\n" +
+    what +
+    "\n\nThe patch below is the CHANGE THAT WAS INTENDED and reviewed. Treat it as the\n" +
+    "specification, not as bytes to replay: the tree has moved, so implement the same\n" +
+    "intent against what is actually there. Do NOT run `git am` or `git apply` — the\n" +
+    "series has already been tried and rolled back.\n\n" +
+    `### Why it failed\n\n\`\`\`\n${failure.detail}\n\`\`\`\n\n` +
+    `### Intended change (${series.count} patch(es), ${series.files.length} file(s))\n\n` +
+    "```\n" +
+    series.raw +
+    "\n```\n\n" +
+    "### The ticket\n\n" +
+    task.body +
+    "\n"
+  );
 }

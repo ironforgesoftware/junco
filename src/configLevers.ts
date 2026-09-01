@@ -337,6 +337,15 @@ export const LEVERS: Lever[] = [
     description: "Sweep uncommitted leftovers into a final commit at run end.",
   },
   {
+    path: "worker.applyFallbackToAgent",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "live",
+    description:
+      "When a patch ticket's junco-patch series fails to apply, fall back to the agent (patch as spec) instead of failing the ticket terminally.",
+  },
+  {
     path: "worker.dailyBudgetUsd",
     type: "number",
     default: 0,

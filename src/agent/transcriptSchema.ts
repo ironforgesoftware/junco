@@ -12,7 +12,14 @@ import type { GuardManagerOptions } from "./guardManager.js";
 
 export const TRANSCRIPT_VERSION = 2;
 
-export type FlowKind = "qa" | "plan" | "pr" | "pr_corrective" | "assess" | "analyze";
+export type FlowKind =
+  | "qa"
+  | "plan"
+  | "pr"
+  | "pr_corrective"
+  | "pr_apply_fallback"
+  | "assess"
+  | "analyze";
 
 export interface MetaRecord {
   type: "junco_meta";

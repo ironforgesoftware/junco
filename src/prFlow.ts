@@ -31,7 +31,7 @@ import {
 } from "./pr.js";
 import { lintTicket, LabelCache } from "./planLint.js";
 import { parsePatchSeries, summarizePatchFenceForPr } from "./patchTicket.js";
-import { applyPatchSeries } from "./applyPatch.js";
+import { applyPatchSeries, buildApplyFallbackPrompt } from "./applyPatch.js";
 import { extractPatchBody } from "./githubInbox.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
 import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
@@ -77,6 +77,13 @@ export interface PrOutcome {
   /** The base branch could not be fetched (offline) so the worktree was cut
    * from a possibly-stale local `origin/<base>` — buildPrBody flags it. */
   staleBase: boolean;
+  /** Stage 2a escalation ladder (apply-tickets-design.md): set when a
+   * junco-patch ticket's apply (or, later, its own Verification block)
+   * failed and `worker.applyFallbackToAgent` sent the ticket to the agent
+   * instead of failing it terminally. null on every other path, including a
+   * clean apply. buildPrBody renders this as a disclosure banner — the PR is
+   * no longer byte-identical to what a human approved on the GitHub route. */
+  applyFallback: { kind: "apply" | "verification"; reason: string } | null;
 }
 
 function emptyPrOutcome(ctx: RepoContext): PrOutcome {
@@ -97,6 +104,7 @@ function emptyPrOutcome(ctx: RepoContext): PrOutcome {
     prQueued: false,
     pushQueued: false,
     staleBase: false,
+    applyFallback: null,
   };
 }
 
@@ -255,6 +263,26 @@ export function buildPrBody(
 
   if (prOutcome.staleBase) {
     parts.push("> ⚠️ Built offline from a possibly stale base — rebase check recommended.");
+  }
+
+  // Apply-fallback disclosure (Stage 2a, apply-tickets-design.md). Approval
+  // semantics: on the GitHub route, a human applied the trigger label to a
+  // specific reviewed DIFF. When that diff didn't apply and the agent
+  // finished the ticket instead, the PR is no longer byte-identical to what
+  // was approved — a silent fallback would be a real gap in the approval
+  // model, so this banner is never optional when applyFallback is set.
+  if (prOutcome.applyFallback) {
+    const { kind, reason } = prOutcome.applyFallback;
+    const reasonFirstLine = reason.split("\n")[0];
+    const what =
+      kind === "apply"
+        ? "The reviewed patch did not apply cleanly"
+        : "The reviewed patch applied, but its Verification block failed";
+    parts.push(
+      `> **Apply-mode fallback.** ${what} (${reasonFirstLine}), so an agent completed ` +
+        "this ticket from the patch as specification. The diff below is NOT byte-identical " +
+        "to the patch that was approved — review it as ordinary agent work.",
+    );
   }
 
   // Critic banner (pass / missing).
@@ -486,6 +514,13 @@ export async function runPrFlow(
   // corrective-dispatch block, which runs only on the agent path but needs to
   // type-check regardless of which branch of this `if` executed.
   const flowCfg: Config = task.tools ? { ...cfg, tools: task.tools } : cfg;
+  // Shared with the plain-agent branch below AND the apply-fallback branch
+  // (Stage 2a) — a ticket-level `tools:` override and the network opt-in
+  // apply identically regardless of which path dispatched the session.
+  const makeAgentSessionFactory = (): (() => Promise<AgentSessionLike>) =>
+    (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
+      network: task.network ?? undefined,
+    });
   const patchSeries = parsePatchSeries(task.body);
   let result: RunResult;
   if (patchSeries !== null) {
@@ -494,7 +529,9 @@ export async function runPrFlow(
       files: patchSeries.files.length,
     });
     const outcome = await applyPatchSeries(cfg, wtPath, patchSeries);
-    if (!outcome.ok) {
+    if (outcome.ok) {
+      result = outcome.result;
+    } else if (!cfg.applyFallbackToAgent) {
       // Terminal by design — see applyPatch.ts's header: a conflict is
       // deterministic, so Phase 5's transient classifier must never see it.
       const phaseError = `apply failed: ${outcome.reason}`;
@@ -507,8 +544,41 @@ export async function runPrFlow(
         r,
         phaseError,
       );
+    } else {
+      // Stage 2a escalation ladder: the reviewed diff didn't apply, but the
+      // toggle says to finish the ticket anyway rather than fail it. The
+      // agent gets the patch as SPEC (buildApplyFallbackPrompt), not bytes to
+      // replay — re-running `git am`/`git apply` would just fail again.
+      // prOutcome.applyFallback drives both the critic-skip narrowing below
+      // (Phase 9) and buildPrBody's disclosure banner (the PR is no longer
+      // byte-identical to what a human approved on the GitHub route).
+      log.warn(
+        `apply failed: ${outcome.reason} — falling back to the agent ` +
+          "(worker.applyFallbackToAgent)",
+      );
+      prOutcome.applyFallback = { kind: "apply", reason: outcome.reason };
+      const fallbackPrompt = buildApplyFallbackPrompt(task, patchSeries, {
+        kind: "apply",
+        detail: outcome.reason,
+      });
+      result = await runEnveloped(
+        flowCfg,
+        {
+          ticketId: task.id,
+          flow: "pr_apply_fallback",
+          body: fallbackPrompt,
+          cwd: wtPath,
+          timeoutMs: task.timeoutSeconds * 1000,
+        },
+        {
+          createSession: makeAgentSessionFactory(),
+          abortSignal: deps.abortSignal,
+          onProgress: deps.onProgress,
+          onGuardDecision: deps.onGuardDecision,
+          spend: deps.spend,
+        },
+      );
     }
-    result = outcome.result;
   } else if (extractPatchBody(task.body) !== null) {
     // The fence is present but parsePatchSeries rejected it (no mbox header,
     // no diff --git hunk, or oversize) — mode-detection asymmetry guard:
@@ -543,9 +613,6 @@ export async function runPrFlow(
     // the ticket does next (Phase-3 Task 4 — the ledger is the honest record,
     // unlike the ticket's own footer accounting which never sees a requeued
     // attempt again).
-    const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
-      network: task.network ?? undefined,
-    });
     result = await runEnveloped(
       flowCfg,
       {
@@ -556,7 +623,7 @@ export async function runPrFlow(
         timeoutMs: task.timeoutSeconds * 1000,
       },
       {
-        createSession: factory,
+        createSession: makeAgentSessionFactory(),
         abortSignal: deps.abortSignal,
         onProgress: deps.onProgress,
         onGuardDecision: deps.onGuardDecision,
@@ -564,6 +631,12 @@ export async function runPrFlow(
       },
     );
   }
+
+  // True only for a clean `git am` apply with no Stage-2a escalation — the
+  // diff IS the spec, so both the no-sweep rule below (Phase 6) and the
+  // critic skip (Phase 9) apply. A fallback ran the agent, so from here on
+  // this ticket is treated exactly like a plain agent ticket.
+  const appliedCleanly = patchSeries !== null && prOutcome.applyFallback === null;
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
   // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
@@ -685,12 +758,14 @@ export async function runPrFlow(
     let newCommits = await countNewCommits(cfg, wtPath, sinceRef);
     const dirty = await worktreeIsDirty(cfg, wtPath);
     if (newCommits === 0 && dirty) {
-      if (patchSeries !== null) {
+      if (appliedCleanly) {
         // `git am` applies AND commits — a dirty-but-uncommitted worktree
         // after an apply means the am step left something behind (it should
         // not, since a failed am is aborted before Phase 4 returns). Never
         // silently sweep an apply ticket's leftovers into a commit the
-        // series itself did not author (spec open question 3).
+        // series itself did not author (spec open question 3). A Stage-2a
+        // fallback is excluded from this rule (appliedCleanly is false): the
+        // agent ran, so it is an ordinary agent ticket from here on.
         log.warn("apply mode: worktree dirty with no commits — failing loud, not sweeping");
       } else if (cfg.commitLeftoversEnabled) {
         log.warn("no commits but wt dirty; committing leftovers");
@@ -804,7 +879,14 @@ export async function runPrFlow(
     // IS the spec the ticket carried, so an LLM comparing the diff against
     // itself is tautological. Spec verification is a separate, independent
     // check (the ticket's own `## Verification` blocks) and still runs.
-    const skipCritic = skipPostSessionReview || patchSeries !== null;
+    //
+    // NARROWED for Stage 2a: that tautology only holds while the patch itself
+    // is what landed. The moment an apply-fallback session ran (the agent
+    // improvised against the patch as spec, not the patch's own bytes), diff-
+    // vs-spec review is meaningful again — skip on "patch applied AND no
+    // fallback ran", not merely "this ticket carried a patch" (appliedCleanly,
+    // computed right after Phase 4).
+    const skipCritic = skipPostSessionReview || appliedCleanly;
     const extraUsages: Usage[] = [];
     if (skipCritic) {
       // Record the skip as metadata (parity with worker.py PrOutcome.critic =
@@ -812,12 +894,11 @@ export async function runPrFlow(
       // on pass/missing, so this never surfaces in the PR body — metadata only.
       prOutcome.critic = {
         status: "skipped",
-        findings:
-          patchSeries !== null
-            ? "apply mode — the patch series is the spec"
-            : result.timedOut
-              ? "timed-out session"
-              : "aborted-by-repetition session",
+        findings: appliedCleanly
+          ? "apply mode — the patch series is the spec"
+          : result.timedOut
+            ? "timed-out session"
+            : "aborted-by-repetition session",
         rawOutput: "",
         usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
       };
@@ -832,7 +913,7 @@ export async function runPrFlow(
         );
       }
 
-      if (patchSeries === null) {
+      if (!appliedCleanly) {
         const critic = await runCriticPass(cfg, task, wtPath, sinceRef, {
           criticSessionFactory: deps.criticSessionFactory,
         });

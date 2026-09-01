@@ -191,4 +191,14 @@ describe("hosted-provider levers", () => {
       editable: true,
     });
   });
+
+  it("registers worker.applyFallbackToAgent as a live boolean lever defaulting to true (Stage 2a)", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("worker.applyFallbackToAgent")).toMatchObject({
+      type: "boolean",
+      default: true,
+      reload: "live",
+      editable: true,
+    });
+  });
 });

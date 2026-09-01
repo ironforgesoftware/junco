@@ -10,9 +10,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { applyPatchSeries } from "../src/applyPatch.js";
+import { applyPatchSeries, buildApplyFallbackPrompt } from "../src/applyPatch.js";
 import { parsePatchSeries, type PatchSeries } from "../src/patchTicket.js";
 import type { RunResult } from "../src/types.js";
+import { parseTicket } from "../src/ticket.js";
 import { makeConfig } from "./helpers/config.js";
 import { cloneHarness, run } from "./helpers/gitHarness.js";
 
@@ -230,5 +231,66 @@ describe("applyPatchSeries", () => {
     expect(result.usage.total).toBe(0);
     expect(result.stopReason).toBe("apply");
     expect(result.toolCalls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildApplyFallbackPrompt — Stage 2a escalation ladder.
+// ---------------------------------------------------------------------------
+
+describe("buildApplyFallbackPrompt", () => {
+  const series: PatchSeries = {
+    raw:
+      "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n" +
+      "Subject: [PATCH] feat: add levels 15-19\n\n" +
+      "diff --git a/game.js b/game.js\n" +
+      "index abc1234..def5678 100644\n" +
+      "--- a/game.js\n" +
+      "+++ b/game.js\n" +
+      "@@ -1,3 +1,4 @@\n" +
+      '+  "fifteen",\n',
+    count: 1,
+    files: ["game.js"],
+  };
+  const task = parseTicket(
+    "/q/t.md",
+    "---\nid: t\nrepo: /r\n---\n# Add levels 15-19\n\nExtend the LEVELS array in game.js.\n",
+    30,
+  );
+
+  it("contains the ticket's prose, the series verbatim, and the failure reason", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, {
+      kind: "apply",
+      detail: "git am --3way failed (exit 128): conflict in game.js",
+    });
+    expect(prompt).toContain("Extend the LEVELS array in game.js.");
+    expect(prompt).toContain(series.raw); // the series verbatim — the agent must read the diff
+    expect(prompt).toContain("git am --3way failed (exit 128): conflict in game.js");
+  });
+
+  it("instructs implementing the intended change against current reality, not replaying bytes", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, {
+      kind: "apply",
+      detail: "conflict",
+    });
+    expect(prompt).toMatch(/treat it as the\s*\n?\s*specification/i);
+    expect(prompt).toMatch(/implement the same\s*\n?\s*intent against what is actually there/i);
+  });
+
+  it("never tells the agent to run git am or git apply — the series already failed", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, { kind: "apply", detail: "conflict" });
+    expect(prompt).toMatch(/do not run `git am` or `git apply`/i);
+    // A prohibition, not a step: no bare imperative line telling it to run either.
+    expect(prompt).not.toMatch(/^\s*git am\b/m);
+    expect(prompt).not.toMatch(/^\s*git apply\b/m);
+  });
+
+  it("a verification-kind failure names the Verification block instead of the apply step", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, {
+      kind: "verification",
+      detail: "grep -q 'line one' feature.txt failed (exit 1)",
+    });
+    expect(prompt).toMatch(/applied cleanly.*Verification.*failed/i);
+    expect(prompt).toContain("grep -q 'line one' feature.txt failed (exit 1)");
   });
 });

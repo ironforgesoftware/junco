@@ -274,6 +274,16 @@ describe("loadConfig (JSON)", () => {
     expect(cfg.commitLeftoversEnabled).toBe(true);
   });
 
+  it("defaults worker.applyFallbackToAgent to true (Stage 2a escalation ladder)", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v" }));
+    expect(cfg.applyFallbackToAgent).toBe(true);
+  });
+
+  it("reads worker.applyFallbackToAgent=false from config.json", () => {
+    const cfg = loadConfig(writeJson({ vaultRoot: "/v", worker: { applyFallbackToAgent: false } }));
+    expect(cfg.applyFallbackToAgent).toBe(false);
+  });
+
   it("applies observability defaults when the section is absent", () => {
     const cfg = loadConfig(writeJson({ vaultRoot: "/v" }));
     expect(cfg.healthEnabled).toBe(true);

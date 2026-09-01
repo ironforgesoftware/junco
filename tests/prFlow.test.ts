@@ -1485,8 +1485,12 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(flow.commitCount).toBe(1);
   });
 
-  it("a failed apply fails the ticket instead of requeueing it (the requeue trap)", async () => {
-    const cfg = makeConfig(h);
+  it("a failed apply fails terminally when applyFallbackToAgent is false (the requeue trap survives)", async () => {
+    // Spread-override style (CLAUDE.md config-field rule): the toggle
+    // defaults to true, so this test states it explicitly to exercise the
+    // OFF path — Stage 1's terminal-fail-not-requeue invariant must stay
+    // byte-for-byte identical to before Stage 2a existed.
+    const cfg = makeConfig(h, { applyFallbackToAgent: false });
     const { task, path } = makeTicket(
       h,
       "apply-conflict.md",
@@ -1496,7 +1500,9 @@ describe("apply-mode tickets (2026-08-31)", () => {
 
     const flow = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: () => () => {
-        throw new Error("agent session must never be constructed for an apply ticket");
+        throw new Error(
+          "agent session must never be constructed when applyFallbackToAgent is false",
+        );
       },
       dirs: { done: h.done, failed: h.failed },
     });
@@ -1517,6 +1523,69 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(text).not.toMatch(/retry_count: 1/);
     expect(text).not.toMatch(/not_before:/);
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("a failed apply falls back to the agent when applyFallbackToAgent is true", async () => {
+    const capture = join(h.root, "pr-body-fallback-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/999"; exit 0`;
+    // applyFallbackToAgent defaults to true — not overridden, on purpose.
+    const cfg = makeConfig(h, { ghBin: ghShim(h.root, "gh-apply-fallback.sh", prCreate) });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback.md",
+      `---\nid: apply-fallback\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let sessionConstructed = false;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => {
+        sessionConstructed = true;
+        return commitFactory({ commit: true })(fcfg, cwd);
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(sessionConstructed).toBe(true);
+    expect(flow.status).toBe("completed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/999");
+    expect(flow.commitCount).toBeGreaterThan(0);
+    // The disclosure banner (buildPrBody) names the failure and that an
+    // agent completed the work — asserted via the captured PR body since
+    // PrOutcome.applyFallback isn't itself part of PrFlowResult.
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("Apply-mode fallback");
+    expect(body).toMatch(/did not apply/);
+    expect(body).toMatch(/git am/);
+    expect(body).toMatch(/agent completed/i);
+  });
+
+  it("a successful apply never constructs a session regardless of the toggle", async () => {
+    for (const applyFallbackToAgent of [true, false]) {
+      const cfg = makeConfig(h, { applyFallbackToAgent });
+      const { task, path } = makeTicket(
+        h,
+        `apply-noagent-toggle-${applyFallbackToAgent}.md`,
+        `---\nid: apply-noagent-toggle-${applyFallbackToAgent}\nrepo: ${h.work}\n---\n${applyTicketBody(h.work)}`,
+      );
+      const ctx = ctxFor(cfg, task);
+
+      const flow = await runPrFlow(cfg, task, path, ctx, {
+        sessionFactoryFor: () => () => {
+          throw new Error("agent session must never be constructed for a clean apply");
+        },
+        dirs: { done: h.done, failed: h.failed },
+      });
+
+      expect(flow.status).toBe("completed");
+      expect(flow.commitCount).toBe(1);
+    }
   });
 
   it("a junco-patch fence present but not a well-formed series fails loud instead of falling through to the agent", async () => {
@@ -2338,6 +2407,7 @@ describe("buildPrBody github provenance", () => {
     criticRetriesUsed: 0,
     prQueued: false,
     staleBase: false,
+    applyFallback: null,
   };
   const okResult = {
     finalText: "done.",
@@ -2386,5 +2456,46 @@ describe("buildPrBody github provenance", () => {
       "> ⚠️ Built offline from a possibly stale base — rebase check recommended.",
     );
     expect(buildPrBody(t, ctx, emptyOutcome, okResult)).not.toContain("stale base");
+  });
+
+  // -------------------------------------------------------------------------
+  // Apply-fallback disclosure (Stage 2a, apply-tickets-design.md): approval
+  // semantics require this banner never be silent — a human on the GitHub
+  // route approved a specific diff, and the fallback means the PR no longer
+  // contains it.
+  // -------------------------------------------------------------------------
+
+  it("renders a disclosure banner naming the failure reason when applyFallback is set", () => {
+    const t = bodyTicket(null);
+    const outcome: PrOutcome = {
+      ...emptyOutcome,
+      applyFallback: {
+        kind: "apply",
+        reason: "git am --3way failed (exit 128): conflict in feature.txt",
+      },
+    };
+    const body = buildPrBody(t, ctx, outcome, okResult);
+    expect(body).toContain("Apply-mode fallback");
+    expect(body).toMatch(/did not apply/);
+    expect(body).toContain("git am --3way failed (exit 128): conflict in feature.txt");
+    expect(body).toMatch(/agent completed this ticket/i);
+    expect(body).toMatch(/NOT byte-identical/);
+  });
+
+  it("renders a verification-failure variant of the banner", () => {
+    const t = bodyTicket(null);
+    const outcome: PrOutcome = {
+      ...emptyOutcome,
+      applyFallback: { kind: "verification", reason: "grep -q foo failed (exit 1)" },
+    };
+    const body = buildPrBody(t, ctx, outcome, okResult);
+    expect(body).toContain("Apply-mode fallback");
+    expect(body).toMatch(/Verification block failed/);
+    expect(body).toContain("grep -q foo failed (exit 1)");
+  });
+
+  it("renders nothing extra when applyFallback is null", () => {
+    const t = bodyTicket(null);
+    expect(buildPrBody(t, ctx, emptyOutcome, okResult)).not.toContain("Apply-mode fallback");
   });
 });
