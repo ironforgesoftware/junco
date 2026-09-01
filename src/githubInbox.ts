@@ -266,23 +266,63 @@ export function ticketMarkers(nonce: string): { start: string; end: string } {
  * processing is deliberately identical to extractFencedBlock's: CRLF
  * normalized (#134), a smuggled frontmatter block stripped (frontmatter is
  * machine-owned — issue text can never set repo:/workdir:/tools:), trimmed,
- * empty → null. */
+ * empty → null.
+ *
+ * Fence-aware on purpose: `extractPlanBody` (below) tries this BEFORE the
+ * fence fallback, and serves three doors — the parked-issue body (markers),
+ * planner plan COMMENTS (fence-only), and the planner's whole-run allText
+ * (fence-only). A fenced plan that itself QUOTES a complete marker pair (a
+ * plan about junco's own marker format — junco is dogfooded on junco, so
+ * this is a matter of time, not a hypothetical) must never let the quoted
+ * pair outrank the visible, human-approved fence: a marker line that occurs
+ * inside a fenced code block is never treated as a real delimiter. An
+ * unbalanced fence in the plan (the fence never closes) degrades to "no
+ * marker-eligible lines" for the remainder of the scan, same as
+ * extractFencedBlock's own unterminated-fence handling — no marked block →
+ * fence fallback → planner route. */
 function extractMarkedBlock(text: string): string | null {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
+
+  // First pass: which lines sit at the TOP level (outside any fenced code
+  // block)? Only those are eligible to open or close a marker pair — a
+  // marker-shaped comment quoted inside a ```-fenced example is just text.
+  const atTopLevel: boolean[] = new Array(lines.length);
+  let fenceLen = 0; // 0 = at top level; >0 = inside a fence of this length
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (fenceLen === 0) {
+      const open = /^(`{3,})/.exec(line);
+      if (open) {
+        fenceLen = open[1].length;
+        atTopLevel[i] = false;
+        continue;
+      }
+      atTopLevel[i] = true;
+    } else {
+      atTopLevel[i] = false;
+      if (new RegExp(`^\`{${fenceLen},}\\s*$`).test(line)) fenceLen = 0;
+    }
+  }
+
   const openRe = new RegExp(`^<!--\\s*junco:ticket:start:(${TICKET_MARKER_NONCE})\\s*-->\\s*$`);
   let last: string | null = null;
   for (let i = 0; i < lines.length; i++) {
+    if (!atTopLevel[i]) continue;
     const m = openRe.exec(lines[i]);
     if (!m) continue;
     const closeRe = new RegExp(`^<!--\\s*junco:ticket:end:${m[1]}\\s*-->\\s*$`);
     let close = -1;
     for (let j = i + 1; j < lines.length; j++) {
+      if (!atTopLevel[j]) continue; // a fenced end-marker can't close this pair
       if (closeRe.test(lines[j])) {
         close = j;
         break;
       }
     }
     if (close === -1) continue; // unterminated → not a complete block; ignore
+    // The extracted SPAN still includes any fenced lines verbatim (a quoted
+    // example inside the outer pair rides through as literal text) — only
+    // the SCAN for delimiters ignores fenced lines, not the slice itself.
     last = lines.slice(i + 1, close).join("\n");
     i = close; // resume after this block's closer
   }

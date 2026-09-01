@@ -294,6 +294,12 @@ export function App(props: AppProps): React.JSX.Element {
   const [view, setView] = useState<View>("main");
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [prDetail, setPrDetail] = useState<PrDetailState | null>(null);
+  // Where esc returns after a transcript opened via `openIssueTranscript`
+  // (#330) — mirrors `prDetail.from`. Every OTHER transcript entry point
+  // (queue row, issue list) opens with the "main" default, so their esc
+  // behavior is unchanged; only a detail-opened transcript ("t" from the
+  // issue detail overlay) sets this to "detail".
+  const [transcriptFrom, setTranscriptFrom] = useState<"main" | "detail">("main");
   // Flips false on unmount so every async `.then`/`await` continuation below can
   // bail before touching state after the dashboard has exited. `assess` and the
   // other spawned CLIs can resolve up to cliRunner's 120s timeout past unmount;
@@ -804,19 +810,37 @@ export function App(props: AppProps): React.JSX.Element {
   // its FROZEN snapshot instead of the live rail selection. Bridged ticket
   // ids (`gh-<owner>-<repo>-<hash>-<n>`) carry no stamp prefix, so a direct
   // `r.id === id` compare (no stripStamp) is correct here, unlike the local
-  // queue rows elsewhere that use `displayId`.
+  // queue rows elsewhere that use `displayId`. A `junco:planning` issue's
+  // live ticket runs under the `-plan`-suffixed id (githubInbox.ts:170), so
+  // both ids are probed against the snapshot — the plain id first (an
+  // execution/ask ticket wins if, somehow, both exist) — or the transcript
+  // key would toast "no ticket in flight" for the one moment a user most
+  // wants to watch. `from` records whether this open came from the issue
+  // list ("main") or the issue-detail overlay ("detail") so esc (App.tsx's
+  // `close`) can return to wherever the user actually came from — mirrors
+  // `prDetail`'s own `from` field.
   const openIssueTranscript = useCallback(
-    (nwo: string | null | undefined, issue: DashIssue | null | undefined): void => {
+    (
+      nwo: string | null | undefined,
+      issue: DashIssue | null | undefined,
+      from: "main" | "detail" = "main",
+    ): void => {
       if (!nwo || !issue) return;
       const id = githubTicketId(nwo, issue.number);
-      const running = queueSnap?.running.some((r) => r.id === id) ?? false;
-      const recent = queueSnap?.recent.some((r) => r.id === id) ?? false;
-      const waiting = queueSnap?.waiting.some((r) => r.id === id) ?? false;
-      if (running || recent) {
-        openTranscript(id, { expectLive: running });
-        setView("transcript");
-        return;
+      const planId = githubTicketId(nwo, issue.number, "plan");
+      for (const candidate of [id, planId]) {
+        const running = queueSnap?.running.some((r) => r.id === candidate) ?? false;
+        const recent = queueSnap?.recent.some((r) => r.id === candidate) ?? false;
+        if (running || recent) {
+          setTranscriptFrom(from);
+          openTranscript(candidate, { expectLive: running });
+          setView("transcript");
+          return;
+        }
       }
+      const waiting =
+        (queueSnap?.waiting.some((r) => r.id === id) ?? false) ||
+        (queueSnap?.waiting.some((r) => r.id === planId) ?? false);
       showToast(
         "info",
         waiting
@@ -1244,7 +1268,7 @@ export function App(props: AppProps): React.JSX.Element {
       if (view === "cmdOutput") return void setView("palette");
       if (view === "transcript") {
         closeTranscript();
-        return void setView("main");
+        return void setView(transcriptFrom === "detail" ? "detail" : "main");
       }
       setView("main");
     };
@@ -1648,6 +1672,7 @@ export function App(props: AppProps): React.JSX.Element {
     toggleTranscriptThinking,
     setTranscriptFollow,
     prDetail,
+    transcriptFrom,
     reviewState,
     loadReview,
     watchlistError,
@@ -1720,11 +1745,12 @@ export function App(props: AppProps): React.JSX.Element {
       case "cmdOutput":
         return { esc: () => setView("palette") };
       case "transcript":
-        // Same recipe as the q/esc close: clear the state, then navigate back.
+        // Same recipe as the q/esc close: clear the state, then navigate back
+        // to wherever this transcript was opened from (mirrors prDetail.from).
         return {
           esc: () => {
             closeTranscript();
-            setView("main");
+            setView(transcriptFrom === "detail" ? "detail" : "main");
           },
         };
       case "palette":
@@ -1758,6 +1784,7 @@ export function App(props: AppProps): React.JSX.Element {
     logOverlay,
     view,
     prDetail,
+    transcriptFrom,
     selectedPr,
     pane,
     body,
@@ -1997,7 +2024,7 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "]" || key.downArrow) return void scrollBy(1);
       if (input === "[" || key.upArrow) return void scrollBy(-1);
       if (input === "t")
-        return void openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null);
+        return void openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null, "detail");
       return;
     }
 

@@ -1362,7 +1362,7 @@ describe("header breadcrumbs", () => {
     await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
   });
 
-  it("t on a RUNNING queue row toasts instead of spawning retry", async () => {
+  it("y (retry) on a RUNNING queue row toasts instead of spawning retry", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const spawned: string[] = [];
     const r = renderApp(client, wlc(), 999999, async (name) => {
@@ -1377,7 +1377,9 @@ describe("header breadcrumbs", () => {
       const line = (r.lastFrame() ?? "").split("\n").find((l) => l.includes("#46 exec"));
       return line !== undefined && line.includes("▌");
     });
-    r.stdin.write("t");
+    // "retry" now derives to y, not t — t is structurally excluded (#330),
+    // reserved for the issue-transcript binding.
+    r.stdin.write("y");
     await until(() => (r.lastFrame() ?? "").includes("enter opens its transcript"));
     expect(spawned).toEqual([]);
   });
@@ -3473,7 +3475,7 @@ describe("t on an issue opens its ticket transcript (#330)", () => {
     await until(() => (r.lastFrame() ?? "").includes("not started yet"));
   });
 
-  it("opens the transcript for the issue from the open issue-detail view", async () => {
+  it("opens the transcript for the issue from the open issue-detail view, and esc returns to that detail, not main (R4)", async () => {
     const { client } = makeClient({ [NWO]: [rawIssue] });
     const snap: QueueSnapshot = {
       ...QUEUE_SNAP,
@@ -3500,5 +3502,69 @@ describe("t on an issue opens its ticket transcript (#330)", () => {
     r.stdin.write("t");
     await until(() => (r.lastFrame() ?? "").includes("transcript"));
     expect(r.lastFrame()).toContain(TICKET_ID);
+    r.stdin.write(ESC);
+    // Detail's `from` is the issue-detail overlay, not main — the frozen
+    // detail state was never cleared while the transcript was open, so esc
+    // lands right back on the body the user came from (prDetail.from's
+    // recipe, mirrored for the transcript, #330/R4).
+    await until(() => (r.lastFrame() ?? "").includes("the body"));
+  });
+
+  it("esc from a LIST-opened transcript still lands on main, not detail (R4)", async () => {
+    const { client } = makeClient({ [NWO]: [rawIssue] });
+    const snap: QueueSnapshot = {
+      ...QUEUE_SNAP,
+      running: [
+        {
+          id: TICKET_ID,
+          github: { nwo: NWO, issue: ISSUE_NUMBER, kind: "pr", external: false },
+          turns: 1,
+          lastTool: null,
+          outputTokens: null,
+          startedAt: "2026-07-07T10:00:00Z",
+          updatedAt: null,
+          stale: false,
+          repoPath: null,
+        },
+      ],
+      waiting: [],
+      recent: [],
+    };
+    const r = renderApp(client, wl(), 999999, undefined, async () => snap);
+    await focusIssues(r);
+    r.stdin.write("t"); // opened straight from the issue list, no detail view
+    await until(() => (r.lastFrame() ?? "").includes("transcript"));
+    r.stdin.write(ESC);
+    await until(() => (r.lastFrame() ?? "").includes("#7"));
+    expect(r.lastFrame()).not.toContain("the body"); // never opened the detail overlay
+  });
+
+  it("opens the -plan-suffixed transcript for a junco:planning issue (R3)", async () => {
+    const planningIssue: DashIssue = { ...rawIssue, labels: ["junco", "junco:planning"] };
+    const { client } = makeClient({ [NWO]: [planningIssue] });
+    const PLAN_TICKET_ID = githubTicketId(NWO, ISSUE_NUMBER, "plan");
+    const snap: QueueSnapshot = {
+      ...QUEUE_SNAP,
+      running: [
+        {
+          id: PLAN_TICKET_ID,
+          github: { nwo: NWO, issue: ISSUE_NUMBER, kind: "plan", external: false },
+          turns: 1,
+          lastTool: null,
+          outputTokens: null,
+          startedAt: "2026-07-07T10:00:00Z",
+          updatedAt: null,
+          stale: false,
+          repoPath: null,
+        },
+      ],
+      waiting: [],
+      recent: [],
+    };
+    const r = renderApp(client, wl(), 999999, undefined, async () => snap);
+    await focusIssues(r);
+    r.stdin.write("t");
+    await until(() => (r.lastFrame() ?? "").includes("transcript"));
+    expect(r.lastFrame()).toContain(PLAN_TICKET_ID);
   });
 });

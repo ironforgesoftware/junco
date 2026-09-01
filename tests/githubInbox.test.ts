@@ -1494,6 +1494,15 @@ describe("marked ticket blocks (#329)", () => {
   it("an empty marked block is not a usable body", () => {
     expect(extractPlanBody(`${m.start}\n\n${m.end}\n`)).toBe(null);
   });
+
+  it("ignores a marker pair fenced INSIDE the plan; the outer pair still delimits the whole body, quoted example included (B1)", () => {
+    const inner = ticketMarkers("deadbeef");
+    const body = `${m.start}\n# Plan\n\nExample of the marker format:\n\n\`\`\`\n${inner.start}\nold\n${inner.end}\n\`\`\`\n${m.end}\n`;
+    const got = extractPlanBody(body);
+    expect(got).toContain("# Plan");
+    expect(got).toContain(inner.start); // fenced quote rides through as literal text
+    expect(got).toContain("old");
+  });
 });
 
 describe("buildPlanComment", () => {
@@ -1537,6 +1546,17 @@ describe("buildPlanComment", () => {
     expect(
       buildPlanComment("x".repeat(70_000), { issue: 1, trigger: "junco", requireApproval: true }),
     ).toBeNull();
+  });
+
+  it("a plan whose fenced CONTENT quotes a complete marker pair still round-trips the FENCED plan, not the quoted span (B1)", () => {
+    const plan =
+      "# Plan\n\nExample of the marker format:\n\n```\n" +
+      "<!-- junco:ticket:start:ab12cd34 -->\nthe plan text\n<!-- junco:ticket:end:ab12cd34 -->\n```";
+    const c = buildPlanComment(plan, { issue: 1, trigger: "junco", requireApproval: true });
+    expect(c).not.toBeNull();
+    const got = extractPlanBody(c!);
+    expect(got).toBe(plan); // the whole fenced plan, quoted example included
+    expect(got).not.toBe("the plan text"); // NOT the misextracted quoted span
   });
 });
 
