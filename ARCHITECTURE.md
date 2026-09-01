@@ -330,7 +330,10 @@ Structured JSON output. Per-ticket context is injected via `AsyncLocalStorage` (
 ```
 GitHub issue         — trigger-labeled; bridge sweep verifies the labeler's
   ↓  pollGithubInbox   permission, re-vouches the body (edited after the
-                       label? refused — re-apply to re-vouch), then walks an
+                       label? refused — re-apply to re-vouch; door 3's
+                       sub-issue parent context gets the same check at the
+                       parent's own repo/number and is DROPPED, not refused,
+                       when it fails — #342), then walks an
                        ordered THREE-DOOR precedence list (spec 2026-08-21):
                          1. junco:ask present  → an ordinary Q&A ticket,
                                                   junco:queued (skips the

@@ -202,6 +202,7 @@ describe("pollGithubInbox", () => {
     permission?: string;
     parent?: string; // "" | "null" | JSON
     lastEditedAt?: string; // issue body last-edit time (GraphQL); "null" = never edited
+    parentLastEditedAt?: string; // same, for the sub-issue parent (#342); routed by its number
     origin?: string;
     failList?: boolean;
     comments?: unknown[];
@@ -209,6 +210,14 @@ describe("pollGithubInbox", () => {
   }) {
     const calls: Call[] = [];
     const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
+    const parentNumber = (() => {
+      try {
+        const p = JSON.parse(opts.parent || "null") as { number?: unknown } | null;
+        return typeof p?.number === "number" ? String(p.number) : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
     const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
       calls.push(args);
       if (args[0] === "issue" && args[1] === "list") {
@@ -221,9 +230,16 @@ describe("pollGithubInbox", () => {
       if (args[0] === "api" && args[1] === "user") return ok(opts.viewer ?? "junco-bot");
       if (args[0] === "api" && args[1] === "graphql") {
         // Two GraphQL queries share this argv shape — route by field: the
-        // body-vouching lookup (#130) vs. the sub-issue parent lookup.
+        // body-vouching lookup (#130) vs. the sub-issue parent lookup. The
+        // vouching lookup runs for the child AND its parent (#342) — route
+        // those by issue number.
         const q = args.find((a) => a.startsWith("query=")) ?? "";
-        if (q.includes("lastEditedAt")) return ok(opts.lastEditedAt ?? "null");
+        if (q.includes("lastEditedAt")) {
+          const num = args.find((a) => a.startsWith("number="))?.slice("number=".length);
+          if (parentNumber !== undefined && num === parentNumber)
+            return ok(opts.parentLastEditedAt ?? "null");
+          return ok(opts.lastEditedAt ?? "null");
+        }
         return ok(opts.parent ?? "null");
       }
       if (args[0] === "api" && String(args[2] ?? "").includes("/comments"))
@@ -761,15 +777,105 @@ tasks:
     });
   });
 
+  const parentIssue = JSON.stringify({
+    number: 7,
+    repository: { nameWithOwner: "acme/api" },
+    title: "Uploads are slow",
+    body: "30s uploads.",
+  });
+
   it("includes parent context when the issue is a sub-issue", async () => {
-    const f = makeFakes({
-      issues: [rawIssue],
-      events: labeledEvent,
-      parent: `{"title":"Uploads are slow","body":"30s uploads."}`,
-    });
+    const f = makeFakes({ issues: [rawIssue], events: labeledEvent, parent: parentIssue });
     await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
     expect(f.submitted[0].content).toContain("Parent issue (background only)");
     expect(f.submitted[0].content).toContain("Uploads are slow");
+  });
+
+  describe("sub-issue parent vouching (#342)", () => {
+    // The parent is a different issue with a different author; its body flows
+    // into the planner prompt, so it gets the same edited-after-label check as
+    // the child (#130) — but a failed check DROPS the context rather than
+    // refusing the child, which was vouched on its own.
+    it("drops the parent context when the parent body was edited AFTER the label", async () => {
+      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        const f = makeFakes({
+          issues: [rawIssue],
+          events: labeledEvent,
+          parent: parentIssue,
+          parentLastEditedAt: "2026-07-06T01:00:00Z", // an hour AFTER labeling
+        });
+        expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+        expect(f.submitted).toHaveLength(1);
+        expect(f.submitted[0].content).not.toContain("Parent issue (background only)");
+        expect(f.submitted[0].content).not.toContain("Uploads are slow");
+        expect(warnSpy.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(
+          /parent issue body edited after/,
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("drops the parent context when the parent's lastEditedAt is unverifiable", async () => {
+      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        const f = makeFakes({
+          issues: [rawIssue],
+          events: labeledEvent,
+          parent: parentIssue,
+          parentLastEditedAt: "not-a-real-date",
+        });
+        expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+        expect(f.submitted).toHaveLength(1);
+        expect(f.submitted[0].content).not.toContain("Parent issue (background only)");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("drops a parent whose coordinates are missing — nothing to vouch against", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        parent: `{"title":"Uploads are slow","body":"30s uploads."}`,
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+      expect(f.submitted[0].content).not.toContain("Parent issue (background only)");
+    });
+
+    it("keeps a parent last edited BEFORE the label", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        parent: parentIssue,
+        parentLastEditedAt: "2026-07-05T00:00:00Z",
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+      expect(f.submitted[0].content).toContain("Parent issue (background only)");
+    });
+
+    it("vets the parent at ITS OWN repo and number (sub-issues may live across repos)", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        parent: JSON.stringify({
+          number: 7,
+          repository: { nameWithOwner: "acme/platform" },
+          title: "Uploads are slow",
+          body: "30s uploads.",
+        }),
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+      expect(f.submitted[0].content).toContain("Parent issue (background only)");
+      const lookups = f.calls.filter(
+        (c) => c[0] === "api" && c[1] === "graphql" && c.some((a) => a.includes("lastEditedAt")),
+      );
+      expect(lookups).toHaveLength(2);
+      expect(lookups[1]).toEqual(
+        expect.arrayContaining(["owner=acme", "name=platform", "number=7"]),
+      );
+    });
   });
 
   it("takes the LATEST labeled event for the trigger (relabeled issues)", async () => {
