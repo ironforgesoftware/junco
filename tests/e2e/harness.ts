@@ -392,13 +392,30 @@ export function writeTicket(
 export type QueueDir = "inbox" | "processing" | "done" | "failed";
 const QUEUE_DIRS: readonly QueueDir[] = ["inbox", "processing", "done", "failed"];
 
+/**
+ * Locate a ticket's file within one queue dir. `src/queue.ts` `claim()` renames
+ * `<id>.md` to `<UTC-minute-stamp>__<id>.md` on the way into processing/, and
+ * `src/finalize.ts` carries that stamped name through into done/ or failed/
+ * (`uniqueDestPath(dstDir, basename(ticketPath))`) — only a still-queued inbox
+ * ticket keeps the bare name. Match either shape so a scenario can find a
+ * ticket regardless of which stage it has reached.
+ */
+function findTicketFile(queueRoot: string, dir: QueueDir, id: string): string | null {
+  const d = join(queueRoot, dir);
+  if (!existsSync(d)) return null;
+  for (const name of readdirSync(d)) {
+    if (name === `${id}.md` || name.endsWith(`__${id}.md`)) return join(d, name);
+  }
+  return null;
+}
+
 export function queueState(
   sb: Sandbox,
   id: string,
 ): { dir: QueueDir | null; frontmatter: Record<string, unknown>; body: string } {
   for (const dir of QUEUE_DIRS) {
-    const p = join(sb.queueRoot, dir, `${id}.md`);
-    if (!existsSync(p)) continue;
+    const p = findTicketFile(sb.queueRoot, dir, id);
+    if (p === null) continue;
     const raw = readFileSync(p, "utf8");
     const m = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(raw);
     if (!m) return { dir, frontmatter: {}, body: raw };
