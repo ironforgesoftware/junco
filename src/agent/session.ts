@@ -434,6 +434,10 @@ export interface SessionOverrides {
   thinkingLevel?: ThinkingLevel | string;
   /** Per-ticket egress opt-in; overrides cfg.sandbox.network for this session. */
   network?: boolean;
+  /** #346: scratch is the session's only writable root. Set by the read-only
+   *  flows (Q&A, audit, investigate), whose cwd is the operator's live
+   *  checkout — the sandbox enforces read-only independently of `tools`. */
+  readOnly?: boolean;
 }
 
 export interface ResolveSandboxDeps {
@@ -513,11 +517,16 @@ export async function resolveSandbox(
     backend = noneBackend;
   }
   const network = overrides?.network ?? cfg.sandbox.network === "allow";
+  const readOnly = overrides?.readOnly === true;
   const scratchDir = makeScratch();
   // #320: a linked worktree's index/objects/refs live under the owning repo's
   // .git, outside the cwd — without these roots the agent's first `git commit`
   // dies with "Unable to create '…/index.lock': Operation not permitted".
-  const gitDirs = await (deps.gitDirs ?? ((c: string) => resolveGitDirs(cfg, c)))(cwd);
+  // #346: a read-only session never commits, so its git metadata is neither
+  // looked up nor made writable — nor mkdir'd (the cwd is a live checkout).
+  const gitDirs = readOnly
+    ? null
+    : await (deps.gitDirs ?? ((c: string) => resolveGitDirs(cfg, c)))(cwd);
   const pathExists = deps.pathExists ?? existsSync;
   const ensureDir = deps.ensureDir ?? ((p: string) => mkdirSync(p, { recursive: true }));
   // Grant only what exists — creating a missing one first: bwrap --binds every
@@ -543,7 +552,8 @@ export async function resolveSandbox(
     }
     gitWritePaths.push(p);
   }
-  log.info("sandbox: linked worktree git write roots", { cwd, roots: gitWritePaths, skipped });
+  if (readOnly) log.info("sandbox: read-only session; scratch is the only writable root", { cwd });
+  else log.info("sandbox: linked worktree git write roots", { cwd, roots: gitWritePaths, skipped });
   // #277: the data tree is denied WHOLESALE and its execution roots (the
   // worktrees and the clone gitdirs this session's git reads) are allowed
   // back. Both halves must be threaded in — the denies alone would wall the
@@ -563,6 +573,7 @@ export async function resolveSandbox(
     dataAllowPaths: dataPaths.allowDirs,
     network,
     botGhConfigDir: cfg.botAccount.configDir,
+    readOnly,
   });
   return { backend, policy };
 }

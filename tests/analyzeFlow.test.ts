@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAnalyzeFlow } from "../src/analyzeFlow.js";
+import { resolveSandbox, type SessionOverrides } from "../src/agent/session.js";
+import { assertWriteAllowed, SandboxViolation } from "../src/agent/sandbox/pathJail.js";
 import { listDrafts, draftCount } from "../src/commentReview.js";
 import { parseTicket } from "../src/ticket.js";
 import type { Config, Ticket } from "../src/types.js";
@@ -147,6 +149,57 @@ describe("runAnalyzeFlow", () => {
     // The done/ summary points the operator at the review step.
     const body = readFileSync(join(j, "done", readdirSync(join(j, "done"))[0]), "utf8");
     expect(body).toContain("junco investigate review analyze-o-r-5");
+  });
+
+  // #346: an investigation runs in the operator's LIVE checkout, and a
+  // ticket-level `tools:` is used verbatim — so one that adds bash/write must
+  // not turn a "read-only investigation" into write access to the checkout or
+  // its .git. The sandbox policy has to enforce that on its own, allowlist or not.
+  it("builds the sandbox policy with scratch as the only writable root — the checkout stays unwritable even when the ticket opts into write tools (#346)", async () => {
+    const { root, j } = sandbox();
+    const repo = mkRepo();
+    mkdirSync(join(repo, ".git"));
+    const { path, ticket } = claim(
+      j,
+      `---\nid: analyze-o-r-5\nrepo: ${JSON.stringify(repo)}\n` +
+        `tools:\n  - read\n  - write\n  - bash\n` +
+        `analyze:\n  issue: 5\n  title: "Investigate the crash"\n---\n# Analyze issue 5\ninvestigate\n`,
+    );
+
+    let captured: { cfg: Config; cwd: string; overrides?: SessionOverrides } | undefined;
+    await runAnalyzeFlow(cfg(root), ticket, path, {
+      gitFn: fakeGitCalls(originHttps).gitFn,
+      sessionFactoryFor: (passedCfg, cwd, overrides) => {
+        captured = { cfg: passedCfg, cwd, overrides };
+        return fakeSession(commentFence("owned analysis"));
+      },
+    });
+    if (!captured) throw new Error("the investigate session factory was never called");
+    expect(captured.cwd).toBe(repo);
+    expect(captured.cfg.tools).toEqual(["read", "write", "bash"]);
+
+    // The policy the flow's overrides produce, with the sandbox on.
+    const sbx = await resolveSandbox(
+      { ...captured.cfg, sandbox: { ...captured.cfg.sandbox, enabled: true, backend: "none" } },
+      captured.cwd,
+      captured.overrides,
+      {
+        probe: async () => ({ code: 0 }),
+        makeScratch: () => "/sbxroot/scratch",
+        platform: "linux",
+        home: "/sbxroot/home/x",
+        gitDirs: async () => null,
+        pathExists: () => true,
+        ensureDir: () => {},
+      },
+    );
+    const policy = sbx?.policy;
+    if (!policy) throw new Error("expected a sandbox policy");
+    expect(policy.writableRoots).toEqual(["/sbxroot/scratch"]);
+    expect(() => assertWriteAllowed(join(repo, ".git", "HEAD"), repo, policy)).toThrow(
+      SandboxViolation,
+    );
+    expect(() => assertWriteAllowed("src/index.ts", repo, policy)).toThrow(SandboxViolation);
   });
 
   it("strips a spoofed junco:finding marker from the parked draft", async () => {

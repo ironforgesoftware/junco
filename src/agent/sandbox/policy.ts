@@ -99,7 +99,7 @@ export function linkedWorktreeWritePaths(opts: { cwd: string } & GitDirs): strin
 export interface SandboxPolicy {
   /** Absolute roots the agent may write under: the worktree, scratch, the
    *  linked worktree's git metadata (gitdir + objects/refs/logs, #320), and
-   *  the operator's extras. */
+   *  the operator's extras — or scratch alone for a read-only session (#346). */
   writableRoots: string[];
   /** Absolute subpaths whose reads are denied (secrets, sensitive data-tree
    *  subtrees, extras). Subtree semantics: the path and everything under it. */
@@ -147,6 +147,16 @@ export function buildPolicy(opts: {
    *  `linkedWorktreeWritePaths`. Threaded in by session.ts's resolveSandbox;
    *  callers that build stand-in policies (doctor, tests) leave it empty. */
   gitWritePaths?: string[];
+  /** #346: the read-only flows (Q&A, audit, investigate). Their cwd is the
+   *  operator's LIVE checkout, not a throwaway worktree, so it is never a
+   *  writable root: scratch is the only one, and the git metadata and
+   *  `extra_allow_write` roots go with it (nothing to commit, nothing to
+   *  build). Enforced here, independently of the tool allowlist, so a
+   *  ticket-level `tools:` that adds bash/write still cannot touch the
+   *  checkout or its `.git`. Reads are unaffected: no rule names the cwd, so
+   *  it resolves like any other host path (a clone inside the data tree is
+   *  allowed back by `dataAllowPaths`). */
+  readOnly?: boolean;
   /** #311/F5: how `buildPolicy` tells a builtin or `extra_deny_read` entry
    *  that names a FILE from one that names a directory. Defaults to a real
    *  `statSync`; injected by tests so synthetic `/sbxroot/...` paths can state
@@ -160,12 +170,14 @@ export function buildPolicy(opts: {
   const isFile = opts.isFile ?? defaultIsFile;
   // Canonicalize so the OS-sandbox profile and the JS jail agree with the
   // kernel's symlink-resolved view (macOS /var→/private/var, /tmp→/private/tmp).
-  const writableRoots = [
-    canonicalize(cwd),
-    canonicalize(scratchDir),
-    ...(opts.gitWritePaths ?? []).map(canonicalize),
-    ...cfg.extraAllowWrite.map(canonicalize),
-  ];
+  const writableRoots = opts.readOnly
+    ? [canonicalize(scratchDir)]
+    : [
+        canonicalize(cwd),
+        canonicalize(scratchDir),
+        ...(opts.gitWritePaths ?? []).map(canonicalize),
+        ...cfg.extraAllowWrite.map(canonicalize),
+      ];
   const builtinDenyRead = classifyDenyRead(builtinDenyReadPaths(home).map(canonicalize), isFile);
   const extraDenyRead = classifyDenyRead(cfg.extraDenyRead.map(canonicalize), isFile);
   const readDenyPaths = [

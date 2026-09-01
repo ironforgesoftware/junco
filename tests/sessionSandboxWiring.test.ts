@@ -175,6 +175,38 @@ describe("resolveSandbox", () => {
     expect(r?.policy.writableRoots).toEqual(["/sbxroot/work", "/sbxroot/scratch"]);
   });
 
+  // #346: the read-only flows (Q&A, audit, investigate) hand resolveSandbox the
+  // operator's LIVE checkout as cwd. It must come out with scratch as the only
+  // writable root, and the git-metadata lookup — which mkdir's a missing
+  // logs/ under the owning repo's .git — must not run at all.
+  it("readOnly: scratch is the only writable root and the checkout's git metadata is never looked up or created (#346)", async () => {
+    const cwd = "/sbxroot/home/x/dev/repo";
+    const gitDirs = vi.fn(async () => ({
+      gitDir: "/sbxroot/home/x/dev/repo.git/worktrees/repo",
+      commonDir: "/sbxroot/home/x/dev/repo.git",
+    }));
+    const ensureDir = vi.fn();
+    const r = await resolveSandbox(
+      cfgWith({ backend: "none" }),
+      cwd,
+      { readOnly: true },
+      {
+        ...okDeps,
+        gitDirs,
+        pathExists: () => false,
+        ensureDir,
+      },
+    );
+    const policy = r?.policy;
+    if (!policy) throw new Error("expected a sandbox policy");
+    expect(policy.writableRoots).toEqual(["/sbxroot/scratch"]);
+    expect(gitDirs).not.toHaveBeenCalled();
+    expect(ensureDir).not.toHaveBeenCalled();
+    expect(() => assertWriteAllowed(`${cwd}/.git/HEAD`, cwd, policy)).toThrow();
+    expect(() => assertWriteAllowed("src/a.ts", cwd, policy)).toThrow();
+    expect(resolveRead(`${cwd}/src/a.ts`, readRules(policy))).toBe("allow");
+  });
+
   it("per-ticket network override widens egress", async () => {
     const r = await resolveSandbox(cfgWith({}), "/work", { network: true }, okDeps);
     expect(r?.policy.network).toBe(true);

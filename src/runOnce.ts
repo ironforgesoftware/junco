@@ -6,7 +6,11 @@ import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
 import { parseTicket } from "./ticket.js";
 import { parsePatchSeries } from "./patchTicket.js";
-import { makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
+import {
+  makePiSessionFactory,
+  type AgentSessionLike,
+  type SessionOverrides,
+} from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalize } from "./finalize.js";
 import { deriveRepoContext } from "./repoContext.js";
@@ -63,7 +67,11 @@ function canonicalizeRepoKey(resolved: string): string {
 
 export interface RunDeps {
   // Injection seam: returns a session factory for (cfg, cwd). Defaults to the real Pi SDK.
-  sessionFactoryFor?: (cfg: Config, cwd: string) => () => Promise<AgentSessionLike>;
+  sessionFactoryFor?: (
+    cfg: Config,
+    cwd: string,
+    overrides?: SessionOverrides,
+  ) => () => Promise<AgentSessionLike>;
   // Critic session factory, threaded into the PR-flow (tests control its verdict).
   criticSessionFactory?: () => Promise<AgentSessionLike>;
   // Assess-flow factory (peer of criticSessionFactory): tests inject a fake;
@@ -427,7 +435,10 @@ export async function executeClaimed(
       // workdir (e.g. a bridged repo clone) overrides the processing dir.
       const cwd = resolveQaCwd(next, cfg, paths.processing);
       // Q&A default is the read-only subset; an explicit ticket `tools:` is an
-      // owner-authored opt-in and is used verbatim.
+      // owner-authored opt-in and is used verbatim — it widens what the agent
+      // may RUN, never what it may write: the sandbox policy keeps scratch as
+      // the only writable root regardless (`readOnly` below, #346), since the
+      // cwd is the operator's live checkout.
       const qaTools = next.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
       // Planning tickets may run a stronger model id (same endpoint/key) —
       // plan quality is the biggest lever on execution quality.
@@ -436,7 +447,9 @@ export async function executeClaimed(
           ? { ...cfg.model, id: cfg.github.plannerModelId }
           : cfg.model;
       const qaCfg: Config = { ...cfg, tools: qaTools, model: qaModel };
-      const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd);
+      const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(qaCfg, cwd, {
+        readOnly: true,
+      });
       // qaCfg (not cfg) goes to the envelope so run_start records the planner
       // model + narrowed tools. Spend is recorded immediately by the envelope,
       // BEFORE any classification/requeue logic below: a session that goes on
