@@ -532,10 +532,41 @@ describe("makeSandboxedRunBlock (#335)", () => {
   });
 
   it("kills a sandboxed block that overruns its timeout and reports exitCode -1", async () => {
+    // `sleep; true` forces the shell to FORK sleep (no exec-optimization), so
+    // the block's process tree — not just the shell — must be reaped: an
+    // orphaned sleep holds the stdio pipes and `close` would only fire when it
+    // exits on its own. dash (/bin/sh on Debian/Ubuntu) forks even a lone
+    // command, which is how CI caught this on Linux while macOS passed.
     const run = makeSandboxedRunBlock(recordingBackend(), POLICY);
-    const res = await run("sleep 5", wtPath, 100);
+    const res = await run("sleep 10; true", wtPath, 100);
     expect(res.exitCode).toBe(-1);
     expect(res.output).toContain("timed out");
+  });
+
+  it("spawns detached and reaps the whole process GROUP at the deadline (mirrors bashOps)", async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = fakeProc();
+      const spawnFn = vi.fn(() => proc) as any;
+      const kills: Array<[number, string]> = [];
+      const run = makeSandboxedRunBlock(recordingBackend(), POLICY, {
+        spawnFn,
+        env: () => ({}),
+        killFn: (pid, sig) => kills.push([pid, sig]),
+      });
+      const p = run("sleep 10", "/sbxroot/wt", 2_000);
+      expect(spawnFn.mock.calls[0][2].detached).toBe(true);
+      vi.advanceTimersByTime(1_999);
+      expect(kills).toEqual([]);
+      vi.advanceTimersByTime(2);
+      expect(kills).toEqual([[-4242, "SIGKILL"]]); // negative pid = the group
+      proc.emit("close", null);
+      const res = await p;
+      expect(res.exitCode).toBe(-1);
+      expect(res.output).toContain("timed out after 2s");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

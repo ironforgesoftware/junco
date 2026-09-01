@@ -65,7 +65,14 @@ export interface SandboxedRunBlockDeps {
   spawnFn?: typeof realSpawn;
   /** Source env before scrubbing; defaults to process.env. */
   env?: () => Record<string, string | undefined>;
+  /** Process-group kill seam (defaults to process.kill). Injectable so the
+   *  reap can be asserted without signalling a real pid in tests. */
+  killFn?: (pid: number, signal: NodeJS.Signals) => void;
 }
+
+const defaultKillFn = (pid: number, signal: NodeJS.Signals): void => {
+  process.kill(pid, signal);
+};
 
 /** Cap on executed verification blocks per ticket; blocks beyond it are
  * reported as skipped failures (exitCode -3), never spawned. */
@@ -127,13 +134,16 @@ function spawnBlock(
   env: Record<string, string>,
   timeoutMs: number,
   spawnFn: typeof realSpawn,
+  killFn: (pid: number, signal: NodeJS.Signals) => void,
 ): Promise<{ exitCode: number; output: string }> {
   return new Promise((resolve) => {
     const [bin, ...args] = argv;
+    // detached → own process group, so `kill(-pid)` reaps the whole group.
     const proc = spawnFn(bin, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env,
+      detached: true,
     });
 
     let stdout = "";
@@ -146,10 +156,31 @@ function spawnBlock(
       stderr += chunk.toString();
     });
 
+    // Kill the whole process GROUP (negative pid), as agent/sandbox/bashOps.ts
+    // does: the shell forks the block's commands (dash — /bin/sh on Debian/
+    // Ubuntu — forks even a lone one), and a child that outlives a SIGKILLed
+    // shell keeps the inherited stdio pipes open, so `close` would only fire
+    // when it exits on its own — never for a runaway server or watcher.
+    const reap = (): void => {
+      if (proc.pid !== undefined) {
+        try {
+          killFn(-proc.pid, "SIGKILL");
+          return;
+        } catch {
+          /* group already gone */
+        }
+      }
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        /* already dead */
+      }
+    };
+
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      proc.kill("SIGKILL");
+      reap();
     }, timeoutMs);
 
     proc.on("close", (code) => {
@@ -176,7 +207,14 @@ function spawnBlock(
  *  / sandbox-disabled path. */
 const runBlockDirect: RunBlockFn = (block, wtPath, timeoutMs) =>
   // Never the worker's full process.env — see verificationEnv (#35).
-  spawnBlock(["/bin/bash", "-c", block], wtPath, verificationEnv(), timeoutMs, realSpawn);
+  spawnBlock(
+    ["/bin/bash", "-c", block],
+    wtPath,
+    verificationEnv(),
+    timeoutMs,
+    realSpawn,
+    defaultKillFn,
+  );
 
 /**
  * #335: a block runner that spawns each block through `backend.spawnArgv`
@@ -192,6 +230,7 @@ export function makeSandboxedRunBlock(
 ): RunBlockFn {
   const spawnFn = deps.spawnFn ?? realSpawn;
   const envSource = deps.env ?? (() => process.env);
+  const killFn = deps.killFn ?? defaultKillFn;
   return (block, wtPath, timeoutMs) =>
     spawnBlock(
       backend.spawnArgv(block, policy),
@@ -199,6 +238,7 @@ export function makeSandboxedRunBlock(
       { ...verificationEnv(envSource()), TMPDIR: policy.scratchDir },
       timeoutMs,
       spawnFn,
+      killFn,
     );
 }
 
