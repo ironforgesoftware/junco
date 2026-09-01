@@ -208,9 +208,9 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   }
   const reviews = pendingCount(cfg);
   if (reviews > 0) {
-    print(`assess review: ${reviews} pending (junco audit review)\n`);
+    print(`audit review: ${reviews} pending (junco audit review)\n`);
   }
-  // Per-repo assess history (#193): age + outcome for every repo ever audited.
+  // Per-repo audit history (#193): age + outcome for every repo ever audited.
   // Silent when nothing has been assessed — same "only when non-empty" rule as
   // the review backlog above.
   for (const h of listHistory(cfg)) {

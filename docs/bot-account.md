@@ -67,15 +67,15 @@ The config surface is additive and off by default:
   entrypoints that run unattended: `junco start`/`junco run-once`, and everything downstream of
   them — the PR flow, worktree operations, and the GitHub inbox/outbox/reporter. Interactive
   commands stay on your personal login: dashboard GitHub actions (except add-repo provisioning —
-  see the next bullet), `junco assess`/`junco analyze` posting, `junco submit`, and
+  see the next bullet), `junco audit`/`junco investigate` posting, `junco submit`, and
   `junco doctor`'s ambient probes. One opt-in exception: `assess.fileAs: "bot"` moves
-  `junco assess file` (scan + labels + creates, as one identity) to the bot — see
-  docs/assess.md, "Filing identity".
+  `junco audit file` (scan + labels + creates, as one identity) to the bot — see
+  docs/audit.md, "Filing identity".
 - **Fork provisioning exception.** One deliberate carve-out: provisioning a fork or managed
   clone for a repo you don't own always runs as the bot, even though it's human-triggered —
   the fork it creates is the daemon's future push target, so it has to live on the bot's
   account from the start. This covers every call site that shares the provisioning path:
-  `junco import`, `junco analyze`, `junco assess` pointed at an unowned repo's issue (clone
+  `junco import`, `junco investigate`, `junco audit` pointed at an unowned repo's issue (clone
   only — it deliberately skips the fork), and the dashboard's add-repo flow. The issue read
   that precedes it (`gh issue view`) stays on your ambient login.
 - **Per-worktree commit identity.** Every PR-flow worktree gets `extensions.worktreeConfig`
@@ -160,14 +160,14 @@ those repos already read as `direct` and `junco auth grant` has nothing to do on
 
 ### Unwatched-repo dispatch: what happens without a grant
 
-`junco import`, `junco analyze`, and `junco assess <owner/repo#N>` all resolve an
+`junco import`, `junco investigate`, and `junco audit <owner/repo#N>` all resolve an
 unwatched repo the same way, classifying the bot's access before touching anything:
 
-| Repo state (bot's access)                                         | Mode        | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ----------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Push access (granted, team membership, or already a collaborator) | **direct**  | Fork-less clone; branches push straight to the repo. **The repo is auto-onboarded**: added to the watchlist as a first-class entry (`external: false`) — from then on the bridge sweeps it for trigger labels exactly like a repo you configured yourself, permanently, with **no confirmation step**. This includes `junco assess` scoped to one issue: even that nominally read-only audit leaves a push-accessible unwatched repo watched afterward. |
-| Public, no push access                                            | **fork**    | Unchanged fork-PR mode: the bot forks the repo to its own account, clones the fork, and opens the PR upstream. Also recorded in the watchlist, but as `external: true` — that flag excludes it from the bridge's label sweep, so it's watched only for PR listing, not lifecycle automation.                                                                                                                                                            |
-| Private, no push access                                           | **blocked** | Fails loud before cloning anything. With the bot account enabled, the error names the fix — `junco auth grant <owner/repo>` (or the SSO guidance above, if that's the cause); with it disabled, you get a plain access-denied message, since there's no bot to grant. Nothing is added to the watchlist.                                                                                                                                                |
+| Repo state (bot's access)                                         | Mode        | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Push access (granted, team membership, or already a collaborator) | **direct**  | Fork-less clone; branches push straight to the repo. **The repo is auto-onboarded**: added to the watchlist as a first-class entry (`external: false`) — from then on the bridge sweeps it for trigger labels exactly like a repo you configured yourself, permanently, with **no confirmation step**. This includes `junco audit` scoped to one issue: even that nominally read-only audit leaves a push-accessible unwatched repo watched afterward. |
+| Public, no push access                                            | **fork**    | Unchanged fork-PR mode: the bot forks the repo to its own account, clones the fork, and opens the PR upstream. Also recorded in the watchlist, but as `external: true` — that flag excludes it from the bridge's label sweep, so it's watched only for PR listing, not lifecycle automation.                                                                                                                                                           |
+| Private, no push access                                           | **blocked** | Fails loud before cloning anything. With the bot account enabled, the error names the fix — `junco auth grant <owner/repo>` (or the SSO guidance above, if that's the cause); with it disabled, you get a plain access-denied message, since there's no bot to grant. Nothing is added to the watchlist.                                                                                                                                               |
 
 If an auto-onboarded repo isn't one you meant junco to watch permanently, unwatch it from
 the dashboard (`x` on the repo) or remove its entry from `<dataDir>/watchlist.json`
@@ -192,8 +192,8 @@ viewerPermission`, run as the bot): `write`/`maintain`/`admin` is fine; `triage`
   `gh api user`/`@me`, which now resolves to the bot instead of you — a plan comment you posted
   under your own login won't match, so a pre-existing thread may receive **one one-time
   duplicate** plan comment the first time it's touched after enabling the bot. Documented
-  behavior, self-resolving. (`junco assess` finding dedup is marker-scoped and
-  author-independent — findings are immune to this switch; see docs/assess.md.)
+  behavior, self-resolving. (`junco audit` finding dedup is marker-scoped and
+  author-independent — findings are immune to this switch; see docs/audit.md.)
 - **Stale personal-fork remotes.** If you already have external clones from before the bot was
   enabled, their `fork` remote points at _your_ fork — the bot can't push there, and the push
   will fail loud. Fix: remove the stale `fork` remote from the managed clone and let Junco

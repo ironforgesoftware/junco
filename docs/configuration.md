@@ -51,7 +51,7 @@ That's also the default — the very directory `config.json` itself lives in, so
   migrate.lock                                          held only while `junco data migrate` is actively running
   data/                                                 unrecoverable
     outbox/         (+ dead/)                           GitHub write ops, one JSON per op; created eagerly
-    assess-history/                                       per-repo `junco assess` history, one JSON file per repo
+    assess-history/                                       per-repo `junco audit` history, one JSON file per repo
     history/                                              per-task finalize ledger, tasks-YYYY-MM.jsonl shards
     transcripts/<ticket-id>.jsonl                         per-run event stream
     spend.json       metrics.json

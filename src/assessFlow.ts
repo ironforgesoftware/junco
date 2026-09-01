@@ -6,7 +6,7 @@
  * scan, parsing the agent's findings, a hallucination filter, severity +
  * fingerprint dedup, GitHub-side dedup, and PARKING the surviving findings in
  * the durable review store (assessReview.ts) for a separate, human-confirmed
- * filing step (`junco assess file <id>` → assessFiling.ts).
+ * filing step (`junco audit file <id>` → assessFiling.ts).
  *
  * Design posture (ported from prFlow.ts): expected failures NEVER throw out of
  * runAssessFlow — a fatal phase error finalizes the ticket to failed/ with the
@@ -391,7 +391,7 @@ export async function runAssessFlow(
   }
 
   // --- Phase 7: Park all surviving findings for human review. There is NO cap
-  // here — the per-finding confirm at file time (`junco assess file <id>`) is
+  // here — the per-finding confirm at file time (`junco audit file <id>`) is
   // the volume gate, not this audit. The batch is keyed by ticket id, so a
   // requeued rerun overwrites (never duplicates) the pending batch. External
   // batches force autoPlan false: junco does not queue PR work against a repo
