@@ -4,11 +4,21 @@ import type { Ticket } from "./types.js";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/;
 
+/**
+ * `warnFn` defaults to a no-op — parseTicket stays a pure, side-effect-free
+ * parser (peer pure modules like planLint.ts never log either; they return
+ * data and let the caller decide). Daemon-side call sites that parse queued
+ * tickets (runOnce.ts's claimNextTask, ticketDeps.ts's readWaiting) pass
+ * `log.warn` so the both-keys collision lands in the structured worker.log
+ * instead of nowhere; a bare `console.warn` here would write unstructured
+ * text into that JSON-lines stream and break `junco logs --json`/the TUI log
+ * viewer's parse.
+ */
 export function parseTicket(
   path: string,
   raw: string,
   defaultTimeoutMinutes = 30,
-  warnFn: (msg: string) => void = (msg) => console.warn(msg),
+  warnFn: (msg: string) => void = () => {},
 ): Ticket {
   let frontmatter: Record<string, unknown> = {};
   let body = raw;

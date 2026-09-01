@@ -313,14 +313,16 @@ describe("parseTicket", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("defaults the warn hook to console.warn when both audit: and assess: are present", () => {
+  it("defaults the warn hook to a silent no-op — parseTicket stays a pure parser", () => {
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      parseTicket(
+      const t = parseTicket(
         "/q/a.md",
         `---\nid: x\naudit:\n  auto_plan: true\nassess:\n  auto_plan: false\n---\nbody`,
       );
-      expect(spy).toHaveBeenCalledTimes(1);
+      // Precedence still holds with no warnFn supplied — only the sink changes.
+      expect(t.assess).toEqual({ autoPlan: true });
+      expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
     }

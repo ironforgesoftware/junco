@@ -332,6 +332,28 @@ describe("listWaiting", () => {
     writeFileSync(join(paths.inbox, "w.md"), "---\nid: w\ndepends_on: [a, ghost]\n---\n");
     expect(listWaiting(cfg)).toEqual([{ id: "w", pending: ["a", "ghost"], missing: ["ghost"] }]);
   });
+
+  it("forwards parseTicket's both-keys collision warning to the structured log", () => {
+    // readWaiting (internal, used by both listWaiting and sweepDependencies)
+    // passes log.warn as parseTicket's warnFn — a ticket carrying both the
+    // canonical and legacy key for the same flavor must land in worker.log
+    // (JSON lines), not as a bare console.warn that would break `junco logs
+    // --json`/the TUI log viewer's parse of that stream.
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      writeFileSync(
+        join(paths.inbox, "child.md"),
+        "---\nid: child\ndepends_on: [ghost]\naudit:\n  auto_plan: true\nassess:\n  auto_plan: false\n---\n",
+      );
+      listWaiting(cfg);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [msg] = warnSpy.mock.calls[0]!;
+      expect(String(msg)).toMatch(/audit/);
+      expect(String(msg)).toMatch(/assess/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe("readWaiting error stance (internal, via sweepDependencies/listWaiting)", () => {

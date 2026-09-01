@@ -137,7 +137,11 @@ export async function claimNextTask(
   const parsed = candidates
     .flatMap((p) => {
       try {
-        return [parseTicket(p, readFileSync(p, "utf8"), cfg.defaultTimeoutMinutes)];
+        return [
+          parseTicket(p, readFileSync(p, "utf8"), cfg.defaultTimeoutMinutes, (msg) =>
+            log.warn(msg),
+          ),
+        ];
       } catch (e) {
         log.warn("skipping unreadable ticket", {
           path: p,
