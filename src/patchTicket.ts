@@ -5,7 +5,7 @@
  * GitHub issue route rebuilds frontmatter machine-side, and the marker-
  * delimited body (#329) carries the series byte-exact.
  */
-import { extractPatchBody } from "./githubInbox.js";
+import { extractPatchBody, replaceFencedBlock, PATCH_FENCE } from "./githubInbox.js";
 
 /** Refuse a series larger than this (the local route has no other cap; the
  * GitHub route is already bounded by the 64 KB issue-body limit). */
@@ -20,8 +20,17 @@ export interface PatchSeries {
   files: string[];
 }
 
-const MBOX_FROM = /^From [0-9a-f]{7,40} /gm;
+// The real mbox separator, not any line that happens to start with "From
+// <hex> ": git format-patch/am's header is `From <sha> <asctime-shaped
+// date>` — a fixed, unrealistic date used precisely so it can never collide
+// with a real mail Date: header. A commit message BODY line like
+// "From deadbeef1234567 …" (no date) used to match the old bare-prefix
+// pattern and inflate `count` (a single patch counted as two).
+const MBOX_FROM =
+  /^From [0-9a-f]{7,40} [A-Za-z]{3} [A-Za-z]{3} {1,2}\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/gm;
 const DIFF_GIT = /^diff --git a\/(.+?) b\/(.+)$/gm;
+const SUBJECT_LINE = /^Subject:\s*(.*)$/m;
+const PATCH_TAG_PREFIX = /^\[PATCH[^\]]*\]\s*/i;
 
 /** The series carried by `body`, or null when this is not an apply ticket
  * (no fence, or a fence that is not a well-formed series). */
@@ -53,4 +62,38 @@ export function unsafePatchPaths(files: string[]): string[] {
  * reviewer read in the issue. */
 export function hasBinaryHunk(raw: string): boolean {
   return /^GIT binary patch$/m.test(raw);
+}
+
+/** `body` with the LAST complete `junco-patch` fence (delimiters and content)
+ * removed — used wherever an apply ticket's PROSE, not its diff, must be
+ * scanned: the PR-title H1 lookup (pr.ts derivePrTitle) and the
+ * no_forbidden_phrases lint rule (planLint.ts), both of which would otherwise
+ * mis-fire on arbitrary diff/commit-message content. Returns `body` unchanged
+ * when there is no complete fence (should not happen once parsePatchSeries
+ * has already matched, but this helper makes no such assumption itself). */
+export function stripPatchFence(body: string): string {
+  return replaceFencedBlock(body, PATCH_FENCE, "");
+}
+
+/** One-line stand-in for the fenced mbox when composing a PR body
+ * (buildPrBody, prFlow.ts): the PR's own diff already shows the patch, so
+ * re-embedding the whole series — up to MAX_PATCH_BYTES — is redundant and
+ * can blow GitHub's 65,536-char PR-body cap, failing `gh pr create` AFTER the
+ * commits are already pushed. Keeps the ticket's own prose (Why/Verification)
+ * untouched; only the fenced block itself is replaced. */
+export function summarizePatchFenceForPr(body: string, series: PatchSeries): string {
+  const summary = `_${series.count} patch(es) applied — see the diff below; ${series.files.length} file(s) touched._`;
+  return replaceFencedBlock(body, PATCH_FENCE, summary);
+}
+
+/** The series' PR-title candidate: the FIRST mbox `Subject:` line — the
+ * natural title, since it's what `git am` will actually commit — with any
+ * leading `[PATCH n/m]` tag stripped. Null when the series carries no
+ * Subject line (git format-patch always emits one; a hand-built series might
+ * not, so this stays a fallback rather than an assumption). */
+export function firstPatchSubject(series: PatchSeries): string | null {
+  const m = SUBJECT_LINE.exec(series.raw);
+  if (!m) return null;
+  const subject = m[1].replace(PATCH_TAG_PREFIX, "").trim();
+  return subject || null;
 }

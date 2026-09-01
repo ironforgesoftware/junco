@@ -120,6 +120,24 @@ Wrap the series in a fence strictly longer than any backtick run that appears in
 
 The prose rules (`steps_have_commits`, `files_table_referenced`, `files_paths_exist`, `no_cd_in_steps`) are skipped for apply tickets — a patch series has no Steps or Files table for them to check.
 
+### What `patch_paths_sane` does not cover
+
+`patch_paths_sane` inspects the series' **declared path strings** — the paths named on each `diff --git`/`---`/`+++` line — not what those paths resolve to on disk. Concretely, it does not catch:
+
+- An in-repo symlink hunk (`mode 120000`) whose **target** points outside the repo (e.g. `link -> /etc/passwd`); the declared path (`link`) is ordinary and clean, so the rule has nothing to flag, and `git am` applies it.
+- A path like `.github/workflows/…` — a workflow-file change is not a path-traversal or absolute path, so it applies cleanly like any other in-repo path.
+
+Neither is a gap in enforcement so much as a gap in what lint can see from path strings alone: both are contained by the trigger-label trust gate, the diff being fully visible in the parked issue/ticket, and the draft-PR blast radius — the same trust model an agent-authored ticket already relies on, not by `patch_paths_sane` itself. Read the rule's name as "sane path strings", not "sane resulting tree."
+
+### Untested / unsupported interactions
+
+These combinations are not exercised by the test suite and their behavior is not a documented contract — treat it as undefined until someone needs it:
+
+- A `junco-patch` fence inside an amend (`amends_pr`) ticket. `parsePatchSeries` runs unconditionally in Phase 4, so this activates apply mode on the amend branch instead of the agent path.
+- A `junco-patch` fence inside a plan-set child ticket.
+- A body carrying **both** a `junco-patch` fence and Steps/Files prose — the fence wins (apply mode runs), and the Steps prose is silently ignored; lint does not flag the dead prose.
+- A `junco-patch` fence inside a Q&A ticket (no `repo:`) — there is no worktree to apply into, so the fence is treated as ordinary read-only prose handed to the agent, not as a series to apply.
+
 ### Minimal apply ticket
 
 ````markdown

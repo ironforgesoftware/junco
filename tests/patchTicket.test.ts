@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { parsePatchSeries, unsafePatchPaths, MAX_PATCH_BYTES } from "../src/patchTicket.js";
+import {
+  parsePatchSeries,
+  unsafePatchPaths,
+  MAX_PATCH_BYTES,
+  stripPatchFence,
+  summarizePatchFenceForPr,
+  firstPatchSubject,
+} from "../src/patchTicket.js";
 
 const ONE = `From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001
 From: Dispatcher <d@example.com>
@@ -67,6 +74,16 @@ describe("parsePatchSeries", () => {
     const huge = ONE + "x".repeat(MAX_PATCH_BYTES);
     expect(parsePatchSeries(fence(huge))).toBe(null);
   });
+
+  it("does not overcount a commit-message-body line that merely starts with From <hex> — only a real mbox header (hex sha + the asctime date) counts", () => {
+    const withFromInBody = ONE.replace(
+      "Subject: [PATCH 1/1] feat: add a level\n\n",
+      "Subject: [PATCH 1/1] feat: add a level\n\nFrom deadbeef1234567 unrelated mention, not a header\n\n",
+    );
+    const s = parsePatchSeries(fence(withFromInBody));
+    expect(s).not.toBe(null);
+    expect(s!.count).toBe(1); // was 2 before the fix: the body line matched too
+  });
 });
 
 describe("unsafePatchPaths", () => {
@@ -75,5 +92,48 @@ describe("unsafePatchPaths", () => {
     expect(unsafePatchPaths(["../etc/passwd"])).toEqual(["../etc/passwd"]);
     expect(unsafePatchPaths(["/etc/passwd"])).toEqual(["/etc/passwd"]);
     expect(unsafePatchPaths(["a/../../b"])).toEqual(["a/../../b"]);
+  });
+});
+
+describe("stripPatchFence", () => {
+  it("removes the fenced mbox, leaving prose before and after intact", () => {
+    const body = fence(ONE);
+    const stripped = stripPatchFence(body);
+    expect(stripped).toContain("## Why\n\nbecause");
+    expect(stripped).toContain("## Verification");
+    expect(stripped).not.toContain("diff --git");
+    expect(stripped).not.toContain("Subject: [PATCH");
+  });
+
+  it("returns the body unchanged when there is no complete fence", () => {
+    const body = "# Plan\n\n## Steps\n\n### Step 1\n";
+    expect(stripPatchFence(body)).toBe(body);
+  });
+});
+
+describe("summarizePatchFenceForPr", () => {
+  it("replaces the fenced mbox with a one-line summary and keeps the prose", () => {
+    const body = fence(ONE);
+    const series = parsePatchSeries(body)!;
+    const summarized = summarizePatchFenceForPr(body, series);
+    expect(summarized).toContain("## Why\n\nbecause");
+    expect(summarized).toContain("## Verification");
+    expect(summarized).not.toContain("diff --git");
+    expect(summarized).not.toContain("Subject: [PATCH");
+    expect(summarized).toContain("1 patch(es) applied");
+    expect(summarized).toContain("1 file(s) touched");
+  });
+});
+
+describe("firstPatchSubject", () => {
+  it("returns the first Subject line with a [PATCH n/m] tag stripped", () => {
+    const series = parsePatchSeries(fence(ONE))!;
+    expect(firstPatchSubject(series)).toBe("feat: add a level");
+  });
+
+  it("returns null when the series carries no Subject line", () => {
+    const noSubject = ONE.replace("Subject: [PATCH 1/1] feat: add a level\n", "");
+    const series = parsePatchSeries(fence(noSubject))!;
+    expect(firstPatchSubject(series)).toBe(null);
   });
 });

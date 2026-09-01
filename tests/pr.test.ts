@@ -601,3 +601,126 @@ describe("derivePrTitle", () => {
     expect(derivePrTitle(ctx, task)).toBe("Explicit wins");
   });
 });
+
+// ---------------------------------------------------------------------------
+// derivePrTitle — apply tickets (2026-08-31): a body carrying a junco-patch
+// fence must never have its title scraped from arbitrary diff content (the
+// reviewer reproduced a title of "My Project" lifted from a unified-diff
+// CONTEXT line). Precedence: ctx.prTitle -> series' first Subject line
+// (tag stripped) -> H1 OUTSIDE the fence -> task.id.
+// ---------------------------------------------------------------------------
+
+const APPLY_FENCE = "`".repeat(4);
+
+/** A minimal well-formed junco-patch series body. `subjectLine` is the raw
+ * mbox `Subject: ...` line, or null to omit it entirely (exercising the
+ * Subject-less fallback). `h1` prepends a real H1 OUTSIDE the fence. */
+function applyBody(subjectLine: string | null, h1?: string): string {
+  const lines = [
+    "From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001",
+    "From: Dispatcher <d@example.com>",
+    "Date: Sun, 31 Aug 2026 12:00:00 -0700",
+  ];
+  if (subjectLine !== null) lines.push(subjectLine);
+  lines.push(
+    "",
+    "---",
+    " game.js | 1 +",
+    " 1 file changed, 1 insertion(+)",
+    "",
+    "diff --git a/game.js b/game.js",
+    "index 1111111..2222222 100644",
+    "--- a/game.js",
+    "+++ b/game.js",
+    "@@ -1,2 +1,3 @@",
+    " const LEVELS = [",
+    '+  "new",',
+    " ];",
+    "",
+  );
+  const raw = lines.join("\n");
+  const heading = h1 !== undefined ? `# ${h1}\n\n` : "";
+  return `${heading}${APPLY_FENCE}junco-patch\n${raw}${APPLY_FENCE}\n`;
+}
+
+describe("derivePrTitle — apply tickets (2026-08-31)", () => {
+  it("ctx.prTitle still wins over the mbox Subject", () => {
+    const ctx = makeContext("/tmp/repo", { prTitle: "Explicit apply title" });
+    const task = { id: "APPLY-1", body: applyBody("Subject: [PATCH 1/1] feat: add a level") };
+    expect(derivePrTitle(ctx, task)).toBe("Explicit apply title");
+  });
+
+  it("falls back to the series' first Subject line with the [PATCH n/m] tag stripped", () => {
+    const ctx = makeContext("/tmp/repo", { prTitle: null });
+    const task = { id: "APPLY-2", body: applyBody("Subject: [PATCH 1/1] feat: add a level") };
+    expect(derivePrTitle(ctx, task)).toBe("feat: add a level");
+  });
+
+  it("never scrapes an H1-shaped diff CONTEXT line inside the fence for its title", () => {
+    // Reproduces the reviewer's finding: a unified-diff context line " # My
+    // Project" trims to "# My Project" and used to be mistaken for a real H1.
+    const ctx = makeContext("/tmp/repo", { prTitle: null });
+    const raw = [
+      "From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001",
+      "From: Dispatcher <d@example.com>",
+      "Date: Sun, 31 Aug 2026 12:00:00 -0700",
+      "Subject: [PATCH 1/1] docs: tweak readme",
+      "",
+      "---",
+      " README.md | 1 +",
+      " 1 file changed, 1 insertion(+)",
+      "",
+      "diff --git a/README.md b/README.md",
+      "index 1111111..2222222 100644",
+      "--- a/README.md",
+      "+++ b/README.md",
+      "@@ -1,3 +1,4 @@",
+      " # My Project",
+      "+more text",
+      " body",
+      "",
+    ].join("\n");
+    const task = { id: "APPLY-3", body: `${APPLY_FENCE}junco-patch\n${raw}${APPLY_FENCE}\n` };
+    expect(derivePrTitle(ctx, task)).toBe("docs: tweak readme");
+  });
+
+  it("falls back to an H1 OUTSIDE the fence when the series has no Subject line", () => {
+    const ctx = makeContext("/tmp/repo", { prTitle: null });
+    const task = { id: "APPLY-4", body: applyBody(null, "Prose Heading") };
+    expect(derivePrTitle(ctx, task)).toBe("Prose Heading");
+  });
+
+  it("prefers an H1 OUTSIDE the fence over an H1-shaped line that merely appears inside it", () => {
+    const ctx = makeContext("/tmp/repo", { prTitle: null });
+    const raw = [
+      "From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001",
+      "From: Dispatcher <d@example.com>",
+      "Date: Sun, 31 Aug 2026 12:00:00 -0700",
+      "",
+      "---",
+      " README.md | 1 +",
+      " 1 file changed, 1 insertion(+)",
+      "",
+      "diff --git a/README.md b/README.md",
+      "index 1111111..2222222 100644",
+      "--- a/README.md",
+      "+++ b/README.md",
+      "@@ -1,3 +1,4 @@",
+      " # Sneaky Heading",
+      "+more text",
+      " body",
+      "",
+    ].join("\n");
+    const task = {
+      id: "APPLY-5",
+      body: `# Real Heading\n\n${APPLY_FENCE}junco-patch\n${raw}${APPLY_FENCE}\n`,
+    };
+    expect(derivePrTitle(ctx, task)).toBe("Real Heading");
+  });
+
+  it("falls back to task.id when the series has no Subject line and no H1 outside the fence", () => {
+    const ctx = makeContext("/tmp/repo", { prTitle: null });
+    const task = { id: "APPLY-6", body: applyBody(null) };
+    expect(derivePrTitle(ctx, task)).toBe("APPLY-6");
+  });
+});

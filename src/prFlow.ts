@@ -30,8 +30,9 @@ import {
   type Commit,
 } from "./pr.js";
 import { lintTicket, LabelCache } from "./planLint.js";
-import { parsePatchSeries } from "./patchTicket.js";
+import { parsePatchSeries, summarizePatchFenceForPr } from "./patchTicket.js";
 import { applyPatchSeries } from "./applyPatch.js";
+import { extractPatchBody } from "./githubInbox.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
 import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
@@ -293,7 +294,17 @@ export function buildPrBody(
   }
 
   const body = task.body.trim();
-  if (body) parts.push("## Ticket\n\n" + body);
+  if (body) {
+    // Apply tickets: the ticket's own body IS the mbox series — re-embedding
+    // it here duplicates the diff the PR already shows and can exceed
+    // GitHub's 65,536-char PR-body cap (gh pr create then fails
+    // deterministically AFTER the commits are already pushed). Swap the
+    // fenced patch block for a one-line summary; the rest of the ticket's
+    // prose (Why/Verification) is untouched.
+    const patchSeries = parsePatchSeries(task.body);
+    const ticketSection = patchSeries ? summarizePatchFenceForPr(body, patchSeries) : body;
+    parts.push("## Ticket\n\n" + ticketSection);
+  }
 
   const summary = result.finalText ? result.finalText.trim() : "";
   if (summary) parts.push("## Agent summary\n\n" + summary);
@@ -498,6 +509,24 @@ export async function runPrFlow(
       );
     }
     result = outcome.result;
+  } else if (extractPatchBody(task.body) !== null) {
+    // The fence is present but parsePatchSeries rejected it (no mbox header,
+    // no diff --git hunk, or oversize) — mode-detection asymmetry guard:
+    // plan-lint's own apply-mode gate treats fence-PRESENT as apply
+    // (extractPatchBody !== null), so with lint disabled or non-blocking a
+    // malformed series must never silently fall through to the agent branch
+    // below with the giant raw mbox as its prompt. Terminal, same shape as an
+    // apply failure (worktree preserved, no requeue).
+    const phaseError = "apply failed: junco-patch fence present but not a well-formed series";
+    prOutcome.worktreePreserved = true;
+    log.warn(phaseError);
+    const r = emptyRunResult(phaseError);
+    return flowResult(
+      finalizePr(claimedPath, r, prOutcome, { dirs, phaseError }),
+      prOutcome,
+      r,
+      phaseError,
+    );
   } else {
     const prompt = buildPromptWithRepoContext(task, ctx, wtPath, nwo, {
       amendTarget,

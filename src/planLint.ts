@@ -12,7 +12,9 @@
  * !== null`) is an apply ticket — it has no Steps/Files sections to check, so
  * the prose rules below (steps_have_commits, files_table_referenced,
  * files_paths_exist, no_cd_in_steps) are skipped and the patch_* rules run
- * instead. Every other rule (shared rules) still runs for both modes.
+ * instead. Every other rule (shared rules) still runs for both modes, but
+ * no_forbidden_phrases scans the fenced mbox OUT for an apply ticket (see its
+ * own note below) — the diff/commit-message bytes are not agent instructions.
  *
  * Rules enforced:
  * - no_cd_in_verification: no `cd ` lines inside ## Verification fenced bash [shared]
@@ -26,7 +28,8 @@
  *                          a binary hunk [apply only]
  * - patch_has_verification (warn): apply ticket should still carry a ## Verification block
  *                          [apply only]
- * - no_forbidden_phrases:  no TBD / "Similar to Step N" / "think carefully" / etc. [shared]
+ * - no_forbidden_phrases:  no TBD / "Similar to Step N" / "think carefully" / etc. [shared;
+ *                          apply tickets scan PROSE only — the fenced mbox is excluded]
  * - no_cd_in_steps (warn): no absolute `cd /Users/...` in Step bodies [prose only]
  * - github_request_scope (warn): github_request rides a ticket the worker will actually fulfill [shared]
  * - labels_exist:          frontmatter `labels:` exist on the GitHub repo [shared]
@@ -41,6 +44,7 @@ import {
   unsafePatchPaths,
   hasBinaryHunk,
   MAX_PATCH_BYTES,
+  stripPatchFence,
 } from "./patchTicket.js";
 
 // ---------------------------------------------------------------------------
@@ -334,6 +338,10 @@ function checkNoForbiddenPhrases(body: string): LintViolation[] {
    *
    * Skips matches inside the body of the strict "Notes for the agent" block,
    * where words like "carefully" may legitimately appear in copy-verbatim text.
+   *
+   * `body` is already the fence-stripped prose for an apply ticket (the
+   * caller, lintTicket, does the stripping) — this function itself has no
+   * notion of apply mode and just scans whatever text it is handed.
    */
   const notesIdx = body.indexOf("## Notes for the agent");
   const scanTarget = notesIdx < 0 ? body : body.slice(0, notesIdx);
@@ -698,7 +706,12 @@ export function lintTicket(
     violations.push(...checkNoCdInSteps(body));
   }
   violations.push(...checkPatchSeries(body));
-  violations.push(...checkNoForbiddenPhrases(body));
+  // Apply tickets: scan PROSE only — the fenced mbox is the diff/commit
+  // messages a dispatcher generated, not instructions to an agent, and its
+  // content is byte-exact by construction. Scanning it whole means a patch
+  // that merely ADDS a word like "TBD" (a TODO comment, doc prose) fails a
+  // ticket with no agent and no looping risk at all.
+  violations.push(...checkNoForbiddenPhrases(isApply ? stripPatchFence(body) : body));
   violations.push(...checkGithubRequestScope(frontmatter));
   if (checkLabels) {
     violations.push(

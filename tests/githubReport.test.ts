@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildFinalComment, makeGithubReporter, COMMENT_LIMIT } from "../src/githubReport.js";
@@ -41,6 +41,12 @@ const out = (o: Partial<TicketOutcome>): TicketOutcome => ({
 });
 const cfg = {
   ghBin: "gh",
+  // Poison path (never written to by any test using the plain `cfg`, only
+  // read via dataTreePaths for the transcript-existence check) — onFinal now
+  // computes transcriptPathFor(dataTreePaths(cfg).transcripts, ticket.id),
+  // which needs SOME string dataDir even for tests that don't otherwise
+  // exercise the filesystem. Tests that DO write real files use repCfg below.
+  dataDir: "/nonexistent/junco-test-data",
   github: {
     enabled: true,
     triggerLabel: "junco",
@@ -117,6 +123,26 @@ describe("buildFinalComment", () => {
     );
     expect(c).toContain("endpoint down");
     expect(c).toContain("transcript");
+  });
+
+  it("pr failure: transcriptExists:false suppresses the pointer (apply tickets produce no transcript)", () => {
+    const c = buildFinalComment(
+      ticket(gt),
+      out({ status: "failed", prUrl: null, failureReason: "git am --3way failed" }),
+      { transcriptExists: false },
+    );
+    expect(c).toContain("git am --3way failed");
+    expect(c).not.toContain("transcript");
+  });
+
+  it("qa failure: transcriptExists:false suppresses the pointer", () => {
+    const c = buildFinalComment(
+      ticket({ ...gt, kind: "ask" }),
+      out({ kind: "qa", status: "failed", prUrl: null, failureReason: "endpoint down" }),
+      { transcriptExists: false },
+    );
+    expect(c).toContain("endpoint down");
+    expect(c).not.toContain("transcript");
   });
 
   it("truncates at the comment limit with a note", () => {
@@ -216,6 +242,86 @@ describe("makeGithubReporter", () => {
     await r.onRequeue(setChildTicket);
     await r.onFinal(setChildTicket, out({ status: "completed", prUrl: "https://x/pr/1" }));
     expect(f.calls).toEqual([]);
+  });
+});
+
+describe("makeGithubReporter — transcript pointer wiring", () => {
+  // A failed bridged ticket's comment must point at the transcript only when
+  // one actually exists — apply tickets (git am, no agent session) never
+  // produce one. existsFn is the injectable seam (GithubReporterDeps);
+  // makeGithubReporter computes the real per-ticket path via
+  // transcriptPathFor(dataTreePaths(cfg).transcripts, t.id) and checks it.
+  function captureCommentBody(): {
+    calls: string[][];
+    ghFn: (cfg: unknown, args: string[]) => Promise<CmdResult>;
+    body(): string | null;
+  } {
+    const calls: string[][] = [];
+    let body: string | null = null;
+    const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
+      calls.push(args);
+      if (args[1] === "comment") {
+        const idx = args.indexOf("--body-file");
+        body = readFileSync(args[idx + 1], "utf8");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    return { calls, ghFn, body: () => body };
+  }
+
+  it("suppresses the pointer when existsFn reports no transcript for the ticket (apply-ticket failure)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-rep-transcript-"));
+    const rc = repCfg(root);
+    const cap = captureCommentBody();
+    const existsFn = (): boolean => false;
+    const reporter = makeGithubReporter(rc, { ghFn: cap.ghFn, existsFn } as never);
+    await reporter.onFinal(
+      ticket(gt),
+      out({ status: "failed", prUrl: null, failureReason: "git am --3way failed" }),
+    );
+    expect(cap.body()).toContain("git am --3way failed");
+    expect(cap.body()).not.toContain("transcript");
+  });
+
+  it("keeps the pointer when existsFn reports a transcript IS present for the ticket (agent-ticket failure)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-rep-transcript-"));
+    const rc = repCfg(root);
+    const cap = captureCommentBody();
+    const existsFn = (): boolean => true;
+    const reporter = makeGithubReporter(rc, { ghFn: cap.ghFn, existsFn } as never);
+    await reporter.onFinal(
+      ticket(gt),
+      out({ status: "failed", prUrl: null, failureReason: "agent session errored" }),
+    );
+    expect(cap.body()).toContain("agent session errored");
+    expect(cap.body()).toContain("transcript");
+  });
+
+  it("defaults to a real existsSync check against the ticket's actual transcript path", async () => {
+    // No existsFn override: the real filesystem check must resolve to "no
+    // transcript" for a ticket id that was never run, and to "transcript
+    // present" once a file is written at the exact path the module computes.
+    const root = mkdtempSync(join(tmpdir(), "junco-rep-transcript-real-"));
+    const rc = repCfg(root);
+    const cap1 = captureCommentBody();
+    await makeGithubReporter(rc, { ghFn: cap1.ghFn } as never).onFinal(
+      ticket(gt),
+      out({ status: "failed", prUrl: null, failureReason: "boom" }),
+    );
+    expect(cap1.body()).not.toContain("transcript");
+
+    // repCfg's dataLayout is unset -> "flat" layout -> <dataDir>/transcripts/.
+    // ticket(gt).id is "gh-acme-api-42"; slugifyId leaves it unchanged.
+    const transcriptsDir = join(root, "transcripts");
+    mkdirSync(transcriptsDir, { recursive: true });
+    writeFileSync(join(transcriptsDir, `${ticket(gt).id}.jsonl`), "", "utf8");
+
+    const cap2 = captureCommentBody();
+    await makeGithubReporter(rc, { ghFn: cap2.ghFn } as never).onFinal(
+      ticket(gt),
+      out({ status: "failed", prUrl: null, failureReason: "boom" }),
+    );
+    expect(cap2.body()).toContain("transcript");
   });
 });
 

@@ -1421,6 +1421,41 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(body).toContain("Spec verification:** 1/1 checks passed");
   });
 
+  it("an apply ticket's PR body summarizes the patch instead of re-embedding the raw mbox (buildPrBody)", async () => {
+    const capture = join(h.root, "pr-body-summary-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/124"; exit 0`;
+    const cfg = makeConfig(h, { ghBin: ghShim(h.root, "gh-apply-body.sh", prCreate) });
+    const { task, path } = makeTicket(
+      h,
+      "apply-body.md",
+      `---\nid: apply-body\nrepo: ${h.work}\n---\n${applyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: () => () => {
+        throw new Error("agent session must never be constructed for an apply ticket");
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("## Ticket");
+    expect(body).toContain("# Apply a patch"); // the ticket's own prose survives
+    expect(body).toContain("1 patch(es) applied");
+    expect(body).toContain("1 file(s) touched");
+    // The whole mbox — redundant with the PR's own diff, and able to blow
+    // GitHub's 65,536-char body cap — must NOT be re-embedded.
+    expect(body).not.toContain("diff --git");
+    expect(body).not.toContain("junco-patch");
+  });
+
   it("an apply ticket skips the critic pass", async () => {
     // criticEnabled: true proves the skip is apply-mode's doing, not just
     // critic being globally off.
@@ -1479,6 +1514,42 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(flow.phaseError).toMatch(/^apply failed:/);
     // No requeue path ran: a requeue always cleans up the worktree and moves
     // the ticket back to inbox/ with a bumped retry_count; neither happened.
+    expect(text).not.toMatch(/retry_count: 1/);
+    expect(text).not.toMatch(/not_before:/);
+    expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("a junco-patch fence present but not a well-formed series fails loud instead of falling through to the agent", async () => {
+    // Mode-detection asymmetry guard: plan-lint treats fence-PRESENT as apply
+    // (extractPatchBody !== null) while this used to be the only signal
+    // Phase 4 itself checked (parsePatchSeries !== null). With lint disabled
+    // (this test's default cfg) or non-blocking, a malformed fence must still
+    // never fall through to the giant-mbox-as-prompt agent path.
+    const cfg = makeConfig(h);
+    const malformedBody = "# Apply a patch\n\n````junco-patch\nnot a real mbox series\n````\n";
+    const { task, path } = makeTicket(
+      h,
+      "apply-malformed.md",
+      `---\nid: apply-malformed\nrepo: ${h.work}\n---\n${malformedBody}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: () => () => {
+        throw new Error(
+          "agent session must never be constructed when a junco-patch fence is present",
+        );
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(flow.phaseError).toMatch(/^apply failed:/);
+    expect(flow.phaseError).toMatch(/not a well-formed/);
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: failed");
     expect(text).not.toMatch(/retry_count: 1/);
     expect(text).not.toMatch(/not_before:/);
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved

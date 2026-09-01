@@ -7,7 +7,7 @@
  * local done//failed/ and the PR itself are the source of truth.
  */
 
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket, type TicketGithub } from "./types.js";
@@ -23,6 +23,8 @@ import {
 import { gh } from "./git.js";
 import { log } from "./logging.js";
 import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
+import { dataTreePaths } from "./dataTree.js";
+import { transcriptPathFor } from "./slug.js";
 
 // COMMENT_LIMIT is defined in githubInbox.ts (buildPlanComment shares it);
 // re-exported here so existing importers keep working without an import cycle.
@@ -45,10 +47,25 @@ function excerpt(text: string, cap = 700): string {
   return slice.slice(0, cut).trimEnd() + " …";
 }
 
-export function buildFinalComment(ticket: Ticket, outcome: TicketOutcome): string {
+export interface BuildFinalCommentOpts {
+  /** Whether a per-ticket event transcript actually exists on disk. Defaults
+   * to true — every existing (pre-2026-08-31) caller is an agent ticket,
+   * which always produces one; apply tickets (git am, no agent session) never
+   * do, so makeGithubReporter passes the real check explicitly. */
+  transcriptExists?: boolean;
+}
+
+export function buildFinalComment(
+  ticket: Ticket,
+  outcome: TicketOutcome,
+  opts: BuildFinalCommentOpts = {},
+): string {
+  const { transcriptExists = true } = opts;
   const parts: string[] = [];
   const done = TERMINAL_DONE_STATUSES.has(outcome.status);
-  const transcriptPointer = `_Transcript on the worker host: \`transcripts/${ticket.id}.jsonl\` under the state dir._`;
+  const transcriptPointer = transcriptExists
+    ? `_Transcript on the worker host: \`transcripts/${ticket.id}.jsonl\` under the state dir._`
+    : null;
 
   if (outcome.kind === "qa") {
     if (done) {
@@ -56,7 +73,7 @@ export function buildFinalComment(ticket: Ticket, outcome: TicketOutcome): strin
     } else {
       parts.push(`**Junco could not answer this ticket** (status: \`${outcome.status}\`).`);
       if (outcome.failureReason) parts.push(`> ${outcome.failureReason.slice(0, 1000)}`);
-      parts.push(transcriptPointer);
+      if (transcriptPointer) parts.push(transcriptPointer);
     }
   } else if (outcome.prUrl) {
     parts.push(`Opened ${outcome.prUrl}`);
@@ -73,7 +90,7 @@ export function buildFinalComment(ticket: Ticket, outcome: TicketOutcome): strin
   } else {
     parts.push(`**Junco failed to produce a pull request** (status: \`${outcome.status}\`).`);
     if (outcome.failureReason) parts.push(`> ${outcome.failureReason.slice(0, 1000)}`);
-    parts.push(transcriptPointer);
+    if (transcriptPointer) parts.push(transcriptPointer);
   }
 
   let text = parts.join("\n\n") + "\n";
@@ -87,10 +104,13 @@ export function buildFinalComment(ticket: Ticket, outcome: TicketOutcome): strin
 
 export interface GithubReporterDeps {
   ghFn?: typeof gh;
+  /** Transcript-existence seam (tests). Defaults to `existsSync`. */
+  existsFn?: (path: string) => boolean;
 }
 
 export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): TicketReporter {
   const ghFn = deps.ghFn ?? gh;
+  const existsFn = deps.existsFn ?? existsSync;
   const ll = lifecycleLabels(cfg.github.triggerLabel);
 
   const swap = async (g: TicketGithub, add: string, remove: string): Promise<void> => {
@@ -261,7 +281,8 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       }
       if (outcome.prQueued) return; // composite outbox op owns comment + flip
       // pr/ask: comment first — it is the valuable artifact; the label is cosmetic.
-      const finalComment = buildFinalComment(t, outcome);
+      const transcriptExists = existsFn(transcriptPathFor(dataTreePaths(cfg).transcripts, t.id));
+      const finalComment = buildFinalComment(t, outcome, { transcriptExists });
       await guardOrQueue(
         "final comment",
         t.id,

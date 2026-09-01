@@ -934,11 +934,38 @@ zcmZQzWMZQ
     expect(r.ok).toBe(true);
   });
 
-  it("still applies the shared rules to a patch ticket", () => {
+  it("still applies no_forbidden_phrases to a patch ticket's own PROSE", () => {
     const tbd = `## Why\n\nTBD\n\n\`\`\`\`junco-patch\n${ONE_PATCH}\`\`\`\`\n\n## Verification\n\n\`\`\`bash\nnode --check game.js\n\`\`\`\n`;
     expect(lintTicket(tbd, {}, { checkLabels: false }).violations.map((v) => v.rule)).toContain(
       "no_forbidden_phrases",
     );
+  });
+
+  it("does not mis-fire no_forbidden_phrases on a diff hunk that merely ADDS a forbidden-looking word", () => {
+    // Reproduces the reviewer's finding: a patch adding `+TBD: finish the
+    // docs later` to a README used to fail the ticket even though there is
+    // no agent, no looping, and no unfilled prose placeholder — the bytes
+    // are byte-exact by construction.
+    const tbdInDiff = `From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001
+From: Dispatcher <d@example.com>
+Date: Sun, 31 Aug 2026 12:00:00 -0700
+Subject: [PATCH 1/1] docs: add TODO marker
+
+---
+ README.md | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,3 @@
+ # Title
++TBD: finish the docs later
+`;
+    const r = lintTicket(fence(tbdInDiff), {}, { checkLabels: false });
+    expect(r.violations.map((v) => v.rule)).not.toContain("no_forbidden_phrases");
+    expect(r.ok).toBe(true);
   });
 });
 
