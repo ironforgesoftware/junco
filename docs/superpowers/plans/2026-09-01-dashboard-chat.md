@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A per-repo, daemon-hosted chat with the coding agent inside the dashboard, from which every junco dispatch branch (ticket, amend, apply, assess, analyze, ticket set, plan set) can be drafted, parked for review, and submitted.
+**Goal:** A per-repo, daemon-hosted chat with the coding agent inside the dashboard, from which every junco dispatch branch (ticket, amend, apply, audit, investigate, ticket set, plan set) can be drafted, parked for review, and submitted.
 
 **Architecture:** The daemon owns one file-backed Pi `AgentSession` per repo (`src/chat/`), gated by the same budget/provider gates as tickets and writing spend to the single-writer ledger in-process. The health server gains loopback-only `/chat/*` routes (SSE out, POST in). The dashboard gets a `chat` view built on the transcript viewer's pure core plus a multiline composer; drafts detected in assistant messages (a `junco-ticket`/`junco-plan` fence) are linted and routed with the existing `submitPreflight` code, parked in a `makeReviewStore`, and submitted by spawning the CLI verb.
 
@@ -234,8 +234,8 @@ export type DraftKind =
   | "ticket"
   | "amend"
   | "apply"
-  | "assess"
-  | "analyze"
+  | "audit"
+  | "investigate"
   | "ticketSet"
   | "planSet";
 
@@ -282,9 +282,9 @@ export interface ChatDraftRecord {
   draftId: string;
   kind: DraftKind;
   status: "parked" | "lint_failed" | "submitted" | "discarded";
-  /** Ticket ids / assess-analyze ids once known. */
+  /** Ticket ids / audit-investigate ids once known. */
   ids: string[];
-  /** null until submitted; "command" for assess/analyze. */
+  /** null until submitted; "command" for audit/investigate. */
   destination: "inbox" | "issue" | "command" | null;
   ts: string;
 }
@@ -3499,6 +3499,8 @@ Then merge `origin/main` (`git fetch origin && git merge origin/main`) and re-ru
 
 ### Task 10: `fenceExtract.ts` — fences → drafts with kind and the frontmatter allowlist
 
+**Also in this task (upstream #389 rename):** the two `DraftKind` literals Task 1 landed as `"assess" | "analyze"` in `src/agent/transcriptSchema.ts` become `"audit" | "investigate"` — #389 renamed the CLI verbs (`junco audit`, `junco investigate`) and made `audit:`/`investigate:` the canonical frontmatter keys with `assess:`/`analyze:` kept as legacy aliases; new identifiers follow the canonical names. Include that rename in this task's commit.
+
 Spec §6.1. Pure: text in, `ExtractedDraft[]` out. Reuses `githubInbox.ts`'s fence semantics (a complete block, longest-backtick opener, CRLF normalized) through a new exported `allFencedBlocks` — the existing `extractFencedBlock` strips frontmatter and returns only the LAST block, and chat needs every block _with_ its (allowlisted) frontmatter.
 
 **Files:**
@@ -3632,33 +3634,39 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
     expect(d!.files[0]!.frontmatter.repo).toBe("/repo/acme-api");
   });
 
-  it("kinds by frontmatter shape, with precedence assess > analyze > amend > apply > ticket", () => {
+  it("kinds by frontmatter shape, with precedence audit > investigate > amend > apply > ticket; legacy keys accepted, canonical wins", () => {
     const k = (fm: string, body = "# T") => extractDrafts(fence(fm, body), ctx)[0]!.kind;
     expect(k("id: a\namends_pr: 42")).toBe("amend");
     expect(k("id: a", "# T\n\n```junco-patch\nFrom 0 Mon Sep 17 00:00:00 2001\n```")).toBe("apply");
-    expect(k("id: a\nassess:\n  auto_plan: true")).toBe("assess");
-    expect(k("id: a\nanalyze:\n  issue: 7")).toBe("analyze");
-    expect(k("id: a\nassess: {}\nanalyze:\n  issue: 7\namends_pr: 1")).toBe("assess");
-  });
-
-  it("assess/analyze derive commandArgs at extraction; a missing issue is a problem", () => {
-    const a = extractDrafts(
-      fence("id: a\nassess:\n  auto_plan: true\n  issue: 12", "# A"),
+    expect(k("id: a\naudit:\n  auto_plan: true")).toBe("audit");
+    expect(k("id: a\ninvestigate:\n  issue: 7")).toBe("investigate");
+    expect(k("id: a\naudit: {}\ninvestigate:\n  issue: 7\namends_pr: 1")).toBe("audit");
+    expect(k("id: a\nassess:\n  auto_plan: true")).toBe("audit"); // legacy key
+    expect(k("id: a\nanalyze:\n  issue: 7")).toBe("investigate"); // legacy key
+    const both = extractDrafts(
+      fence("id: a\naudit:\n  issue: 3\nassess:\n  issue: 9", "# A"),
       ctx,
     )[0]!;
-    expect(a.commandArgs).toEqual(["assess", "acme/api#12", "--auto-plan"]);
-    const a2 = extractDrafts(fence("id: a\nassess: {}", "# A"), { ...ctx, nwo: null })[0]!;
-    expect(a2.commandArgs).toEqual(["assess", "/repo/acme-api"]);
-    const z = extractDrafts(fence("id: z\nanalyze:\n  issue: 7", "# Z"), ctx)[0]!;
-    expect(z.commandArgs).toEqual(["analyze", "acme/api#7"]);
-    const bad = extractDrafts(fence("id: z\nanalyze: {}", "# Z"), ctx)[0]!;
+    expect(both.commandArgs).toEqual(["audit", "acme/api#3"]); // canonical wins
+    expect(both.files[0]!.frontmatter.assess).toBeUndefined(); // the losing legacy key is dropped
+    expect(both.files[0]!.droppedKeys).toEqual(["assess"]);
+  });
+
+  it("audit/investigate derive commandArgs at extraction; a missing issue is a problem", () => {
+    const a = extractDrafts(fence("id: a\naudit:\n  auto_plan: true\n  issue: 12", "# A"), ctx)[0]!;
+    expect(a.commandArgs).toEqual(["audit", "acme/api#12", "--auto-plan"]);
+    const a2 = extractDrafts(fence("id: a\naudit: {}", "# A"), { ...ctx, nwo: null })[0]!;
+    expect(a2.commandArgs).toEqual(["audit", "/repo/acme-api"]);
+    const z = extractDrafts(fence("id: z\ninvestigate:\n  issue: 7", "# Z"), ctx)[0]!;
+    expect(z.commandArgs).toEqual(["investigate", "acme/api#7"]);
+    const bad = extractDrafts(fence("id: z\ninvestigate: {}", "# Z"), ctx)[0]!;
     expect(bad.commandArgs).toBeNull();
-    expect(bad.problems).toEqual(["analyze.issue is required"]);
-    const local = extractDrafts(fence("id: z\nanalyze:\n  issue: 7", "# Z"), {
+    expect(bad.problems).toEqual(["investigate.issue is required"]);
+    const local = extractDrafts(fence("id: z\ninvestigate:\n  issue: 7", "# Z"), {
       ...ctx,
       nwo: null,
     })[0]!;
-    expect(local.problems).toEqual(["analyze needs a watched owner/repo"]);
+    expect(local.problems).toEqual(["investigate needs a watched owner/repo"]);
   });
 
   it("two or more junco-ticket fences → one ticketSet; every file needs an id; unknown depends_on is a problem", () => {
@@ -3766,6 +3774,9 @@ export const FRONTMATTER_ALLOWLIST: ReadonlySet<string> = new Set([
   "amends_pr",
   "timeout_minutes",
   "github_request",
+  "audit",
+  "investigate",
+  // Legacy aliases parseTicket still accepts (#389); the canonical key wins on a collision.
   "assess",
   "analyze",
 ]);
@@ -3784,7 +3795,7 @@ export interface ExtractedDraft {
   kind: DraftKind;
   files: ExtractedFile[];
   blocked: "plan_sets_disabled" | null;
-  /** assess/analyze: the verb's argv, derived here so confirm never re-reads the fence. */
+  /** audit/investigate: the verb's argv, derived here so confirm never re-reads the fence. */
   commandArgs: string[] | null;
   /** Structural problems found here (lint runs later, in chatDrafts.ts). */
   problems: string[];
@@ -3793,7 +3804,7 @@ export interface ExtractedDraft {
 export interface ExtractCtx {
   /** The session cwd — `repo:` for a local session. */
   repo: string;
-  /** owner/repo for a watched session — `repo:` then, and the assess/analyze target. */
+  /** owner/repo for a watched session — `repo:` then, and the audit/investigate target. */
   nwo: string | null;
   planSetsEnabled: boolean;
 }
@@ -3837,6 +3848,18 @@ function splitFile(raw: string, ctx: ExtractCtx, problems: string[]): ExtractedF
     if (FRONTMATTER_ALLOWLIST.has(k)) kept[k] = v;
     else droppedKeys.push(k);
   }
+  // A ticket carrying both the canonical and the legacy request key: the
+  // canonical wins (parseTicket's own precedence, #389) and the loser is
+  // dropped here so the parked file never trips the key_collision lint.
+  for (const [canonical, legacy] of [
+    ["audit", "assess"],
+    ["investigate", "analyze"],
+  ] as const) {
+    if (canonical in kept && legacy in kept) {
+      delete kept[legacy];
+      droppedKeys.push(legacy);
+    }
+  }
   if (typeof kept.id !== "string" || kept.id === "") {
     const h1 = h1Of(body);
     if (h1) kept.id = slug(h1);
@@ -3856,10 +3879,22 @@ function splitFile(raw: string, ctx: ExtractCtx, problems: string[]): ExtractedF
   };
 }
 
+/** The audit/investigate request block: canonical key, else the legacy alias
+ * (#389: `audit:`/`investigate:` canonical; `assess:`/`analyze:` accepted). */
+function requestBlock(
+  fm: Record<string, unknown>,
+  canonical: string,
+  legacy: string,
+): Record<string, unknown> | null {
+  if (isRecord(fm[canonical])) return fm[canonical];
+  if (isRecord(fm[legacy])) return fm[legacy];
+  return null;
+}
+
 function kindOf(f: ExtractedFile): DraftKind {
   const fm = f.frontmatter;
-  if (isRecord(fm.assess)) return "assess";
-  if (isRecord(fm.analyze)) return "analyze";
+  if (requestBlock(fm, "audit", "assess") !== null) return "audit";
+  if (requestBlock(fm, "investigate", "analyze") !== null) return "investigate";
   if (fm.amends_pr !== undefined && fm.amends_pr !== null) return "amend";
   if (extractPatchBody(f.body) !== null) return "apply";
   return "ticket";
@@ -3872,31 +3907,31 @@ function commandArgsFor(
   problems: string[],
 ): string[] | null {
   const fm = f.frontmatter;
-  if (kind === "assess") {
-    const a = fm.assess as Record<string, unknown>;
+  if (kind === "audit") {
+    const a = requestBlock(fm, "audit", "assess")!;
     const target = ctx.nwo ?? ctx.repo;
     const issue = typeof a.issue === "number" ? a.issue : null;
     if (issue !== null && ctx.nwo === null) {
-      problems.push("an issue-scoped assess needs a watched owner/repo");
+      problems.push("an issue-scoped audit needs a watched owner/repo");
       return null;
     }
     return [
-      "assess",
+      "audit",
       issue !== null ? `${target}#${issue}` : target,
       ...(a.auto_plan === true ? ["--auto-plan"] : []),
     ];
   }
-  if (kind === "analyze") {
-    const a = fm.analyze as Record<string, unknown>;
+  if (kind === "investigate") {
+    const a = requestBlock(fm, "investigate", "analyze")!;
     if (ctx.nwo === null) {
-      problems.push("analyze needs a watched owner/repo");
+      problems.push("investigate needs a watched owner/repo");
       return null;
     }
     if (typeof a.issue !== "number") {
-      problems.push("analyze.issue is required");
+      problems.push("investigate.issue is required");
       return null;
     }
-    return ["analyze", `${ctx.nwo}#${a.issue}`];
+    return ["investigate", `${ctx.nwo}#${a.issue}`];
   }
   return null;
 }
@@ -4160,28 +4195,28 @@ describe("parkDrafts (spec 2026-09-01 §6.2)", () => {
     expect(d!.files[1]!.lint.find((v) => v.rule === "depends_on_sibling")?.severity).toBe(
       "warning",
     );
-    const bad = extractDrafts("```junco-ticket\n---\nid: z\nanalyze: {}\n---\n# Z\n```", ctx);
+    const bad = extractDrafts("```junco-ticket\n---\nid: z\ninvestigate: {}\n---\n# Z\n```", ctx);
     const [z] = await parkDrafts(cfg, sess, bad, { routeFn: routeInbox });
     expect(z!.lintFailed).toBe(true);
     expect(z!.files[0]!.lint[0]).toMatchObject({
       rule: "chat_extract",
       severity: "error",
-      message: "analyze.issue is required",
+      message: "investigate.issue is required",
     });
   });
-  it("assess/analyze skip plan lint and carry commandArgs; planSet lints through the compiler", async () => {
+  it("audit/investigate skip plan lint and carry commandArgs; planSet lints through the compiler", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-park-"));
     const cfg = cfgAt(root);
     const [a] = await parkDrafts(
       cfg,
       sess,
       extractDrafts(
-        "```junco-ticket\n---\nid: a\nassess:\n  auto_plan: true\n---\n# Audit\n```",
+        "```junco-ticket\n---\nid: a\naudit:\n  auto_plan: true\n---\n# Audit\n```",
         ctx,
       ),
     );
-    expect(a!.kind).toBe("assess");
-    expect(a!.commandArgs).toEqual(["assess", "acme/api", "--auto-plan"]);
+    expect(a!.kind).toBe("audit");
+    expect(a!.commandArgs).toEqual(["audit", "acme/api", "--auto-plan"]);
     expect(a!.lintFailed).toBe(false);
     const [p] = await parkDrafts(
       cfg,
@@ -4383,7 +4418,7 @@ Run: `npx vitest run tests/draftStore.test.ts tests/chatDrafts.test.ts tests/cha
 ```ts
 /**
  * Parked chat drafts (spec 2026-09-01 §6.2): a makeReviewStore over
- * <chatDrafts>/ (the third instance of the assess/analyze park idiom) plus the
+ * <chatDrafts>/ (the third instance of the audit/investigate park idiom) plus the
  * ticket files beside the JSON — <chatDrafts>/<draftId>/<name> — so confirm
  * hands the CLI a byte-identical path.
  */
@@ -4557,7 +4592,7 @@ export async function parkDrafts(
         if (!parsed.ok)
           for (const message of parsed.errors)
             lint.push({ rule: "plan_set", severity: "error", message });
-      } else if (x.kind !== "assess" && x.kind !== "analyze") {
+      } else if (x.kind !== "audit" && x.kind !== "investigate") {
         const t = parseTicket(f.name, f.content, cfg.defaultTimeoutMinutes);
         lint.push(
           ...lintFn(t.body, t.frontmatter, {
@@ -4741,7 +4776,7 @@ describe("chat prompt (spec 2026-09-01 §6.5)", () => {
   });
   it("a subsection spec returns only that ### block", () => {
     const only = loadSkillSections([
-      { h2: "Assess mode (audit a repo → review → file)", h3: "Inputs to gather" },
+      { h2: "Audit mode (sweep a repo → review → file)", h3: "Inputs to gather" },
     ]);
     expect(only).toContain("### Inputs to gather");
     expect(only).not.toContain("### Preconditions");
@@ -4825,8 +4860,8 @@ export const CHAT_SKILL_SECTIONS: readonly SkillSectionSpec[] = [
   { h2: "Wrapping an existing plan file" },
   { h2: "Amend mode (follow-up tickets on existing PRs)" },
   { h2: "Apply mode (patch tickets)" },
-  { h2: "Assess mode (audit a repo → review → file)", h3: "Inputs to gather" },
-  { h2: "Analyze mode (investigate an issue → reviewed comment)", h3: "Inputs to gather" },
+  { h2: "Audit mode (sweep a repo → review → file)", h3: "Inputs to gather" },
+  { h2: "Investigate mode (deep-read an issue → reviewed comment)", h3: "Inputs to gather" },
 ];
 
 function sliceSection(lines: string[], start: number, level: "##" | "###"): string[] {
@@ -4886,8 +4921,9 @@ inner fence.
 Frontmatter you may set: ${allow}. \`repo:\` is set by junco from this session — never
 write it — and every other key (\`tools\`, \`network\`, \`workdir\`, …) is dropped. Kinds
 are expressed by frontmatter: \`amends_pr: <n>\` for a follow-up on an open PR; an
-\`assess:\` block (\`auto_plan\`, optional \`issue\`) to request a repo audit; an
-\`analyze:\` block (\`issue\`) to request an issue investigation; a \`junco-patch\` fence in
+\`audit:\` block (\`auto_plan\`, optional \`issue\`) to request a repo audit; an
+\`investigate:\` block (\`issue\`) to request an issue investigation (the legacy spellings
+\`assess:\`/\`analyze:\` are accepted but never preferred); a \`junco-patch\` fence in
 the body for an apply ticket (only when you know the exact bytes). A ticket SET is two or
 more \`${PLAN_FENCE}\` fences in one message, each with an explicit \`id\` and
 \`depends_on\` naming sibling ids. When wrapping an existing plan file the operator points
@@ -6456,7 +6492,7 @@ Spec §8.2, §8.4. A controlled multiline field on `useGuardedInput` (the one ga
 - Produces:
 
   ```ts
-  export const SLASH_COMMANDS: ReadonlyArray<{ name: string; hint: string; takesArg: boolean }>; // draft, assess, analyze, pr, issue, abort, new
+  export const SLASH_COMMANDS: ReadonlyArray<{ name: string; hint: string; takesArg: boolean }>; // draft, audit, investigate, pr, issue, abort, new
   export interface ComposerProps {
     value: string;
     onChange(v: string): void;
@@ -6545,15 +6581,15 @@ describe("Composer (spec 2026-09-01 §8.2, §8.4)", () => {
     await until(
       () =>
         r.lastFrame()!.includes("/abort") &&
-        r.lastFrame()!.includes("/analyze") &&
-        r.lastFrame()!.includes("/assess"),
+        r.lastFrame()!.includes("/audit") &&
+        !r.lastFrame()!.includes("/investigate"),
     );
     expect(r.lastFrame()).not.toContain("/draft");
     r.stdin.write("\t");
-    await until(() => r.lastFrame()!.includes("/abort") && !r.lastFrame()!.includes("/analyze"));
+    await until(() => r.lastFrame()!.includes("/audit") && !r.lastFrame()!.includes("/abort"));
     r.stdin.write("\r");
     await until(() => sent.length === 1);
-    expect(sent[0]).toBe("/abort");
+    expect(sent[0]).toBe("/audit");
   });
 
   it("disabled: shows the reason and swallows input", async () => {
@@ -6569,14 +6605,15 @@ describe("Composer (spec 2026-09-01 §8.2, §8.4)", () => {
   it("slashMatches is pure and prefix-based", () => {
     expect(slashMatches("/").map((c) => c.name)).toEqual([
       "draft",
-      "assess",
-      "analyze",
+      "audit",
+      "investigate",
       "pr",
       "issue",
       "abort",
       "new",
     ]);
-    expect(slashMatches("/an").map((c) => c.name)).toEqual(["analyze"]);
+    expect(slashMatches("/in").map((c) => c.name)).toEqual(["investigate"]);
+    expect(slashMatches("/a").map((c) => c.name)).toEqual(["audit", "abort"]);
     expect(slashMatches("hello")).toEqual([]);
     expect(slashMatches("/pr 4")).toEqual([]); // an argument ends completion
   });
@@ -6599,8 +6636,12 @@ import { theme } from "../theme.js";
 
 export const SLASH_COMMANDS: ReadonlyArray<{ name: string; hint: string; takesArg: boolean }> = [
   { name: "draft", hint: "draft a ticket from this conversation", takesArg: false },
-  { name: "assess", hint: "request a read-only repo audit", takesArg: false },
-  { name: "analyze", hint: "analyze N — investigate issue #N", takesArg: true },
+  { name: "audit", hint: "request a read-only repo audit (junco audit)", takesArg: false },
+  {
+    name: "investigate",
+    hint: "investigate N — deep-read issue #N (junco investigate)",
+    takesArg: true,
+  },
   { name: "pr", hint: "pr N — pull PR #N (body, reviews, comments) into the chat", takesArg: true },
   { name: "issue", hint: "issue N — pull issue #N into the chat", takesArg: true },
   { name: "abort", hint: "abort the streaming turn", takesArg: false },
@@ -7306,23 +7347,23 @@ describe("submitArgv (pure, spec 2026-09-01 §6.1, §6.4)", () => {
     expect(
       submitArgv(
         draft({
-          kind: "assess",
-          commandArgs: ["assess", "acme/api", "--auto-plan"],
+          kind: "audit",
+          commandArgs: ["audit", "acme/api", "--auto-plan"],
           files: [file("a.md", null)],
         }),
         fp,
       ),
-    ).toEqual([["assess", "acme/api", "--auto-plan"]]);
+    ).toEqual([["audit", "acme/api", "--auto-plan"]]);
     expect(
       submitArgv(
         draft({
-          kind: "analyze",
-          commandArgs: ["analyze", "acme/api#7"],
+          kind: "investigate",
+          commandArgs: ["investigate", "acme/api#7"],
           files: [file("z.md", null)],
         }),
         fp,
       ),
-    ).toEqual([["analyze", "acme/api#7"]]);
+    ).toEqual([["investigate", "acme/api#7"]]);
   });
   it("nextRoute cycles auto → inbox → issue → auto", () => {
     expect(nextRoute("auto")).toBe("inbox");
@@ -7579,7 +7620,7 @@ and return it.
         const files = await Promise.all(
           entry.files.map(async (f) => {
             const content = readFileFn(draftFilePath(cfg, id, f.name));
-            if (entry.kind === "assess" || entry.kind === "analyze" || entry.kind === "planSet")
+            if (entry.kind === "audit" || entry.kind === "investigate" || entry.kind === "planSet")
               return { ...f, content };
             const t = parseTicket(f.name, content, cfg.defaultTimeoutMinutes);
             const lint = lintTicket(t.body, t.frontmatter, { repoPath: entry.cwd, repoNwo: entry.nwo, checkLabels: false }).violations;
@@ -7614,7 +7655,7 @@ export function nextRoute(r: RouteOverride): RouteOverride {
 
 /** One argv per CLI invocation, in order (spec §6.1 table, §6.4 override). */
 export function submitArgv(d: PendingDraft, filePath: (name: string) => string): string[][] {
-  if (d.kind === "assess" || d.kind === "analyze") return d.commandArgs ? [d.commandArgs] : [];
+  if (d.kind === "audit" || d.kind === "investigate") return d.commandArgs ? [d.commandArgs] : [];
   const asIssue = (f: PendingDraft["files"][number]): boolean =>
     d.routeOverride === "issue" || (d.routeOverride === "auto" && f.route?.destination === "issue");
   if (d.kind === "planSet") {
@@ -7685,7 +7726,7 @@ export function useChatDrafts(opts: {
       }
       await client.archiveSubmittedChatDraft(d.id);
       const destination =
-        d.kind === "assess" || d.kind === "analyze"
+        d.kind === "audit" || d.kind === "investigate"
           ? "command"
           : argvs[0]!.includes("--as-issue")
             ? "issue"
@@ -7772,7 +7813,7 @@ export function useChatDrafts(opts: {
 const cd = state.chatDrafts[idx - batchCount - state.drafts.length]!;
 const first = cd.files[0];
 const verdict =
-  cd.kind === "assess" || cd.kind === "analyze"
+  cd.kind === "audit" || cd.kind === "investigate"
     ? "command"
     : cd.routeOverride !== "auto"
       ? `${cd.routeOverride}!`
@@ -8181,15 +8222,15 @@ const onComposerSubmit = useCallback(
         return void chatApi.send(
           "Draft a junco ticket for what we just discussed. Emit it in a junco-ticket fence.",
         );
-      case "assess":
+      case "audit":
         return void chatApi.send(
-          "Request a read-only audit of this repository: emit a junco-ticket fence whose frontmatter has an `assess:` block.",
+          "Request a read-only audit of this repository: emit a junco-ticket fence whose frontmatter has an `audit:` block.",
         );
-      case "analyze": {
+      case "investigate": {
         const n = Number.parseInt(arg ?? "", 10);
-        if (!Number.isInteger(n)) return void showToast("error", "usage: /analyze N");
+        if (!Number.isInteger(n)) return void showToast("error", "usage: /investigate N");
         return void chatApi.send(
-          `Request an investigation of issue #${n}: emit a junco-ticket fence whose frontmatter has an \`analyze:\` block with \`issue: ${n}\`.`,
+          `Request an investigation of issue #${n}: emit a junco-ticket fence whose frontmatter has an \`investigate:\` block with \`issue: ${n}\`.`,
         );
       }
       case "pr":
@@ -8394,7 +8435,7 @@ After "The Q&A path" add:
 dashboard `t` on a repo row → POST /chat/prompt → ChatManager (gate check: budget, provider)
 → ChatSession.prompt → runChatTurn (read-only tools, per-turn timeout, no guards)
 → transcript.jsonl (+ record bus → SSE /chat/events) → fence scan → parked draft
-→ dashboard review (s submit → `junco submit …` / `junco assess …` / `junco analyze …`)
+→ dashboard review (s submit → `junco submit …` / `junco audit …` / `junco investigate …`)
 
 `````
 
@@ -8409,7 +8450,7 @@ as runs with `flow: "chat"`.
 
 Drafts: an assistant message containing a ```` ```junco-ticket ```` (or ```` ```junco-plan ````)
 fence is extracted (`fenceExtract.ts`: kind by frontmatter shape — ticket / amend / apply /
-assess / analyze / ticketSet / planSet; a frontmatter **allowlist** keeps the planner's
+audit / investigate / ticketSet / planSet; a frontmatter **allowlist** keeps the planner's
 security boundary: junco sets `repo:`, and `tools`/`network`/`workdir` are dropped), linted and
 routed with `submitPreflight.ts`'s `decideRoute` + `lintTicket`, and parked in
 `data/chat-drafts/` (`makeReviewStore`). Confirm spawns the CLI verb — never an in-process
@@ -8423,11 +8464,11 @@ Module map rows for `chat/` (one line each: `chatKey`, `chatCwd`, `chatTurn`, `c
 
 - [ ] **Step 2: `README.md`**
 
-A "Chat with the agent" section: open with `t` on a repo row; ask anything about the repo (read-only); "make a ticket for that" parks a draft — `s` submits, `e` edits, `r` cycles the route, `D` discards; every dispatch branch is reachable (ticket, ticket set, plan set, amend, apply, assess, analyze); `/pr N`, `/issue N` pull context; sessions survive restarts; `junco transcript --chat owner/repo` prints one; loopback-only.
+A "Chat with the agent" section: open with `t` on a repo row; ask anything about the repo (read-only); "make a ticket for that" parks a draft — `s` submits, `e` edits, `r` cycles the route, `D` discards; every dispatch branch is reachable (ticket, ticket set, plan set, amend, apply, audit, investigate); `/pr N`, `/issue N` pull context; sessions survive restarts; `junco transcript --chat owner/repo` prints one; loopback-only.
 
 - [ ] **Step 3: `CHANGELOG.md`**
 
-Under Unreleased → Added: `feat(tui): per-repo chat with the coding agent inside the dashboard; every dispatch branch (ticket, set, plan set, amend, apply, assess, analyze) drafts from the conversation and parks for review. New config block `chat._`; new data-tree dirs `data/chats`, `data/chat-drafts`; new loopback-only `/chat/_`routes on the health server;`junco transcript --chat`.`
+Under Unreleased → Added: `feat(tui): per-repo chat with the coding agent inside the dashboard; every dispatch branch (ticket, set, plan set, amend, apply, audit, investigate) drafts from the conversation and parks for review. New config block `chat._`; new data-tree dirs `data/chats`, `data/chat-drafts`; new loopback-only `/chat/_`routes on the health server;`junco transcript --chat`.`
 
 - [ ] **Step 4: `skills/junco-dispatch/SKILL.md`**
 

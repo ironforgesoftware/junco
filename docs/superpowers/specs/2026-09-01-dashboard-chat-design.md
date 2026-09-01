@@ -13,8 +13,8 @@ junco is watching, what it has already done, or how it wants work phrased.
 
 This feature adds an ongoing, per-repo **chat with the coding agent inside the dashboard**, using
 the Pi SDK junco already drives in-process, and makes **every dispatch branch reachable from that
-conversation**: fresh tickets, ticket sets, plan sets, amend tickets, apply tickets, assess and
-analyze requests — each parked for the same human confirmation the assess and analyze flows
+conversation**: fresh tickets, ticket sets, plan sets, amend tickets, apply tickets, audit and
+investigate requests — each parked for the same human confirmation the audit and investigate flows
 already use. The chat is the drafting surface; the queue stays the execution surface.
 
 ## Key findings that shape the design
@@ -52,7 +52,8 @@ sessionDir)` / `.open(path, sessionDir)` with a caller-supplied dir. junco's `ru
   is the routing/lint verdict the dispatch skill is told to copy, never re-derive.
 - **`planPrompt.ts` already declares `PLAN_FENCE = "junco-ticket"`** and treats
   `skills/junco-dispatch/TEMPLATE.md` as the single source of truth; the ticket schema already
-  carries `amends_pr`, `assess:`, `analyze:`, `depends_on`, and the `junco-patch` body fence.
+  carries `amends_pr`, `audit:`/`investigate:` (with `assess:`/`analyze:` as permanently accepted
+  legacy aliases since #389), `depends_on`, and the `junco-patch` body fence.
   Most dispatch branches are frontmatter shapes of one artifact.
 
 ## Decisions
@@ -76,8 +77,8 @@ re-litigate them.
   cursor" model, no session-picker UI, and cleanup rides on `junco unwatch`. `/new` is the
   escape hatch (archive and start fresh).
 - **Every dispatch branch is reachable, each parked for confirmation.** Why: dispatch is the
-  point of the feature, and park-then-confirm is already the house idiom (assess findings,
-  analyze comments).
+  point of the feature, and park-then-confirm is already the house idiom (audit findings,
+  investigate comments).
 - **Transport is SSE out, HTTP POST in, on the existing health server.** Chosen over the
   file-drop idiom for harness-feel latency. Node 22 ships no WebSocket server and the repo has
   no `ws` dependency, so this is the zero-dependency form. Consequences owned by this spec: a
@@ -203,7 +204,7 @@ interface ChatDraftRecord {
   draftId: string;
   kind: DraftKind; // §6.1
   status: "parked" | "lint_failed" | "submitted" | "discarded";
-  ids: string[]; // ticket ids / assess-analyze ids once known
+  ids: string[]; // ticket ids / audit-investigate ids once known
   destination: "inbox" | "issue" | "command" | null; // null until submitted
   ts: string;
 }
@@ -455,17 +456,20 @@ After each completed turn, the final assistant message's text is scanned for fen
 tagged `junco-ticket` (the planner's `PLAN_FENCE`) and `junco-plan`. Kind is derived
 deterministically:
 
-| kind        | recognized by                                           | confirm runs                                                          |
-| ----------- | ------------------------------------------------------- | --------------------------------------------------------------------- |
-| `ticket`    | one `junco-ticket` fence                                | `junco submit <f>` (or `--as-issue <f>`)                              |
-| `amend`     | `amends_pr:` in frontmatter                             | `junco submit <f>`                                                    |
-| `apply`     | body carries a `junco-patch` fence (`extractPatchBody`) | `junco submit <f>`                                                    |
-| `assess`    | `assess:` block in frontmatter                          | `junco assess <repo\|nwo\|nwo#N> [--auto-plan]` (args from the fence) |
-| `analyze`   | `analyze:` block in frontmatter                         | `junco analyze <nwo>#<analyze.issue>`                                 |
-| `ticketSet` | ≥ 2 `junco-ticket` fences in one message                | `junco submit <f_i>` for each, document order                         |
-| `planSet`   | one `junco-plan` fence                                  | `junco submit --plan <f> --repo <cwd>` (or `--as-issue --plan …`)     |
+| kind          | recognized by                                                                    | confirm runs                                                         |
+| ------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `ticket`      | one `junco-ticket` fence                                                         | `junco submit <f>` (or `--as-issue <f>`)                             |
+| `amend`       | `amends_pr:` in frontmatter                                                      | `junco submit <f>`                                                   |
+| `apply`       | body carries a `junco-patch` fence (`extractPatchBody`)                          | `junco submit <f>`                                                   |
+| `audit`       | `audit:` block in frontmatter (legacy `assess:` accepted; canonical wins)        | `junco audit <repo\|nwo\|nwo#N> [--auto-plan]` (args from the fence) |
+| `investigate` | `investigate:` block in frontmatter (legacy `analyze:` accepted; canonical wins) | `junco investigate <nwo>#<investigate.issue>`                        |
+| `ticketSet`   | ≥ 2 `junco-ticket` fences in one message                                         | `junco submit <f_i>` for each, document order                        |
+| `planSet`     | one `junco-plan` fence                                                           | `junco submit --plan <f> --repo <cwd>` (or `--as-issue --plan …`)    |
 
-Precedence within a `junco-ticket` fence: `assess` > `analyze` > `amend` > `apply` > `ticket`.
+Precedence within a `junco-ticket` fence: `audit` > `investigate` > `amend` > `apply` > `ticket`.
+The CLI verbs and canonical frontmatter keys follow #389 (`junco audit`/`junco investigate`;
+`audit:`/`investigate:` canonical, `assess:`/`analyze:` legacy — `parseTicket` accepts both and
+the canonical key wins on a collision). New identifiers in this feature use the canonical names.
 Wrapping an existing plan is `ticket` with the body verbatim — a prompt rule, not a kind.
 `planSet` parks with `blocked: "plan_sets_disabled"` when `planSets.enabled` is false. A message
 with both a `junco-plan` fence and `junco-ticket` fences parks two drafts.
@@ -475,7 +479,8 @@ ticket _body only_ because "model output can never set `repo:`/`workdir:`/`tools
 (`planPrompt.ts`). Chat needs model-authored frontmatter to express kinds, so the boundary
 moves from "none" to "an allowlist": `fenceExtract` parses the fence's frontmatter and keeps
 only `id`, `pr_title`, `branch_name`, `base_branch`, `priority`, `labels`, `reviewers`, `draft`,
-`depends_on`, `amends_pr`, `timeout_minutes`, `github_request`, `assess`, `analyze`. Junco
+`depends_on`, `amends_pr`, `timeout_minutes`, `github_request`, `audit`, `investigate`, and the
+legacy `assess`, `analyze`. Junco
 sets `repo:` itself from the session (`nwo` for a watched repo, `cwd` for a local one) and
 **drops** everything else — `tools`, `network`, `workdir`, `push_remote`, `not_before`,
 `retry_count`, `deps_satisfied`, `plan`, and any unknown key — recording the dropped names as
@@ -485,13 +490,13 @@ sets `repo:` itself from the session (`nwo` for a watched repo, `cwd` for a loca
 ### 6.2 `PendingDraft` and the store
 
 ```ts
-type DraftKind = "ticket" | "amend" | "apply" | "assess" | "analyze" | "ticketSet" | "planSet";
+type DraftKind = "ticket" | "amend" | "apply" | "audit" | "investigate" | "ticketSet" | "planSet";
 
 interface DraftFile {
   name: string; // <ticket id>.md, or plan.md for planSet
   content: string; // byte-identical to what lint saw (allowlisted frontmatter + repo: + body)
   lint: LintViolation[]; // lintTicket(...).violations — for planSet, the compiler's parse errors as error rows
-  route: RouteDecision | null; // decideRoute(...) — null for assess/analyze (command route)
+  route: RouteDecision | null; // decideRoute(...) — null for audit/investigate (command route)
   droppedKeys: string[]; // model frontmatter keys removed by the allowlist (§6.1)
 }
 
@@ -507,7 +512,7 @@ interface PendingDraft {
   lintFailed: boolean;
   blocked: string | null; // "plan_sets_disabled"
   routeOverride: "auto" | "inbox" | "issue";
-  commandArgs: string[] | null; // assess/analyze: the verb's argv, derived at park time
+  commandArgs: string[] | null; // audit/investigate: the verb's argv, derived at park time
 }
 ```
 
@@ -522,9 +527,10 @@ entries naming a non-sibling id produce a **warning** (submit's own behavior), n
 For `planSet`, `parsePlanSet(fenceBody, {maxTasks})` is the lint.
 
 `commandArgs` is derived at park time for the command kinds and stored so confirm never
-re-reads the fence: `assess` → `["assess", <repo:> + (assess.issue ? "#" + issue : ""),
-...(assess.auto_plan ? ["--auto-plan"] : [])]`; `analyze` → `["analyze", <repo:> + "#" +
-analyze.issue]`. A missing `repo:` or `analyze.issue` is a lint error for that file.
+re-reads the fence: `audit` → `["audit", <repo:> + (audit.issue ? "#" + issue : ""),
+...(audit.auto_plan ? ["--auto-plan"] : [])]`; `investigate` → `["investigate", <repo:> + "#" +
+investigate.issue]` (the block is read from the canonical key, else the legacy one). A missing
+`repo:` or `investigate.issue` is a lint error for that file.
 
 ### 6.3 Lint failure loops once
 
@@ -552,10 +558,11 @@ exit stops the sequence with the earlier results reported.
 3. An addendum lifted from `skills/junco-dispatch/SKILL.md` **by section heading at build time**
    (`loadSkillSections(headings)`): "Ticket sets", "Wrapping an existing plan file", "Amend
    mode (follow-up tickets on existing PRs)" and its subsections, "Apply mode (patch
-   tickets)" and its subsections, and the assess/analyze "Inputs to gather" subsections. A
+   tickets)" and its subsections, and the "Audit mode (sweep a repo → review → file)" /
+   "Investigate mode (deep-read an issue → reviewed comment)" "Inputs to gather" subsections. A
    test asserts each heading exists, so the skill and the chat cannot drift.
 4. The fence contract: emit ` ```junco-ticket ` per ticket, ` ```junco-plan ` for a
-   plan set (only when enabled), an `assess:`/`analyze:` block for those requests, and the
+   plan set (only when enabled), an `audit:`/`investigate:` block for those requests, and the
    rule that a wrapped plan's body is copied verbatim.
 
 ### 6.6 Confirm surface
@@ -622,7 +629,7 @@ in the view switches the subscription.
   keypress parser (`parse-keypress.js`): alt+enter arrives as `\x1b\r` → `key.return &&
 key.meta`; ctrl+j arrives as `\n` → `input === "\n"` with `key.return` false. Both insert a
   newline; the hint line names `ctrl+j` (it needs no terminal option-as-meta setting). A
-  leading `/` opens an inline completion list: `/draft`, `/assess`, `/analyze N`, `/pr N`,
+  leading `/` opens an inline completion list: `/draft`, `/audit`, `/investigate N`, `/pr N`,
   `/issue N`, `/abort`, `/new`.
 
 ### 8.3 Focus and keys
