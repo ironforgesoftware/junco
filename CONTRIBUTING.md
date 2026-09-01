@@ -9,11 +9,21 @@
 ```bash
 npm install          # install dependencies
 npm run build        # tsc -p tsconfig.json → dist/
-npm test             # run the full vitest suite (~1,100 tests)
+npm test             # run the full vitest suite (~4,300 tests, ~40 s)
 npm run test:watch   # re-run on file changes
 ```
 
 The CLI entry point after building is `dist/cli.js`. You can run it directly with `node dist/cli.js <subcommand>` or via the `junco` bin alias if you have linked the package.
+
+### Quality gate
+
+Before opening a PR, run the full gate. It is exactly what CI (`.github/workflows/quality-gate.yml`) runs on every PR, and the aggregate `quality-gate` check is required to merge:
+
+```bash
+npm run lint && npm run format:check && npm run typecheck && npm run build && npm test
+```
+
+`npm run lint` and `npm run typecheck` cover `tests/` as well as `src/` (via `tsconfig.eslint.json`) — vitest does not type-check, so a type error in a test only surfaces here.
 
 ---
 
@@ -30,6 +40,10 @@ The CLI entry point after building is `dist/cli.js`. You can run it directly wit
 
 - **Strict mode** is on. Do not disable individual strict checks.
 - Config is parsed and validated with **zod**. All config types flow from `config.ts` / `types.ts`; do not add raw `any` casts to handle config fields.
+
+### Dependencies
+
+Dependencies are **exact-pinned** — `package.json` carries no `^` or `~` ranges. Add one with `npm install --save-exact <pkg>` (add `--save-dev` for tooling) so the lockfile and the manifest agree on a single version.
 
 ### Dependency injection for testability
 
@@ -63,7 +77,7 @@ The frontmatter schema in `ticketSchema.ts` is the **stable public contract** �
 2. Run `junco schema` to verify the emitted JSON Schema reflects your change.
 3. Update `ticket.ts` if parse logic changes.
 4. Update any test fixtures that construct ticket objects.
-5. Document the new field in `README.md` under the config/ticket reference section.
+5. Document the new field in [`docs/tickets.md` § Key frontmatter fields](docs/tickets.md#key-frontmatter-fields).
 
 ### Add a CLI subcommand
 
@@ -74,7 +88,7 @@ The frontmatter schema in `ticketSchema.ts` is the **stable public contract** �
 ## Testing expectations
 
 - Test files live under `tests/` and mirror the `src/` layout (e.g. `src/queue.ts` → `tests/queue.test.ts`).
-- Use **vitest**. Run `npm test` before submitting a PR; the full suite must be green.
+- Use **vitest**. Run the full [quality gate](#quality-gate) before submitting a PR; the suite must be green.
 - Unit tests: inject fakes for all I/O. No real model calls, no real HTTP, no real timers.
 - Integration tests (PR flow): use the real git harness pattern already in the suite; do not introduce real network calls.
 - When adding a module, add a corresponding test file that covers the public surface.
@@ -83,6 +97,7 @@ The frontmatter schema in `ticketSchema.ts` is the **stable public contract** �
 
 ## Commit and PR policy
 
+- Branch `feat/<topic>` off `main` (`fix/`, `docs/`, `chore/` … for the other commit types); keep the suite green at every commit.
 - Use **conventional commit** messages: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`, etc.
 - Keep the subject line under 72 characters; add a body if the why is non-obvious.
 - **No AI attribution** — do not add `Co-Authored-By:` trailers referencing AI tools, and do not include "Generated with …" lines in commit messages or PR descriptions.
