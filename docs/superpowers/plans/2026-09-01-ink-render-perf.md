@@ -582,6 +582,8 @@ Expected: `exit: 0`.
 Run: `npx vitest run > /tmp/out 2>&1; echo "exit: $?"; tail -6 /tmp/out`
 Expected: `exit: 0` (framePerf's baseline case still passes — `localCheap` and `queueNow` still churn).
 
+**Found during execution:** `tests/renderPerf.test.tsx` drives its "unrelated App re-render" with a health poll whose fake returns an *unchanged* object — exactly what the gate now suppresses, so its `waitForNextAppRender` never resolves (4 of 8 cases fail). Fix the fixture, not the gate: add a `tickingHealthClient()` there (spread `stubClient`, `health` returns the stub answer with `tasksProcessed: ++n` — a Header-only field) and pass `client: tickingHealthClient()` in each of its 8 `renderApp` calls, with a comment explaining why the answer must change per tick. Include the file in this task's commit.
+
 - [ ] **Step 5: Format, lint, commit**
 
 ```bash

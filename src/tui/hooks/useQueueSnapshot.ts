@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import type { QueueSnapshot } from "../queueSnapshot.js";
+import { keepIfEqual } from "./keepIfEqual.js";
 
 export function useQueueSnapshot(
   queueFn: () => Promise<QueueSnapshot>,
@@ -14,7 +15,7 @@ export function useQueueSnapshot(
     const run = async (): Promise<void> => {
       const s = await queueFn();
       if (!alive) return;
-      setQueueSnap(s);
+      setQueueSnap((prev) => keepIfEqual(prev, s));
       setQueueNow(new Date());
     };
     void run();

@@ -36,12 +36,14 @@ import { bumpRender, renderCounts, resetRenderCounts } from "../src/tui/renderCo
 import { until } from "./helpers/until.js";
 import {
   renderApp,
+  stubClient,
   tap,
   TO_QUEUE_ROW,
   TO_OUTBOX_ROW,
   TO_WORKTREES_ROW,
   TO_DAEMON_ROW,
 } from "./helpers/localFixtures.js";
+import type { DashboardClient } from "../src/tui/ghClient.js";
 
 const ORIGINAL_FLAG = process.env.JUNCO_RENDER_COUNT;
 
@@ -51,6 +53,20 @@ const ORIGINAL_FLAG = process.env.JUNCO_RENDER_COUNT;
 // never read by any of the target components (it only feeds the Header),
 // which is exactly the "unrelated poll" scenario task 16 asks to measure.
 const HEALTH_POLL_MS = 15;
+
+/** A health probe whose answer CHANGES on every poll (tasksProcessed ticks up,
+ * a Header-only field): since the poll sinks became change-gated (spec
+ * 2026-09-01-ink-render-perf-design.md, tier 1) an unchanged health answer no
+ * longer re-renders App at all — which is the point of that work, but this
+ * file needs an UNRELATED App re-render to measure the memo bail-outs against,
+ * so the fixture must deliver a genuine, targets-irrelevant change each tick. */
+function tickingHealthClient(): DashboardClient {
+  let n = 0;
+  return {
+    ...stubClient,
+    health: async () => ({ ...(await stubClient.health()), tasksProcessed: ++n }),
+  };
+}
 
 beforeEach(() => {
   process.env.JUNCO_RENDER_COUNT = "1";
@@ -110,7 +126,7 @@ afterAll(() => {
 
 describe("React.memo perf pass — unrelated (health-only) App re-render", () => {
   it("main view (IssueList + PrList + UnifiedRail mounted)", async () => {
-    const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
+    const r = renderApp({ healthPollMs: HEALTH_POLL_MS, client: tickingHealthClient() });
     // Mount settle: wait for the three always-on-in-this-view components to
     // have rendered at least once (their first paint, plus whatever the
     // mount-time effects/polls contribute).
@@ -153,7 +169,7 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
   });
 
   it("prs view (PrList + PrPreview mounted) — both are now bail-outs", async () => {
-    const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
+    const r = renderApp({ healthPollMs: HEALTH_POLL_MS, client: tickingHealthClient() });
     await until(() => (renderCounts().IssueList ?? 0) >= 1);
     r.stdin.write("p");
     await until(() => (renderCounts().PrPreview ?? 0) >= 1);
@@ -176,7 +192,7 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
   });
 
   it("issue detail view (Preview mounted)", async () => {
-    const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
+    const r = renderApp({ healthPollMs: HEALTH_POLL_MS, client: tickingHealthClient() });
     await until(() => (renderCounts().IssueList ?? 0) >= 1);
     // tap (not two bare writes): "i" must commit its setPane(2) before "\r"
     // is read, or the App closure still sees pane===1 and "\r" opens
@@ -195,7 +211,7 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
   });
 
   it("repoDetail view (RepoDetail mounted)", async () => {
-    const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
+    const r = renderApp({ healthPollMs: HEALTH_POLL_MS, client: tickingHealthClient() });
     await until(() => (renderCounts().UnifiedRail ?? 0) >= 1);
     r.stdin.write("\r"); // pane 1, row 0 is a repo row — enter opens RepoDetail
     await until(() => (renderCounts().RepoDetail ?? 0) >= 1);
@@ -212,7 +228,7 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
   });
 
   it("queue section (QueueView + ActivityCard mounted) — both are now bail-outs", async () => {
-    const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
+    const r = renderApp({ healthPollMs: HEALTH_POLL_MS, client: tickingHealthClient() });
     await until(() => (renderCounts().IssueList ?? 0) >= 1);
     await tap(r, TO_QUEUE_ROW); // acme/api -> beta/two -> queue
     await until(
@@ -234,7 +250,7 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
   });
 
   it("outbox section (OutboxSection mounted)", async () => {
-    const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
+    const r = renderApp({ healthPollMs: HEALTH_POLL_MS, client: tickingHealthClient() });
     await until(() => (renderCounts().IssueList ?? 0) >= 1);
     await tap(r, TO_OUTBOX_ROW);
     await until(() => (renderCounts().OutboxSection ?? 0) >= 1);
@@ -249,7 +265,7 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
   });
 
   it("worktrees section (WorktreesSection mounted)", async () => {
-    const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
+    const r = renderApp({ healthPollMs: HEALTH_POLL_MS, client: tickingHealthClient() });
     await until(() => (renderCounts().IssueList ?? 0) >= 1);
     await tap(r, TO_WORKTREES_ROW);
     await until(() => (renderCounts().WorktreesSection ?? 0) >= 1);
@@ -263,7 +279,7 @@ describe("React.memo perf pass — unrelated (health-only) App re-render", () =>
   });
 
   it("daemon section (DaemonSection mounted)", async () => {
-    const r = renderApp({ healthPollMs: HEALTH_POLL_MS });
+    const r = renderApp({ healthPollMs: HEALTH_POLL_MS, client: tickingHealthClient() });
     await until(() => (renderCounts().IssueList ?? 0) >= 1);
     await tap(r, TO_DAEMON_ROW);
     await until(() => (renderCounts().DaemonSection ?? 0) >= 1);
