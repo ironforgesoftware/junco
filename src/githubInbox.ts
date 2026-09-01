@@ -584,13 +584,16 @@ export async function verifyLabelApplier(
   }
 }
 
-/** Sub-issue parent lookup (GraphQL `parent` field). Non-fatal: null on any error. */
+/** Sub-issue parent lookup (GraphQL `parent` field). Non-fatal: null on any
+ * error. Carries the parent's own coordinates (sub-issues may live in another
+ * repo) so the caller can run the body-vouching check against the right issue;
+ * a parent without them is unvettable and reads as absent. */
 async function fetchParent(
   cfg: Config,
   nwo: string,
   issueNumber: number,
   ghFn: typeof gh,
-): Promise<{ title: string; body: string | null } | null> {
+): Promise<{ nwo: string; number: number; title: string; body: string | null } | null> {
   const [owner, name] = nwo.split("/");
   try {
     const r = await ghFn(
@@ -599,7 +602,7 @@ async function fetchParent(
         "api",
         "graphql",
         "-f",
-        "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){parent{title body}}}}",
+        "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){parent{number repository{nameWithOwner} title body}}}}",
         "-f",
         `owner=${owner}`,
         "-f",
@@ -613,9 +616,20 @@ async function fetchParent(
     );
     const out = r.stdout.trim();
     if (!out || out === "null") return null;
-    const p = JSON.parse(out) as { title?: unknown; body?: unknown };
-    return typeof p.title === "string"
-      ? { title: p.title, body: typeof p.body === "string" ? p.body : null }
+    const p = JSON.parse(out) as {
+      number?: unknown;
+      repository?: { nameWithOwner?: unknown };
+      title?: unknown;
+      body?: unknown;
+    };
+    const pNwo = p.repository?.nameWithOwner;
+    return typeof p.title === "string" && typeof p.number === "number" && typeof pNwo === "string"
+      ? {
+          nwo: pNwo,
+          number: p.number,
+          title: p.title,
+          body: typeof p.body === "string" ? p.body : null,
+        }
       : null;
   } catch {
     return null; // background context only — never blocks dispatch
@@ -660,7 +674,7 @@ async function fetchIssueLastEdited(
     const ms = Date.parse(out);
     return Number.isFinite(ms) ? { verified: true, lastEditedMs: ms } : { verified: false };
   } catch (e) {
-    log.warn("github bridge: issue lastEditedAt lookup failed; skipping this sweep", {
+    log.warn("github bridge: issue lastEditedAt lookup failed", {
       nwo,
       issue: issueNumber,
       error: errMsg(e),
@@ -1282,10 +1296,28 @@ export async function pollGithubInbox(
           // above vouches the body this fence is read from.
           const fenceTicket = isAsk ? null : extractPlanBody(issue.body ?? "");
           const carriedTimeout = fenceTicket !== null ? parseTimeoutMarker(issue.body ?? "") : null;
-          const parent =
+          let parent =
             isAsk || fenceTicket !== null
               ? null
               : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
+          // The trigger label vouched the CHILD body; the parent is a different
+          // issue with a different author whose body also flows into the
+          // planner prompt. Apply the same edited-after-label check to it, but
+          // a failed check drops the (background-only) context rather than
+          // refusing the child — the child was vouched on its own (#342).
+          if (parent !== null) {
+            const pEdited = await fetchIssueLastEdited(cfg, parent.nwo, parent.number, ghFn);
+            if (
+              !pEdited.verified ||
+              (pEdited.lastEditedMs !== null && pEdited.lastEditedMs > verdict.atMs)
+            ) {
+              log.warn(
+                "github bridge: parent issue body edited after the trigger label (or unverifiable); dropping parent context",
+                { nwo: repo.nwo, issue: issue.number, parent: `${parent.nwo}#${parent.number}` },
+              );
+              parent = null;
+            }
+          }
           const t = isAsk
             ? issueToTicket(issue, repo, cfg, null)
             : fenceTicket !== null
