@@ -1463,9 +1463,8 @@ describe("marked ticket blocks (#329)", () => {
   it("survives a body that contains a marker-shaped comment with a different nonce", () => {
     const inner = ticketMarkers("deadbeef");
     const body = `${m.start}\n# Plan\n\nquoting an older parked issue:\n${inner.start}\nold\n${inner.end}\n${m.end}\n`;
-    // The inner PAIR is complete, so it is the LAST complete pair by start
-    // order? No: scanning takes the last complete pair, and the outer opens
-    // first — assert the documented rule explicitly.
+    // The outer start is seen first and its matching end (same nonce) closes
+    // the block, so the differently-nonced inner pair rides through as text.
     const got = extractPlanBody(body);
     expect(got).toContain("# Plan");
     expect(got).toContain("quoting an older parked issue");
@@ -1496,12 +1495,19 @@ describe("marked ticket blocks (#329)", () => {
   });
 
   it("ignores a marker pair fenced INSIDE the plan; the outer pair still delimits the whole body, quoted example included (B1)", () => {
-    const inner = ticketMarkers("deadbeef");
-    const body = `${m.start}\n# Plan\n\nExample of the marker format:\n\n\`\`\`\n${inner.start}\nold\n${inner.end}\n\`\`\`\n${m.end}\n`;
+    // The quoted example deliberately reuses the OUTER nonce: that is the only
+    // shape that discriminates fence-aware scanning from the fence-blind
+    // original. Without fence tracking the fenced `end` closes the outer block
+    // early and the extract stops at "old", losing the rest of the plan; with
+    // it, the fenced markers are literal text and the outer pair delimits.
+    const body = `${m.start}\n# Plan\n\nExample of the marker format:\n\n\`\`\`\n${m.start}\nold\n${m.end}\n\`\`\`\n${m.end}\n`;
     const got = extractPlanBody(body);
     expect(got).toContain("# Plan");
-    expect(got).toContain(inner.start); // fenced quote rides through as literal text
+    expect(got).toContain(m.start); // fenced quote rides through as literal text
     expect(got).toContain("old");
+    // The discriminating assertion: the body runs to the closing fence, which
+    // sits AFTER the fenced `end` marker a fence-blind scan would stop at.
+    expect(got?.endsWith("```")).toBe(true);
   });
 });
 
