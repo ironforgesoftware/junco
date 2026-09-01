@@ -528,6 +528,14 @@ export const ConfigSchema = z.object({
       maxTasks: z.number().int().min(1).default(10),
     })
     .default({}),
+  chat: z
+    .object({
+      enabled: z.boolean().default(true),
+      modelId: z.string().min(1).optional(),
+      thinkingLevel: z.string().min(1).optional(),
+      turnTimeoutMinutes: z.number().min(1).optional(),
+    })
+    .default({}),
 });
 
 export type ConfigParsed = z.infer<typeof ConfigSchema>;
@@ -787,6 +795,12 @@ export function assembleConfig(
       enabled: d.planSets.enabled,
       mergePollSeconds: d.planSets.mergePollSeconds,
       maxTasks: d.planSets.maxTasks,
+    },
+    chat: {
+      enabled: d.chat.enabled,
+      modelId: d.chat.modelId ?? null,
+      thinkingLevel: d.chat.thinkingLevel ?? null,
+      turnTimeoutMinutes: d.chat.turnTimeoutMinutes ?? null,
     },
   };
 }

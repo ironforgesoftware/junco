@@ -91,6 +91,15 @@ export interface PlanSetsConfig {
   mergePollSeconds: number;
   maxTasks: number;
 }
+/** [chat] — the dashboard chat (spec 2026-09-01 §10). `null` = inherit:
+ * modelId → github.plannerModelId ?? model.id; thinkingLevel →
+ * model.thinkingLevel; turnTimeoutMinutes → worker.defaultTimeoutMinutes. */
+export interface ChatConfig {
+  enabled: boolean;
+  modelId: string | null;
+  thinkingLevel: string | null;
+  turnTimeoutMinutes: number | null;
+}
 /** Runtime-resolved bot auth context (src/ghAuth.ts) — attached to Config by
  * entrypoints, never parsed from config.json. Carried by cfg into git()/gh()
  * so child processes authenticate as the bot. */
@@ -230,6 +239,8 @@ export interface Config {
   botAccount: BotAccountConfig;
   // Plan-driven ticket sets (spec 2026-08-20).
   planSets: PlanSetsConfig;
+  // Dashboard chat (spec 2026-09-01).
+  chat: ChatConfig;
   // Resolved at entrypoints when botAccount.enabled — NOT part of config.json.
   ghAuth?: GhAuthContext;
 }
