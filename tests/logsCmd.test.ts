@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runLogsCommand } from "../src/logsCmd.js";
 import type { Config } from "../src/types.js";
+import { until } from "./helpers/until.js";
 
 describe("runLogsCommand", () => {
   let dir: string;
@@ -60,9 +61,12 @@ describe("runLogsCommand", () => {
       { follow: true, lines: 1 },
       { printFn: (s) => out.push(s), pollMs: 20, signal: stop.signal },
     );
-    await new Promise((r) => setTimeout(r, 50));
+    // The initial tail printing is the observable that the follow loop has
+    // recorded its EOF offset (both happen synchronously before the first
+    // poll); never wait a fixed tick for either — a loaded runner can miss it.
+    await until(() => out.join("").includes("start"));
     appendFileSync(p, line("later"), "utf8");
-    await new Promise((r) => setTimeout(r, 80));
+    await until(() => out.join("").includes("later"));
     stop.abort();
     expect(await done).toBe(0);
     const text = out.join("");
@@ -82,10 +86,10 @@ describe("runLogsCommand", () => {
       { follow: true, lines: 1 },
       { printFn: (s) => out.push(s), pollMs: 20, signal: stop.signal },
     );
-    await new Promise((r) => setTimeout(r, 50));
+    await until(() => out.join("").includes("pre-rotate-two"));
     // Rotate: replace with a shorter file (simulates log rotation truncating/recreating).
     writeFileSync(p, line("post-rotate"), "utf8");
-    await new Promise((r) => setTimeout(r, 80));
+    await until(() => out.join("").includes("post-rotate"));
     stop.abort();
     expect(await done).toBe(0);
     const text = out.join("");

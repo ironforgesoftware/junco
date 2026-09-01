@@ -6,7 +6,15 @@
 // retry instead; the final iteration asserts so a genuine failure still fails.
 import { expect } from "vitest";
 
-export async function until(cond: () => boolean, tries = 50): Promise<void> {
+/**
+ * Default poll budget: 150 × 20 ms = 3 s. The loop returns the instant the
+ * condition holds, so a generous ceiling costs nothing on the passing path —
+ * only a genuinely failing test pays it — while the old 1 s budget let a
+ * React commit miss its window under full-suite CPU oversubscription (#365).
+ */
+export const UNTIL_TRIES = 150;
+
+export async function until(cond: () => boolean, tries = UNTIL_TRIES): Promise<void> {
   for (let i = 0; i < tries; i++) {
     if (cond()) return;
     await new Promise((r) => setTimeout(r, 20));
