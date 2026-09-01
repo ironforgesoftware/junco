@@ -421,6 +421,7 @@ function renderApp(
         refreshPollMs={refreshPollMs}
         healthPollMs={999999}
         queuePollMs={999999}
+        clockMs={999_999}
         transcriptPollMs={transcriptPollMs}
         queueFn={queueFn}
         assessHistoryFn={assessHistoryFn}
@@ -1145,6 +1146,7 @@ describe("App", () => {
             refreshPollMs={999999}
             healthPollMs={999999}
             queuePollMs={999999}
+            clockMs={999_999}
             queueFn={async () => QUEUE_SNAP}
             assessHistoryFn={async () => []}
             localCheapFn={async () => LOCAL_CHEAP}
@@ -1200,6 +1202,7 @@ describe("App", () => {
             refreshPollMs={999999}
             healthPollMs={999999}
             queuePollMs={999999}
+            clockMs={999_999}
             queueFn={async () => QUEUE_SNAP}
             assessHistoryFn={async () => []}
             localCheapFn={async () => LOCAL_CHEAP}
@@ -1940,6 +1943,7 @@ describe("assess hotkey (s/S)", () => {
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
+        clockMs={999_999}
         queueFn={async () => QUEUE_SNAP}
         assessHistoryFn={async () => []}
         localCheapFn={async () => LOCAL_CHEAP}
@@ -2770,6 +2774,7 @@ describe("workspace wide mode", () => {
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
+        clockMs={999_999}
         queueFn={async () => QUEUE_SNAP}
         assessHistoryFn={async () => []}
         localCheapFn={async () => LOCAL_CHEAP}
@@ -2874,6 +2879,7 @@ describe("workspace wide mode", () => {
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
+        clockMs={999_999}
         queueFn={async () => QUEUE_SNAP}
         assessHistoryFn={async () => []}
         localCheapFn={async () => LOCAL_CHEAP}
@@ -3061,6 +3067,7 @@ describe("workspace wide mode", () => {
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
+        clockMs={999_999}
         queueFn={async () => QUEUE_SNAP}
         assessHistoryFn={async () => []}
         localCheapFn={async () => LOCAL_CHEAP}

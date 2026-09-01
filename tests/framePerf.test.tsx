@@ -2,11 +2,12 @@
 // 2026-09-01-ink-render-perf-design.md, tier 0). Counts the frames Ink
 // COMMITS (via onRender) while every poller returns unchanged data.
 //
-// BASELINE (task 1): every constant-data poll tick still commits a frame —
-// each hook stores a fresh object and useQueueSnapshot bumps queueNow, so
-// React never bails out. The idle assertion below is written against that
-// measured defect and is flipped to `toBe(0)` by task 5 once every sink is
-// change-gated. Numbers per scenario go to JUNCO_PERF_OUT when set (same
+// BASELINE (tasks 1–4): every constant-data poll tick still commits a frame
+// while any poll sink stores a fresh object without an equality gate (the
+// real pollers build a new snapshot per call, so the fixtures return a fresh
+// structuredClone per call too). The idle assertion below is written against
+// that measured defect and is flipped to `toBe(0)` by task 5 once every sink
+// is change-gated. Numbers per scenario go to JUNCO_PERF_OUT when set (same
 // convention as renderPerf.test.tsx) so before/after tables are reproducible.
 import { describe, it, expect, afterEach, afterAll } from "vitest";
 import { writeFileSync } from "node:fs";
@@ -38,7 +39,8 @@ afterAll(() => {
   }
 });
 
-/** Pollers that return the SAME data on every call and count queue ticks. */
+/** Pollers that return the SAME data (a fresh, structurally equal clone — as
+ * the real pollers do) on every call and count queue ticks. */
 function constantPollers(): {
   ticks: () => number;
   queueFn: () => Promise<QueueSnapshot>;
@@ -51,10 +53,10 @@ function constantPollers(): {
     ticks: () => ticks,
     queueFn: async () => {
       ticks++;
-      return EMPTY_QUEUE;
+      return structuredClone(EMPTY_QUEUE);
     },
-    localCheapFn: async () => CHEAP,
-    localHeavyFn: async () => HEAVY,
+    localCheapFn: async () => structuredClone(CHEAP),
+    localHeavyFn: async () => structuredClone(HEAVY),
     assessHistoryFn: async () => [],
   };
 }
@@ -90,5 +92,14 @@ describe("frame perf — constant-data polls", () => {
     await until(() => (mounted?.frames.length ?? 0) >= 1, 200);
     record("one-change", mounted);
     expect(mounted.frames.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("the clock paints on its own tick, and only then", async () => {
+    mounted = mountForFrames({ clockMs: 40 }); // every poll stays frozen at the fixture's 999999
+    await settle();
+    mounted.reset();
+    await until(() => (mounted?.frames.length ?? 0) >= 2, 100);
+    record("clock-only", mounted);
+    expect(mounted.frames.length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -765,6 +765,8 @@ Append inside the `describe`:
   });
 ```
 
+**Found during execution:** with `queueNow` gone, the idle case reported 0 frames already — the fixtures returned the SAME object reference per poll, so App's still-ungated `setLocalCheap(c)` bailed out on `Object.is`. The real pollers build a fresh snapshot per call, so `constantPollers()` must return `structuredClone(...)` per call (and its header comment says why); the baseline assertion then still holds here and flips honestly in task 5.
+
 - [ ] **Step 9: Typecheck, run the touched files, then the full suite**
 
 Run: `npm run typecheck && npx vitest run tests/useClock.test.tsx tests/useQueueSnapshot.test.tsx tests/framePerf.test.tsx > /tmp/out 2>&1; echo "exit: $?"; tail -6 /tmp/out`

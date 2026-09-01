@@ -5,18 +5,17 @@ import { keepIfEqual } from "./keepIfEqual.js";
 export function useQueueSnapshot(
   queueFn: () => Promise<QueueSnapshot>,
   pollMs: number,
-): { queueSnap: QueueSnapshot | null; queueNow: Date } {
+): { queueSnap: QueueSnapshot | null } {
   const [queueSnap, setQueueSnap] = useState<QueueSnapshot | null>(null);
-  const [queueNow, setQueueNow] = useState<Date>(() => new Date());
 
-  // Queue polling (also fires once on mount).
+  // Queue polling (also fires once on mount). An unchanged snapshot keeps the
+  // previous reference so React bails out — the age clock is useClock's job.
   useEffect(() => {
     let alive = true;
     const run = async (): Promise<void> => {
       const s = await queueFn();
       if (!alive) return;
       setQueueSnap((prev) => keepIfEqual(prev, s));
-      setQueueNow(new Date());
     };
     void run();
     const id = setInterval(() => void run(), pollMs);
@@ -26,5 +25,5 @@ export function useQueueSnapshot(
     };
   }, [queueFn, pollMs]);
 
-  return { queueSnap, queueNow };
+  return { queueSnap };
 }

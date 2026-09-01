@@ -73,6 +73,7 @@ import { useToast } from "./hooks/useToast.js";
 import { useConfirm } from "./hooks/useConfirm.js";
 import { useHealth } from "./hooks/useHealth.js";
 import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
+import { useClock } from "./hooks/useClock.js";
 import { useAssessHistory } from "./hooks/useAssessHistory.js";
 import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
 import { useBotLogin } from "./hooks/useBotLogin.js";
@@ -113,6 +114,7 @@ export interface AppProps {
   /** Local queue snapshot source (dashboardCmd wires makeQueueSnapshotFn). */
   queueFn: () => Promise<QueueSnapshot>;
   queuePollMs?: number; // default 1_000 — queue card / turn counters (local reads only)
+  clockMs?: number; // default 5_000 — the age clock ("Ns ago", elapsed); tests freeze it
   /** Open transcript's live-tail cadence. Default 1_000; tests pass small values. */
   transcriptPollMs?: number;
   /** Per-repo assess history source (dashboardCmd wires makeAssessHistoryFn). */
@@ -259,6 +261,7 @@ export function App(props: AppProps): React.JSX.Element {
   const refreshPollMs = props.refreshPollMs ?? 30_000;
   const healthPollMs = props.healthPollMs ?? 5_000;
   const queuePollMs = props.queuePollMs ?? 1_000;
+  const clockMs = props.clockMs ?? 5_000;
   const transcriptPollMs = props.transcriptPollMs ?? 1_000;
   const assessHistoryPollMs = props.assessHistoryPollMs ?? 15_000;
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
@@ -330,7 +333,8 @@ export function App(props: AppProps): React.JSX.Element {
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
   const health = useHealth(client, healthPollMs);
-  const { queueSnap, queueNow } = useQueueSnapshot(queueFn, queuePollMs);
+  const { queueSnap } = useQueueSnapshot(queueFn, queuePollMs);
+  const now = useClock(clockMs);
   const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
   // useConfirm sits above useAddRepoForm because the add-repo flow feeds its
   // bot-grant confirm gate through the same modal (askConfirm is stable).
@@ -2538,7 +2542,7 @@ export function App(props: AppProps): React.JSX.Element {
           crumbs={crumbs}
           health={health}
           reviewCount={reviewCount}
-          now={queueNow}
+          now={now}
           mode={layout.mode}
           queueRunning={queueSnap?.running.length ?? 0}
           queueWaiting={queueSnap?.waiting.length ?? 0}
@@ -2618,7 +2622,7 @@ export function App(props: AppProps): React.JSX.Element {
           scroll={scroll}
           height={listHeight}
           focused
-          now={queueNow}
+          now={now}
           onRowPress={reviewRowPress}
           onFindingPress={reviewFindingPress}
           onDraftWheel={reviewDraftWheel}
@@ -2636,7 +2640,7 @@ export function App(props: AppProps): React.JSX.Element {
             assess={railAssess}
             width={layout.railWidth}
             height={listHeight}
-            now={queueNow}
+            now={now}
             window={railWindow}
             onRowPress={railRowPress}
             onPanePress={view === "main" && confirm === null ? railPanePress : undefined}
@@ -2650,7 +2654,7 @@ export function App(props: AppProps): React.JSX.Element {
               scroll={scroll}
               height={listHeight}
               focused
-              now={queueNow}
+              now={now}
               onWheel={scrollBy}
               onScrollMax={onScrollMax}
             />
@@ -2687,7 +2691,7 @@ export function App(props: AppProps): React.JSX.Element {
             <PrPreview
               pr={prDetail.pr}
               branchPrefix={branchPrefix}
-              now={queueNow}
+              now={now}
               height={listHeight}
               focused
               titleLabel="pr"
@@ -2699,7 +2703,7 @@ export function App(props: AppProps): React.JSX.Element {
               selected={prIdxSafe}
               focused
               height={listHeight}
-              now={queueNow}
+              now={now}
               staleAt={prStaleAt}
               window={prWindow}
               botLogin={botLogin}
@@ -2714,7 +2718,7 @@ export function App(props: AppProps): React.JSX.Element {
               scroll={scroll}
               height={listHeight}
               focused={pane === 2}
-              now={queueNow}
+              now={now}
               onWheel={scrollBy}
               onScrollMax={onScrollMax}
             />
@@ -2729,7 +2733,7 @@ export function App(props: AppProps): React.JSX.Element {
                     <QueueView
                       snap={localCheap?.queue ?? null}
                       scroll={scroll}
-                      now={queueNow}
+                      now={now}
                       height={listHeight}
                       focused={pane === 2}
                       selectable
@@ -2747,7 +2751,7 @@ export function App(props: AppProps): React.JSX.Element {
                       window={sectionWin}
                       height={listHeight}
                       focused={pane === 2}
-                      now={queueNow}
+                      now={now}
                       onRowPress={sectionRowPress}
                     />
                   );
@@ -2768,7 +2772,7 @@ export function App(props: AppProps): React.JSX.Element {
                     <DaemonSection
                       daemon={localCheap?.daemon ?? null}
                       refreshedAt={github.refreshedAt}
-                      now={queueNow}
+                      now={now}
                       scroll={scroll}
                       height={listHeight}
                       focused={pane === 2}
@@ -2804,7 +2808,7 @@ export function App(props: AppProps): React.JSX.Element {
               filter={filter}
               filtering={filtering}
               height={listHeight}
-              now={queueNow}
+              now={now}
               staleAt={currentNwo ? (github.staleAt[currentNwo] ?? null) : null}
               window={issueWindow}
               botLogin={botLogin}
@@ -2818,7 +2822,7 @@ export function App(props: AppProps): React.JSX.Element {
               <PrPreview
                 pr={selectedPr}
                 branchPrefix={branchPrefix}
-                now={queueNow}
+                now={now}
                 height={listHeight}
                 width={layout.previewWidth}
                 focused={false}
@@ -2832,7 +2836,7 @@ export function App(props: AppProps): React.JSX.Element {
                   showNwo={false}
                   focused={pane === 3}
                   height={listHeight}
-                  now={queueNow}
+                  now={now}
                   staleAt={prStaleAt}
                   window={pane3Window}
                   title={pane3Title}

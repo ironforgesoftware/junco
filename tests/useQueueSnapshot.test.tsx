@@ -20,9 +20,8 @@ const MARKER_QUEUE: QueueSnapshot = {
 };
 
 function Probe({ queueFn }: { queueFn: () => Promise<QueueSnapshot> }) {
-  const { queueSnap, queueNow } = useQueueSnapshot(queueFn, 999999);
-  const clockOk = queueNow instanceof Date;
-  return <Text>{queueSnap ? `depth:${queueSnap.outboxDepth}:${clockOk}` : "none"}</Text>;
+  const { queueSnap } = useQueueSnapshot(queueFn, 999999);
+  return <Text>{queueSnap ? `depth:${queueSnap.outboxDepth}` : "none"}</Text>;
 }
 
 describe("useQueueSnapshot", () => {
@@ -30,7 +29,7 @@ describe("useQueueSnapshot", () => {
     const fakeQueueFn = async () => MARKER_QUEUE;
     const r = render(<Probe queueFn={fakeQueueFn} />);
     expect(r.lastFrame()).toBe("none");
-    await until(() => r.lastFrame() === "depth:4242:true");
+    await until(() => r.lastFrame() === "depth:4242");
     r.unmount();
   });
 
