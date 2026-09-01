@@ -11,7 +11,13 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { applyPatchSeries, buildApplyFallbackPrompt } from "../src/applyPatch.js";
-import { parsePatchSeries, unsafePatchPaths, type PatchSeries } from "../src/patchTicket.js";
+import {
+  parsePatchSeries,
+  unsafePatchPaths,
+  hasBinaryHunk,
+  type PatchSeries,
+} from "../src/patchTicket.js";
+import type { git } from "../src/git.js";
 import type { Config, RunResult } from "../src/types.js";
 import { parseTicket } from "../src/ticket.js";
 import { makeConfig } from "./helpers/config.js";
@@ -328,6 +334,136 @@ describe("applyPatchSeries", () => {
     expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
     expect(run(["git", "-C", work, "status", "--porcelain"]).trim()).toBe("");
     expect(existsSync(join(work, ".git", "rebase-apply"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #338: containment is enforced by applyPatchSeries ITSELF, before `git am` —
+// not only by plan-lint's `patch_paths_sane` rule, which runs only while the
+// live-editable `planLint.enabled` + `planLint.blockOnError` levers are both
+// on. cfgFor already turns lint off; these pin that the executor refuses
+// anyway, and that a refused series touches nothing: no git invocation at
+// all (the gitFn seam records and throws), no commit, worktree byte-identical.
+// ---------------------------------------------------------------------------
+
+describe("applyPatchSeries — pre-git-am containment backstop (#338)", () => {
+  let roots: string[] = [];
+
+  afterEach(() => {
+    for (const r of roots) rmSync(r, { recursive: true, force: true });
+    roots = [];
+  });
+
+  function setup(): { root: string; work: string } {
+    const root = mkdtempSync(join(tmpdir(), "junco-applypatch-338-"));
+    roots.push(root);
+    const { work } = cloneHarness(root);
+    return { root, work };
+  }
+
+  /** A gitFn that records every invocation and refuses to run any of them —
+   * the strongest available "git am never ran" evidence (an `am --abort`
+   * would be recorded too). */
+  function refusingGit(): { calls: string[][]; gitFn: typeof git } {
+    const calls: string[][] = [];
+    const gitFn: typeof git = async (_cfg, args) => {
+      calls.push(args);
+      throw new Error(`git must not run for a refused series: git ${args.join(" ")}`);
+    };
+    return { calls, gitFn };
+  }
+
+  /** A hand-built one-patch mbox creating `path` — the one fixture git cannot
+   * generate for us: `git add` refuses a traversing path, so a series naming
+   * one only ever comes from a hand-edited or hostile mbox, which is exactly
+   * what the backstop exists for. Still run through the REAL parser. */
+  function traversalSeries(path: string): PatchSeries {
+    const raw =
+      "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n" +
+      "From: Someone <someone@example.com>\n" +
+      "Date: Mon, 1 Sep 2025 00:00:00 +0000\n" +
+      "Subject: [PATCH] feat: escape the worktree\n\n" +
+      "---\n" +
+      ` ${path} | 1 +\n` +
+      " 1 file changed, 1 insertion(+)\n" +
+      ` create mode 100644 ${path}\n\n` +
+      `diff --git a/${path} b/${path}\n` +
+      "new file mode 100644\n" +
+      "index 0000000..3e75765\n" +
+      "--- /dev/null\n" +
+      `+++ b/${path}\n` +
+      "@@ -0,0 +1 @@\n" +
+      "+x\n";
+    return toPatchSeries(raw);
+  }
+
+  it("refuses a series touching a path outside the repo before git am — lint off and non-blocking", async () => {
+    const { root, work } = setup();
+    const series = traversalSeries("../escaped-338.txt");
+    expect(series.files).toEqual(["../escaped-338.txt"]);
+    // cfgFor sets planLintEnabled: false; blockOnError off too — neither
+    // lever may matter at this layer.
+    const cfg = cfgFor(root, { planLintBlockOnError: false });
+    const { calls, gitFn } = refusingGit();
+
+    const out = await applyPatchSeries(cfg, work, "t-338", series, { gitFn });
+
+    expect(out.ok).toBe(false);
+    const failure = out as { ok: false; reason: string; refused: boolean };
+    expect(failure.refused).toBe(true);
+    expect(failure.reason).toMatch(/refused before git am/);
+    expect(failure.reason).toMatch(/outside the repo/);
+    expect(failure.reason).toContain('"../escaped-338.txt"');
+    expect(calls).toEqual([]); // no `git am` — and no `git am --abort` either
+    expect(existsSync(join(root, "escaped-338.txt"))).toBe(false); // nothing escaped
+    expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
+    expect(run(["git", "-C", work, "status", "--porcelain"]).trim()).toBe("");
+    expect(existsSync(join(work, ".git", "rebase-apply"))).toBe(false);
+  });
+
+  it("refuses a series carrying a binary hunk before git am", async () => {
+    const { root, work } = setup();
+    // A REAL binary series: git format-patch emits `GIT binary patch` by
+    // default for a NUL-bearing file.
+    const raw = buildRealSeries(work, [
+      { file: "blob.bin", content: "ab\0cd", message: "feat: add a blob" },
+    ]);
+    expect(hasBinaryHunk(raw)).toBe(true);
+    const series = toPatchSeries(raw);
+    const cfg = cfgFor(root);
+    const { calls, gitFn } = refusingGit();
+
+    const out = await applyPatchSeries(cfg, work, "t-338-bin", series, { gitFn });
+
+    expect(out.ok).toBe(false);
+    const failure = out as { ok: false; reason: string; refused: boolean };
+    expect(failure.refused).toBe(true);
+    expect(failure.reason).toMatch(/refused before git am/);
+    expect(failure.reason).toMatch(/binary hunk/);
+    expect(calls).toEqual([]);
+    expect(existsSync(join(work, "blob.bin"))).toBe(false);
+    expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
+  });
+
+  it("a real git am failure is not a refusal — the escalation ladder still owns it", async () => {
+    const { root, work } = setup();
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "two", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+    const raw = buildRealSeries(work, [
+      { file: "game.js", content: levelsFile(["one", "TWO-CHANGED", "three"]), message: "x" },
+    ]);
+    const conflicting = toPatchSeries(raw);
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "dos", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "chore: rename two differently"]);
+
+    const out = await applyPatchSeries(cfgFor(root), work, "t-338-conflict", conflicting);
+
+    expect(out.ok).toBe(false);
+    const failure = out as { ok: false; reason: string; refused: boolean };
+    expect(failure.refused).toBe(false);
+    expect(failure.reason).toMatch(/git am --3way failed/);
   });
 });
 

@@ -615,9 +615,13 @@ export async function runPrFlow(
       // Stage 4a: a clean apply — may still be overwritten below to
       // "apply_fallback" if Phase 9's verification escalation fires.
       prOutcome.mode = "apply";
-    } else if (!cfg.applyFallbackToAgent) {
+    } else if (outcome.refused || !cfg.applyFallbackToAgent) {
       // Terminal by design — see applyPatch.ts's header: a conflict is
       // deterministic, so Phase 5's transient classifier must never see it.
+      // A REFUSED series (#338: out-of-repo path or binary hunk, caught
+      // before `git am`) is terminal regardless of the fallback toggle:
+      // nothing was tried, and buildApplyFallbackPrompt would hand the
+      // agent an out-of-repo write as the reviewed intent to implement.
       const phaseError = `apply failed: ${outcome.reason}`;
       prOutcome.worktreePreserved = true;
       log.warn(phaseError);

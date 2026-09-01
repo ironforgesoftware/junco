@@ -1362,6 +1362,29 @@ function conflictingApplyTicketBody(work: string): string {
   return `# Apply a patch\n\n\`\`\`\`junco-patch\n${raw}\`\`\`\`\n`;
 }
 
+/** A ticket body whose (hand-built — `git add` refuses a traversing path, so
+ * git cannot generate this one) series creates `path`, a path OUTSIDE the
+ * worktree. Mirrors tests/applyPatch.test.ts's traversalSeries fixture. */
+function traversalApplyTicketBody(path: string): string {
+  const raw =
+    "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n" +
+    "From: Someone <someone@example.com>\n" +
+    "Date: Mon, 1 Sep 2025 00:00:00 +0000\n" +
+    "Subject: [PATCH] feat: escape the worktree\n\n" +
+    "---\n" +
+    ` ${path} | 1 +\n` +
+    " 1 file changed, 1 insertion(+)\n" +
+    ` create mode 100644 ${path}\n\n` +
+    `diff --git a/${path} b/${path}\n` +
+    "new file mode 100644\n" +
+    "index 0000000..3e75765\n" +
+    "--- /dev/null\n" +
+    `+++ b/${path}\n` +
+    "@@ -0,0 +1 @@\n" +
+    "+x\n";
+  return `# Apply a patch\n\n\`\`\`\`junco-patch\n${raw}\`\`\`\`\n`;
+}
+
 describe("apply-mode tickets (2026-08-31)", () => {
   let h: Harness;
   beforeEach(() => {
@@ -1922,6 +1945,47 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(text).not.toMatch(/retry_count: 1/);
     expect(text).not.toMatch(/not_before:/);
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("a series touching a path outside the repo is refused before git am — lint off, fallback toggle on (#338)", async () => {
+    // Containment used to be enforced ONLY by plan-lint's patch_paths_sane
+    // rule — i.e. only while planLint.enabled AND planLint.blockOnError were
+    // both on. This harness's default cfg has lint OFF and
+    // applyFallbackToAgent at its default (true): the exact combination
+    // where, before #338, git's own "invalid path" rejection at `git am`
+    // rolled into the Stage 2a ladder and handed the traversing series to an
+    // agent as its "reviewed" specification. Now: a terminal refusal, no
+    // agent session, nothing written anywhere outside the worktree.
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "apply-traversal.md",
+      `---\nid: apply-traversal\nrepo: ${h.work}\n---\n${traversalApplyTicketBody("../escaped-338.txt")}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: () => () => {
+        throw new Error("agent session must never be constructed for a refused series");
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(flow.phaseError).toMatch(/^apply failed: refused before git am/);
+    expect(flow.phaseError).toMatch(/outside the repo/);
+    expect(flow.phaseError).toContain('"../escaped-338.txt"');
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: failed");
+    expect(text).not.toMatch(/retry_count: 1/);
+    expect(text).not.toMatch(/not_before:/);
+    expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+    // Nothing landed anywhere under the harness root — not beside the
+    // worktree, not beside the clone.
+    const everything = readdirSync(h.root, { recursive: true }).map(String);
+    expect(everything.some((p) => p.endsWith("escaped-338.txt"))).toBe(false);
   });
 
   it("apply + failing verification escalates to the agent, then re-verifies", async () => {

@@ -136,6 +136,8 @@ Apply runs write a transcript exactly like an agent run. `junco transcript <id>`
 
 The prose rules (`steps_have_commits`, `files_table_referenced`, `files_paths_exist`, `no_cd_in_steps`) are skipped for apply tickets — a patch series has no Steps or Files table for them to check.
 
+`patch_paths_sane` is also enforced by the executor itself, not only by lint: `applyPatchSeries` re-runs the same checks unconditionally before `git am`, so with `planLint.enabled` or `planLint.blockOnError` off a series lint would have blocked is still refused at execution time — the ticket fails with `apply failed: refused before git am: …`, the escalation ladder does not fall back to an agent, and the worktree is left untouched (no transcript frames either — nothing ran; the ticket's failure note carries the reason).
+
 ### What `patch_paths_sane` does not cover
 
 `patch_paths_sane` inspects the series' **declared path strings** — the paths named on each `diff --git`/`---`/`+++` line — not what those paths resolve to on disk. Concretely, it does not catch:
