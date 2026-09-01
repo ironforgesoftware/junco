@@ -163,25 +163,47 @@ describe("composePatchTicket", () => {
     expect(out).toContain('pr_title: "Add a level"');
   });
 
-  // Discriminates a hand-rolled three-backtick fence (a bug per the task
-  // brief) from wrapInFence: a patch that itself adds a fenced markdown/bash
-  // file would truncate at its own inner fence under a fixed 3-backtick
-  // wrap, but must round-trip whole through parsePatchSeries here.
-  it("wraps the series with wrapInFence — survives a patch that adds a fenced file of its own", () => {
-    const withFence = ONE.replace('+  "new",', "+```bash\n+echo hi\n+```");
-    const out = compose({ patch: withFence });
+  // The previous version of this test embedded the fence inside a DIFF HUNK,
+  // where every line carries a +/-/space prefix — such a line can never
+  // match the bare-backtick closing-fence regex (lastFencedBlockRange,
+  // githubInbox.ts), so a hand-rolled fixed-length fence parses that payload
+  // fine too; the test guarded nothing. The genuine hazard is a fence in the
+  // mbox COMMIT MESSAGE BODY — between the Subject/headers and the `---`
+  // diffstat separator — where lines are NOT prefixed: a commit message that
+  // itself contains a ``` block can terminate a fixed-length outer fence
+  // early, truncating the series before the diffstat/diff hunk are ever
+  // reached. wrapInFence avoids this by picking a fence longer than any
+  // backtick run already inside the payload.
+  //
+  // Verified empirically (see task report): temporarily replacing
+  // composePatchTicket's `wrapInFence(PATCH_FENCE, opts.patch)` call with a
+  // hand-rolled fixed fence ("```" + PATCH_FENCE + "\n" + body + "\n```")
+  // made this exact test FAIL — parsePatchSeries(out) returned null, because
+  // the outer fence closed at the commit message's own inner ``` line and
+  // the extracted content never reached the `diff --git` hunk. Restoring
+  // wrapInFence made it pass again.
+  it("wraps with a fence longer than the payload's own backtick run — survives a fence in the COMMIT MESSAGE BODY, not just a diff hunk", () => {
+    const withMsgFence = ONE.replace(
+      "Subject: [PATCH 1/1] feat: add a level\n\n",
+      "Subject: [PATCH 1/1] feat: add a level\n\nExample usage:\n\n```\necho hi\n```\n\n",
+    );
+    const out = compose({ patch: withMsgFence });
     const series = parsePatchSeries(out);
     expect(series).not.toBe(null);
-    expect(series!.raw).toContain("+```bash");
-    expect(series!.raw).toContain("+```\n"); // the patch's own closing fence, not swallowed
+    expect(series!.count).toBe(1);
+    expect(series!.files).toEqual(["game.js"]);
+    // Not just "didn't crash" — the WHOLE series, including the part past
+    // the commit message's own fence, must have survived intact.
+    expect(series!.raw.trim()).toBe(withMsgFence.trim());
   });
 
-  it("round-trips through parsePatchSeries with the series' own count/files", () => {
+  it("round-trips through parsePatchSeries with the series' own count/files, and raw is byte-identical to the input series (modulo the trailing-whitespace trim every extractor in this file already applies)", () => {
     const out = compose();
     const series = parsePatchSeries(out);
     expect(series).not.toBe(null);
     expect(series!.count).toBe(1);
     expect(series!.files).toEqual(["game.js"]);
+    expect(series!.raw).toBe(ONE.trim());
   });
 
   it("emits the given ## Why text verbatim, or a non-empty default when omitted", () => {
