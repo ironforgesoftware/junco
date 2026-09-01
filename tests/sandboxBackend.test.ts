@@ -199,6 +199,18 @@ describe("bwrapArgs", () => {
   it("does not unshare net when network is allowed", () => {
     expect(bwrapArgs(allowNet, () => true).join(" ")).not.toContain("--unshare-net");
   });
+  it("always isolates pid/ipc/uts and starts a new session, whatever the network policy", () => {
+    // --new-session closes the TIOCSTI terminal-injection escape bwrap's own
+    // docs warn about; ipc/uts isolation is free (#345). None of these depend
+    // on the policy, so they must survive an allow-network policy too.
+    for (const policy of [denyNet, allowNet]) {
+      const args = bwrapArgs(policy, () => true);
+      for (const flag of ["--unshare-pid", "--unshare-ipc", "--unshare-uts", "--new-session"]) {
+        expect(args).toContain(flag);
+      }
+      expect(args).toContain("--die-with-parent");
+    }
+  });
   it("masks only the sensitive data subtrees, never the data root, for today's policy", () => {
     const args = bwrapArgs(dataPolicy, () => true);
     const a = args.join(" ");
