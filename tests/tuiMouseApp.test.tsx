@@ -298,7 +298,7 @@ describe("footer chips: mouse", () => {
     // The keyboard recipe's success toast lands once the stubbed promise
     // resolves — same copy, proving the chip ran the verbatim branch.
     await until(() =>
-      (r.lastFrame() ?? "").includes("analysis queued: analyze-acme-api-1 · v to review"),
+      (r.lastFrame() ?? "").includes("investigation queued: analyze-acme-api-1 · v to review"),
     );
   });
 

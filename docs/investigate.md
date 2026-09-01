@@ -182,4 +182,4 @@ The issue body itself rides in the ticket **body**, framed as untrusted data, no
 
 ## Visibility
 
-Both status surfaces report the pending-draft count whenever the store is non-empty, so a backlog of unreviewed drafts doesn't go unnoticed between investigations: `junco status` prints `analyze review: N pending (junco investigate review)`, and `junco doctor` reports `✓ investigate drafts — N pending (junco investigate review)` (informational — a backlog is normal workflow state, not a health problem).
+Both status surfaces report the pending-draft count whenever the store is non-empty, so a backlog of unreviewed drafts doesn't go unnoticed between investigations: `junco status` prints `investigate review: N pending (junco investigate review)`, and `junco doctor` reports `✓ investigate drafts — N pending (junco investigate review)` (informational — a backlog is normal workflow state, not a health problem).

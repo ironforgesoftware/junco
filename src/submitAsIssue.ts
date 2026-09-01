@@ -223,7 +223,12 @@ export async function submitAsIssue(
   // what a frontmatter-less/malformed ticket actually falls through to.
   let parsed: ReturnType<typeof parseTicket>;
   try {
-    parsed = parseTicket(fileArg, content);
+    // Surface the both-keys collision (audit:/assess:, investigate:/analyze:)
+    // instead of the silent default warnFn — this is an author-facing path
+    // (final-review I-5), same reasoning as submitPreflight.ts's runLint.
+    parsed = parseTicket(fileArg, content, undefined, (msg) =>
+      err(`junco submit --as-issue: warning — ${msg}\n`),
+    );
   } catch (e) {
     err(`junco submit --as-issue: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;

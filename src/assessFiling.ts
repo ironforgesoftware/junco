@@ -1,5 +1,5 @@
 /**
- * Least-privilege filing core for `junco assess`. Files a human-confirmed
+ * Least-privilege filing core for `junco audit`. Files a human-confirmed
  * SELECTION from a parked review batch (assessReview.ts) as GitHub issues,
  * through the outbox seam (githubOutbox.ts) so offline runs converge, then
  * stamps per-finding `filed` records and keeps the batch parked (explicit
@@ -221,7 +221,7 @@ export async function fileFindings(
     deduped: result.deduped,
     failed: result.failed,
   });
-  // The batch STAYS parked — explicit discard (`junco assess discard` / TUI x)
+  // The batch STAYS parked — explicit discard (`junco audit discard` / TUI x)
   // is the only end-of-life. The rewrite runs whenever anything was stamped,
   // INCLUDING partial-failure passes: stamps for the successful subset must
   // survive so a retry shows what already landed. (supersedes the #137

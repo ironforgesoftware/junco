@@ -230,9 +230,9 @@ Age caps at `99d+`, the finding count at `99+`, so a long-neglected repo can't b
 They also print the same per-repo audit history the rail shows, as plain text, once per repo that has ever been assessed (silent when none has). `junco status`:
 
 ```
-assess:    <owner/repo> assessed 2026-07-14 · 4 found · 4 parked
-assess:    <owner/repo> assessed 2026-07-14 · 4 found · 4 parked · last attempt failed 2026-07-16
-assess:    <owner/repo> never assessed · last attempt failed 2026-07-16
+audit:     <owner/repo> assessed 2026-07-14 · 4 found · 4 parked
+audit:     <owner/repo> assessed 2026-07-14 · 4 found · 4 parked · last attempt failed 2026-07-16
+audit:     <owner/repo> never assessed · last attempt failed 2026-07-16
 ```
 
 `junco doctor` reports the same repos as informational lines — always `ok`, never a warning, since a stale or never-assessed repo is normal workflow state, not a health problem:

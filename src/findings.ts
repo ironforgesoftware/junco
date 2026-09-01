@@ -1,5 +1,5 @@
 /**
- * `junco assess` finding schema, fingerprinting, sanitization, and the fenced
+ * `junco audit` finding schema, fingerprinting, sanitization, and the fenced
  * JSON extraction the agent's finalText carries findings in. Pure — no I/O,
  * no side effects. Later tasks (npm-audit mapping, issue rendering, the
  * orchestrator, the CLI) build on this module.
@@ -509,7 +509,7 @@ function renderIssueBody(
 // 2_000 chars, evidence omitted) in both the human sections and the
 // embedded JSON, with a truncation notice appended before the marker.
 //
-// `context` (SP-3): when a batch was scoped by `junco assess owner/repo#N`,
+// `context` (SP-3): when a batch was scoped by `junco audit owner/repo#N`,
 // the caller passes the scoping issue here and a `**Context:** <nwo>#<issue>`
 // line renders immediately before the machine-readable block — issue-body
 // metadata only, deliberately NOT folded into the embedded JSON (which stays
@@ -538,7 +538,7 @@ export const FINDING_LABEL = "junco:finding";
 // findings — mirrors LABEL_SPECS in src/githubInbox.ts (that module owns the
 // lifecycle labels, this one owns the finding labels).
 export const FINDING_LABEL_SPECS: ReadonlyArray<readonly [string, string, string]> = [
-  [FINDING_LABEL, "1D76DB", "Filed by junco assess"],
+  [FINDING_LABEL, "1D76DB", "Filed by junco audit"],
   ["severity/critical", "B60205", "Finding severity: critical"],
   ["severity/high", "D93F0B", "Finding severity: high"],
   ["severity/medium", "FBCA04", "Finding severity: medium"],

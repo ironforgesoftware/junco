@@ -600,7 +600,7 @@ describe("App", () => {
     await until(() => (r.lastFrame() ?? "").includes("planning")); // optimistic label applied
   });
 
-  it("c drafts an analysis comment for the selected issue", async () => {
+  it("n drafts an analysis comment for the selected issue", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const analyzed: [string, number][] = [];
     client.analyzeIssue = async (nwo, num) => {
@@ -614,11 +614,13 @@ describe("App", () => {
     r.stdin.write("n");
     await until(() => analyzed.length === 1);
     expect(analyzed).toEqual([["acme/api", 7]]);
-    await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-acme-api-7-analyze"));
+    await until(() =>
+      (r.lastFrame() ?? "").includes("investigation queued: gh-acme-api-7-analyze"),
+    );
     expect(r.lastFrame()).toContain("v to review when parked");
   });
 
-  it("c on the selected issue toasts an error when the client call fails", async () => {
+  it("n on the selected issue toasts an error when the client call fails", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     client.analyzeIssue = async () => ({ ok: false, error: "no unowned clone available" });
     const r = renderApp(client, wl());
@@ -1508,7 +1510,7 @@ describe("external-repo routing", () => {
     }
   });
 
-  it("c on an external repo drafts an analysis comment too (no refusal)", async () => {
+  it("n on an external repo drafts an analysis comment too (no refusal)", async () => {
     const { client, actions } = makeClient({ "acme/api": [], "up/stream": [upIssue] });
     const analyzed: string[] = [];
     client.analyzeIssue = async (nwo, num) => {
@@ -1527,7 +1529,9 @@ describe("external-repo routing", () => {
     await until(() => analyzed.length === 1);
     expect(analyzed[0]).toBe("up/stream#7");
     expect(actions).toHaveLength(0); // no label flow
-    await until(() => (r.lastFrame() ?? "").includes("analysis queued: gh-up-stream-7-analyze"));
+    await until(() =>
+      (r.lastFrame() ?? "").includes("investigation queued: gh-up-stream-7-analyze"),
+    );
     expect(r.lastFrame() ?? "").not.toContain("not available for external repos");
   });
 

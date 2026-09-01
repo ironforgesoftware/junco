@@ -56,7 +56,8 @@ describe("runTranscriptCmd", () => {
   it("resolves a bare ticket id through the data tree and renders rows", async () => {
     const { out, d } = deps({ [path]: FIXTURE });
     expect(await runTranscriptCmd(["t-1"], d)).toBe(0);
-    expect(out[0]).toContain("── run 1/1 · assess · m · 01:02:47 · stop · 5s");
+    // Recorded flow id is "assess" (unchanged data); rendered as "audit" (M-2).
+    expect(out[0]).toContain("── run 1/1 · audit · m · 01:02:47 · stop · 5s");
     expect(out).toContain("  Assessment complete.");
     expect(out).toContain("  ▸ read game.js  → 2 lines");
     expect(out.some((l) => l.includes("deep thoughts"))).toBe(false);

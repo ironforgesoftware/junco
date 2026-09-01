@@ -2864,11 +2864,10 @@ describe("run(['investigate', ref]) — routing", () => {
     // cli.ts has no injectable seam for analyze/investigate (unlike `import`'s
     // dispatchIssueFn), so this exercises the real lazy import + resolveIssueTarget,
     // which fails fast on the sandbox's `ghBin: /nonexistent/gh` (ENOENT) — exit 1,
-    // prefixed `junco analyze:` (runAnalyzeCommand's own error prefix — an
-    // internal identifier, out of this task's rename scope). What this test
-    // discriminates: routing reached the resolve step at all, i.e. NOT the
-    // "missing ref" usage error (exit 2), which is what a mis-wired `investigate`
-    // subcommand block would fall into.
+    // prefixed `junco investigate:` (runAnalyzeCommand's own error prefix). What
+    // this test discriminates: routing reached the resolve step at all, i.e. NOT
+    // the "missing ref" usage error (exit 2), which is what a mis-wired
+    // `investigate` subcommand block would fall into.
     const code = await run(["investigate", "up/stream#7"], {
       loadConfigFn: () => cfgWithDataDir,
       printFn: (s) => captured.push(s),

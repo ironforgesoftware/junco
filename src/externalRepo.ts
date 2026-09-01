@@ -101,7 +101,7 @@ export async function ensureFork(
 
 /** Idempotently ensure the managed clone for `nwo`. By default also ensures a
  * fork (+`fork` remote) — the push target dispatch/analyze need to open a PR.
- * Pass `{ fork: false }` for read-only consumers (`junco assess`): the clone
+ * Pass `{ fork: false }` for read-only consumers (`junco audit`): the clone
  * (origin = upstream either way — see the module doc comment) is all they
  * need, and skipping `gh repo fork` avoids leaving an unused fork behind on
  * the operator's account (#105). `forkNwo` is null whenever fork-less. */

@@ -1603,11 +1603,14 @@ export function App(props: AppProps): React.JSX.Element {
             if (body?.kind !== "issues") return;
             if (!currentNwo || !currentIssue) return;
             const num = currentIssue.number;
-            showToast("info", `drafting analysis for ${currentNwo}#${num}…`);
+            showToast("info", `drafting investigation for ${currentNwo}#${num}…`);
             void client.analyzeIssue(currentNwo, num).then((res) => {
               if (!aliveRef.current) return;
               if (res.ok)
-                showToast("success", `analysis queued: ${res.value.id} · v to review when parked`);
+                showToast(
+                  "success",
+                  `investigation queued: ${res.value.id} · v to review when parked`,
+                );
               else showToast("error", res.error);
             });
           },

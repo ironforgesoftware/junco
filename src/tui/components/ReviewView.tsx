@@ -204,7 +204,7 @@ export function ReviewView({
       <Box paddingX={1}>
         <Text dimColor>
           no pending audit reviews — run audit (u) on a repo first · or draft a comment on an issue
-          (c)
+          (n)
         </Text>
       </Box>
     );

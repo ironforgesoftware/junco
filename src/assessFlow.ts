@@ -1,5 +1,5 @@
 /**
- * `junco assess` orchestrator — an assess ticket runs through here. It mirrors
+ * `junco audit` orchestrator — an audit ticket runs through here. It mirrors
  * the Q&A path (runOnce.ts:120-260) for containment, read-only tools, the
  * supervisor/guard wiring, the transcript, the transient requeue, and the
  * finalize, then layers on the assess-specific work: an `npm audit` dependency

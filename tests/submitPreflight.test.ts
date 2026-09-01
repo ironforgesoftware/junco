@@ -367,6 +367,39 @@ describe("runLint", () => {
     expect(code).toBe(0);
     expect(out.join("")).toContain("[warning] branch_check_failed");
   });
+
+  // I-5: `junco lint` parsed tickets with the silent default warnFn, so a
+  // both-keys collision (audit:/assess:) never reached the author — it lints
+  // "ok" even though the ticket is ambiguous. Now surfaced as a lint warning.
+  it("surfaces a both-keys audit:/assess: collision as a lint warning", async () => {
+    const out: string[] = [];
+    const both = TICKET.replace('pr_title: "Add X"', 'pr_title: "Add X"\naudit: {}\nassess: {}');
+    const code = await runLint(cfg(), "t.md", both, {
+      gitFn: okGit(),
+      existsFn: () => true,
+      fetchLabels: () => new Set(["bug"]),
+      printFn: (s) => out.push(s),
+    });
+    expect(code).toBe(0); // a warning, not an error
+    const text = out.join("");
+    expect(text).toContain("[warning] key_collision");
+    expect(text).toMatch(/both `audit:` and legacy `assess:` present/);
+    expect(text).toMatch(/lint: 1 warning\(s\)/);
+  });
+
+  it("does not warn when only one of audit:/assess: is present", async () => {
+    const out: string[] = [];
+    const single = TICKET.replace('pr_title: "Add X"', 'pr_title: "Add X"\naudit: {}');
+    const code = await runLint(cfg(), "t.md", single, {
+      gitFn: okGit(),
+      existsFn: () => true,
+      fetchLabels: () => new Set(["bug"]),
+      printFn: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).not.toContain("key_collision");
+    expect(out.join("")).toContain("lint: ok");
+  });
 });
 
 describe("decideRoute", () => {
@@ -528,5 +561,42 @@ describe("runSubmitDryRun", () => {
     expect(text).toContain("destination: issue");
     expect(text).toContain("[warning] branch_exists");
     expect(text).not.toContain("[error] branch_exists");
+  });
+
+  // I-5: `junco submit --dry-run` had the same silent-warnFn gap as runLint.
+  it("surfaces a both-keys audit:/assess: collision in the dry-run lint report", async () => {
+    const localCfg = ghCfg({ githubEnabled: false });
+    const both = TICKET_LOCAL.replace(
+      `repo: ${JSON.stringify(REPO)}`,
+      `repo: ${JSON.stringify(REPO)}\naudit: {}\nassess: {}`,
+    );
+    const out: string[] = [];
+    const code = await runSubmitDryRun(localCfg, "t.md", both, {
+      ...routeDeps(),
+      existsFn: (p) => p === REPO,
+      fetchLabels: () => new Set(["bug"]),
+      printFn: (s) => out.push(s),
+    });
+    const text = out.join("");
+    expect(code).toBe(0);
+    expect(text).toContain("[warning] key_collision");
+    expect(text).toMatch(/both `audit:` and legacy `assess:` present/);
+  });
+
+  it("does not warn on the dry-run path when only one of audit:/assess: is present", async () => {
+    const localCfg = ghCfg({ githubEnabled: false });
+    const single = TICKET_LOCAL.replace(
+      `repo: ${JSON.stringify(REPO)}`,
+      `repo: ${JSON.stringify(REPO)}\naudit: {}`,
+    );
+    const out: string[] = [];
+    const code = await runSubmitDryRun(localCfg, "t.md", single, {
+      ...routeDeps(),
+      existsFn: (p) => p === REPO,
+      fetchLabels: () => new Set(["bug"]),
+      printFn: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    expect(out.join("")).not.toContain("key_collision");
   });
 });

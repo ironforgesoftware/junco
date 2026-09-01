@@ -1,5 +1,5 @@
 /**
- * Durable review queue for `junco assess` — one JSON file per audit batch under
+ * Durable review queue for `junco audit` — one JSON file per audit batch under
  * <dataDir>/review/assess/ (atomic tmp+rename, watchlist/outbox pattern). The
  * audit (assessFlow.ts) PARKS findings here; a human-confirmed file step
  * (assessFiling.ts, via the CLI) files them. Never throws on read: missing →
@@ -33,7 +33,7 @@ export interface PendingAssess {
   repoPath: string;
   createdAt: string; // ISO
   findings: Finding[];
-  issue?: number; // scoping issue (junco assess owner/repo#N) — filed findings reference it
+  issue?: number; // scoping issue (junco audit owner/repo#N) — filed findings reference it
   filed?: Record<string, FiledRecord>; // fingerprint → accounting; absent = nothing filed yet
 }
 

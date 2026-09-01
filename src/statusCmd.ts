@@ -218,11 +218,11 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
     const counts =
       h.lastSuccessAt !== null ? ` · ${h.lastFound ?? 0} found · ${h.lastParked ?? 0} parked` : "";
     const failed = h.lastFailureAt ? ` · last attempt failed ${h.lastFailureAt.slice(0, 10)}` : "";
-    print(`assess:    ${h.id} ${when}${counts}${failed}\n`);
+    print(`audit:     ${h.id} ${when}${counts}${failed}\n`);
   }
   const drafts = draftCount(cfg);
   if (drafts > 0) {
-    print(`analyze review: ${drafts} pending (junco investigate review)\n`);
+    print(`investigate review: ${drafts} pending (junco investigate review)\n`);
   }
   // npm update nudge (spec 2026-07-16) — best-effort; silent unless newer.
   const update = await (deps.checkUpdateFn ?? ((c: Config) => checkForUpdate(c)))(cfg);

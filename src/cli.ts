@@ -286,10 +286,10 @@ Subcommands:
   audit review [<id>]                     list pending audit reviews, or show one
   audit file <id> --all | --only <fp,...>  file reviewed findings as issues
   audit discard <id>                      discard a pending batch without filing
-  investigate <owner/repo#N|url>      deep-read one issue and park a comment draft for review
+  investigate <owner/repo#N|url>          deep-read one issue and park a comment draft for review
   investigate review [<id>]               list pending comment drafts, or preview one
   investigate edit <id>                   edit a pending draft in $EDITOR
-  investigate post <id> [--no-footer]    post an approved draft as a comment on its issue
+  investigate post <id> [--no-footer]     post an approved draft as a comment on its issue
   doctor       Preflight: config, node, git, gh auth, endpoint, model, dirs
   auth login | auth grant <owner/repo>   Bot-account login / grant the bot write access to a repo
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log

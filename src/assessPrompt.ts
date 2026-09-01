@@ -1,5 +1,5 @@
 /**
- * `junco assess` audit prompt — the ticket BODY for an assessment run: a
+ * `junco audit`'s prompt — the ticket BODY for an audit run: a
  * READ-ONLY security/vulnerability audit of the working directory, closing
  * with a precise output contract so `parseAgentFindings` (src/findings.ts)
  * can extract the result. Mirrors planPrompt.ts's directness — a checklist

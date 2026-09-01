@@ -61,12 +61,12 @@ export interface GithubConfig {
   plannerModelId: string | null; // planning-session model id override (same endpoint)
   externalReposRoot: string; // managed clones of unowned repos (fork-PR flow)
 }
-/** [assess] — knobs for `junco assess` runs (vulnerability audit → GitHub issues). */
+/** [assess] — knobs for `junco audit` runs (vulnerability audit → GitHub issues). */
 export interface AssessConfig {
   maxIssuesPerRun: number; // cap on issues filed per assessment run
   minSeverity: "critical" | "high" | "medium" | "low"; // findings below this are dropped
   npmBin: string; // binary for the dependency scan (`npm audit --json`)
-  fileAs: "me" | "bot"; // identity `junco assess file` posts under ("bot" = the dedicated bot account; fails loud when its login is missing)
+  fileAs: "me" | "bot"; // identity `junco audit file` posts under ("bot" = the dedicated bot account; fails loud when its login is missing)
 }
 /** Skill-link distribution (spec 2026-08-19): harness skills dirs that get a
  * junco-dispatch symlink via <dataDir>/skills. Presence in this list is the

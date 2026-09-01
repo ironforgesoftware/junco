@@ -138,7 +138,10 @@ describe("renderTranscriptRows", () => {
   it("header, turn line, prose, tool row with anchor; thinking hidden by default", () => {
     const rows = renderTranscriptRows(done(), opts());
     expect(rows[0]).toEqual({
-      text: "── run 1/1 · assess · local/m · 01:02:47 · stop · 11m07s · in 1 out 1 ──",
+      // The recorded run carries the internal flow id "assess" (transcriptSchema.ts's
+      // FlowKind, unchanged data) — the header renders it as "audit", the CLI verb
+      // that now produces these runs (same display-mapping pattern as fmtQueueKind).
+      text: "── run 1/1 · audit · local/m · 01:02:47 · stop · 11m07s · in 1 out 1 ──",
       tone: "bold",
     });
     expect(rows.map((r) => r.text)).toContain("turn 1 · in 1.8k out 85");
@@ -147,6 +150,26 @@ describe("renderTranscriptRows", () => {
     expect(tool.text).toBe("  ▸ read game.js  → 3 lines");
     expect(rows.filter((r) => r.anchor !== undefined)).toHaveLength(1);
     expect(rows.some((r) => r.text.includes("deep thoughts"))).toBe(false);
+  });
+
+  it("maps the recorded flow id to its current CLI verb for display (M-2)", () => {
+    const rowsAnalyze = renderTranscriptRows(
+      summarizeTranscript([
+        runStart({ flow: "analyze", modelId: "local/m", ts: "2026-08-29T01:02:47.000Z" }),
+        runEnd({ stopReason: "stop", durationMs: 1000 }),
+      ]),
+      opts(),
+    );
+    expect(rowsAnalyze[0]?.text).toContain(" · investigate · ");
+    // A flow untouched by the rename (e.g. "pr") passes through unchanged.
+    const rowsPr = renderTranscriptRows(
+      summarizeTranscript([
+        runStart({ flow: "pr", modelId: "local/m", ts: "2026-08-29T01:02:47.000Z" }),
+        runEnd({ stopReason: "stop", durationMs: 1000 }),
+      ]),
+      opts(),
+    );
+    expect(rowsPr[0]?.text).toContain(" · pr · ");
   });
 
   it("showThinking renders the thinking block dim, before the text", () => {

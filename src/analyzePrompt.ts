@@ -1,5 +1,5 @@
 /**
- * `junco analyze` investigation prompt — the ticket BODY for an analysis run:
+ * `junco investigate` investigation prompt — the ticket BODY for an investigation run:
  * a READ-ONLY investigation of a single GitHub issue against the repository,
  * closing with a precise output contract so `analyzeFlow.ts` can extract the
  * drafted comment via `extractLastFencedBlock`. Mirrors assessPrompt.ts's

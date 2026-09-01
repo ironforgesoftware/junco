@@ -192,6 +192,58 @@ describe("submitAsIssue", () => {
     expect(errs.join("")).not.toContain("timeout_minutes"); // carried, not discarded
   });
 
+  // I-5: submitAsIssue's parseTicket call used the silent default warnFn, so
+  // a both-keys audit:/assess: collision never reached the author here either.
+  it("surfaces a both-keys audit:/assess: collision instead of swallowing it", async () => {
+    const cfg = baseCfg();
+    const ticket = TICKET.replace('pr_title: "Add X"', 'pr_title: "Add X"\naudit: {}\nassess: {}');
+    const ghFn = async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "create")
+        return { code: 0, stdout: "https://github.com/acme/api/issues/9\n", stderr: "" };
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "t.md",
+      ticket,
+      { plan: false },
+      {
+        ghFn: ghFn as never,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+    expect(code).toBe(0); // a warning, not a refusal
+    expect(errs.join("")).toMatch(/both `audit:` and legacy `assess:` present/);
+  });
+
+  it("does not warn when only one of audit:/assess: is present", async () => {
+    const cfg = baseCfg();
+    const ticket = TICKET.replace('pr_title: "Add X"', 'pr_title: "Add X"\naudit: {}');
+    const ghFn = async (_c: unknown, args: string[]) => {
+      if (args[0] === "issue" && args[1] === "create")
+        return { code: 0, stdout: "https://github.com/acme/api/issues/9\n", stderr: "" };
+      throw new Error(`unhandled: ${args.join(" ")}`);
+    };
+    const errs: string[] = [];
+    const code = await submitAsIssue(
+      cfg,
+      "t.md",
+      ticket,
+      { plan: false },
+      {
+        ghFn: ghFn as never,
+        printFn: () => {},
+        errFn: (s) => errs.push(s),
+        withBotAuthFn: fakeBotAuth,
+      },
+    );
+    expect(code).toBe(0);
+    expect(errs.join("")).not.toMatch(/both `audit:` and legacy `assess:` present/);
+  });
+
   it("refuses when the ticket's repo is not bridge-watched", async () => {
     const cfg = baseCfg();
     const ticket = TICKET.replace(JSON.stringify(REPO_PATH), JSON.stringify("/elsewhere"));
