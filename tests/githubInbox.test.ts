@@ -11,6 +11,7 @@ import {
   newBridgeState,
   extractPlanBody,
   extractPlanSetBody,
+  extractPatchBody,
   ticketMarkers,
   buildPlanComment,
   buildExecutionTicket,
@@ -1450,6 +1451,11 @@ describe("extractPlanBody", () => {
     expect(out).toBe("# Title\n\n## Steps\n- do it");
     expect(out).not.toContain("\r");
   });
+
+  it("extractPlanBody still strips a smuggled frontmatter block (unchanged)", () => {
+    const body = "```junco-ticket\n---\nrepo: /evil\n---\n# P\n```\n";
+    expect(extractPlanBody(body)).toBe("# P");
+  });
 });
 
 describe("marked ticket blocks (#329)", () => {
@@ -1588,6 +1594,15 @@ describe("junco-plan fence (spec 2026-08-20 layer 2)", () => {
     });
     expect(c).not.toBeNull();
     expect(extractPlanSetBody(c as string)).toBe("version: 1\ntasks: []");
+  });
+});
+
+describe("junco-patch fence (apply tickets, spec 2026-08-31)", () => {
+  it("extractPatchBody reads a junco-patch fence and leaves the mbox intact", () => {
+    const body = "pre\n\n````junco-patch\nFrom abc Mon Sep 17 00:00:00 2001\n---\n diff\n````\n";
+    const got = extractPatchBody(body);
+    expect(got).toContain("From abc");
+    expect(got).toContain("\n---\n");
   });
 });
 
