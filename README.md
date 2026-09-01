@@ -94,7 +94,7 @@ $ junco logs -f
   YAML header. Junco claims it, works in an isolated git worktree, verifies the
   result, runs a diff-vs-spec critic, and opens a draft PR. Tickets without a
   `repo:` are Q&A: answered in place, read-only, no git involved.
-- **Fork-PR mode** — `junco dispatch owner/repo#N` plans and PRs an issue on a
+- **Fork-PR mode** — `junco import owner/repo#N` plans and PRs an issue on a
   repo you don't own: it forks, clones the fork into a managed directory, and
   opens the draft PR upstream — no labels or comments on their repo.
 - **Supervised, not hopeful** — loop guards catch stuck agents, timeouts salvage
@@ -132,7 +132,7 @@ Point it at one issue instead of the whole repo — `junco assess owner/repo#N`
 a `Context:` line GitHub cross-references onto the issue's timeline
 automatically (no comment is posted; that's `junco analyze`, below). Unlike
 the bare `owner/repo` form above, an issue reference auto-provisions an
-unwatched repo the same way `junco dispatch`/`junco analyze` do.
+unwatched repo the same way `junco import`/`junco analyze` do.
 → [Vulnerability assessment guide](docs/assess.md)
 
 ## It investigates, you decide what to post
@@ -146,7 +146,7 @@ analyze edit <id>` opens it in `$EDITOR` for a full rewrite; `junco analyze
 post <id>` is the human confirm step that actually posts the comment. Every
 posted comment carries a disclosure footer by default (`--no-footer` to omit
 it). It works identically on owned and unowned repos — an unwatched repo is
-auto-forked and provisioned the same way `junco dispatch` does.
+auto-forked and provisioned the same way `junco import` does.
 → [Analysis comments guide](docs/analyze.md)
 
 ## Sixty seconds to a running worker
@@ -208,7 +208,7 @@ frontmatter contract, `examples/` has templates, and the bundled
 | `junco lint <file>`                                           | validate a ticket (plan-lint + repo/branch preflight) without submitting                                             |
 | `junco submit --dry-run <file>`                               | report destination, discarded frontmatter, and lint without submitting                                               |
 | `junco dashboard`                                             | the fullscreen TUI                                                                                                   |
-| `junco dispatch <owner/repo#N \| url>`                        | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                         |
+| `junco import <owner/repo#N \| url>`                          | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                         |
 | `junco status` / `junco list` / `junco logs -f`               | daemon, queue, and log visibility                                                                                    |
 | `junco prs`                                                   | list junco-authored pull requests across watched repos                                                               |
 | `junco assess <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`assess review`, `assess file`)      |

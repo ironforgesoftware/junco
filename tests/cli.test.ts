@@ -1362,6 +1362,24 @@ describe("run(['--help'])", () => {
     await run(["--help"], deps);
     expect(deps.runOnceFn).not.toHaveBeenCalled();
   });
+
+  // surface-legibility Task 1: `dispatch` was renamed to `import` (no alias)
+  // — pin that the help text reflects the new verb and never the old one.
+  it("lists `import <ref>` and never `dispatch <ref>`", async () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((s: any) => {
+      lines.push(String(s));
+      return true;
+    });
+    try {
+      await run(["--help"], makeDeps());
+    } finally {
+      spy.mockRestore();
+    }
+    const out = lines.join("");
+    expect(out).toContain("import <ref>");
+    expect(out).not.toContain("dispatch <ref>");
+  });
 });
 
 describe("run(['-h'])", () => {
@@ -2901,13 +2919,16 @@ describe("run(['data', <verb>]) — verb validation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// dispatch subcommand — SDD Task 12
+// import subcommand — SDD Task 12 wired this seam as `dispatch`;
+// surface-legibility Task 1 renamed the verb to `import` (no alias): the old
+// verb pointed the opposite way from the junco-dispatch SKILL (which authors
+// NEW work), where this CLI verb adopts an EXISTING GitHub issue.
 // ---------------------------------------------------------------------------
 
-describe("run(['dispatch', ref])", () => {
+describe("run(['import', ref])", () => {
   it("happy path prints the ticket + fork info", async () => {
     const captured: string[] = [];
-    const code = await run(["dispatch", "up/stream#7"], {
+    const code = await run(["import", "up/stream#7"], {
       loadConfigFn: () => ({}) as Config,
       printFn: (s) => captured.push(s),
       dispatchIssueFn: async () => ({
@@ -2920,14 +2941,14 @@ describe("run(['dispatch', ref])", () => {
     });
     expect(code).toBe(0);
     const out = captured.join("");
-    expect(out).toContain("dispatched: /inbox/gh-up-stream-7.md");
+    expect(out).toContain("imported: /inbox/gh-up-stream-7.md");
     expect(out).toContain("fork: me/stream");
   });
 
   it("missing ref is usage error 2; a throwing core is exit 1", async () => {
-    expect(await run(["dispatch"], {})).toBe(2);
+    expect(await run(["import"], {})).toBe(2);
     expect(
-      await run(["dispatch", "x#1"], {
+      await run(["import", "x#1"], {
         loadConfigFn: () => ({}) as Config,
         dispatchIssueFn: async () => {
           throw new Error("boom");
@@ -2938,8 +2959,40 @@ describe("run(['dispatch', ref])", () => {
 
   it("does NOT call loadConfigFn when the ref is missing (usage error short-circuits)", async () => {
     const loadConfigFn = vi.fn(() => ({}) as Config);
-    await run(["dispatch"], { loadConfigFn });
+    await run(["import"], { loadConfigFn });
     expect(loadConfigFn).not.toHaveBeenCalled();
+  });
+});
+
+// --- dispatch (removed — renamed to `import` above, deliberately with NO
+// alias; pin this so nobody "helpfully" adds the old verb back) ---
+
+describe("run(['dispatch', ref]) — removed, no alias", () => {
+  it("falls through to the unknown-subcommand path: exit 2, core never runs", async () => {
+    const dispatchIssueFn = vi.fn(async () => ({
+      id: "gh-up-stream-7",
+      destPath: "/inbox/gh-up-stream-7.md",
+      external: false,
+      clonePath: "",
+      forkNwo: null,
+    }));
+    const errLines: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errLines.push(String(s));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await run(["dispatch", "up/stream#7"], {
+        loadConfigFn: () => ({}) as Config,
+        dispatchIssueFn,
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(code).toBe(2);
+    expect(dispatchIssueFn).not.toHaveBeenCalled();
+    expect(errLines.join("")).toContain("Unknown subcommand: dispatch");
   });
 });
 

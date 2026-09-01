@@ -6,7 +6,7 @@
 
 Point junco at any issue — owned repo or not — and it investigates the codebase against that issue: root cause, `file:line` evidence, reproduction steps, a suggested fix direction. Nothing is posted. The investigation is **parked** as a draft you review, can edit, and post yourself, under your own `gh` auth. The only outward-facing write in the whole flow is that human-confirmed post.
 
-**Works on any watched repo — owned or not.** A repo you already watch resolves directly. An unwatched repo is auto-forked and cloned into a managed directory — exactly the provisioning `junco dispatch` does for an external issue — and added to your watchlist, so there's no separate "watch it first" step before you can analyze an issue on it.
+**Works on any watched repo — owned or not.** A repo you already watch resolves directly. An unwatched repo is auto-forked and cloned into a managed directory — exactly the provisioning `junco import` does for an external issue — and added to your watchlist, so there's no separate "watch it first" step before you can analyze an issue on it.
 
 ## The flow (two phases)
 
@@ -63,9 +63,9 @@ Nothing posts until Phase B runs. A draft that's never reviewed just sits in the
 junco analyze <owner/repo#N|url>
 ```
 
-Accepts an `owner/repo#N` reference or a full `https://github.com/<owner>/<repo>/issues/<N>` URL — the same reference shape `junco dispatch` accepts. Unlike `junco assess`, there's no local-path form: analyze always targets a specific issue.
+Accepts an `owner/repo#N` reference or a full `https://github.com/<owner>/<repo>/issues/<N>` URL — the same reference shape `junco import` accepts. Unlike `junco assess`, there's no local-path form: analyze always targets a specific issue.
 
-Resolution (`resolveIssueTarget`, shared with `junco dispatch`) fetches the issue via `gh`, then either maps it to an already-watched repo's clone or auto-forks and provisions a managed clone for an unowned one, adding it to the watchlist. A bad reference, an unreadable issue, or a provisioning failure aborts before anything is queued.
+Resolution (`resolveIssueTarget`, shared with `junco import`) fetches the issue via `gh`, then either maps it to an already-watched repo's clone or auto-forks and provisions a managed clone for an unowned one, adding it to the watchlist. A bad reference, an unreadable issue, or a provisioning failure aborts before anything is queued.
 
 What gets printed:
 
@@ -178,7 +178,7 @@ Presence of the `analyze:` mapping selects this flavor (see the flavor table in 
 
 An analyze ticket deliberately carries **no `github:` provenance block** — the bridge's lifecycle-label/comment reporting keys off that block, and an analyze ticket must produce no un-gated outward write. The reporter no-ops on analyze tickets; the only outward write in the whole feature is the human-confirmed `junco analyze post`.
 
-The issue body itself rides in the ticket **body**, framed as untrusted data, not instructions — the same idiom `junco dispatch` uses for issue content it didn't write.
+The issue body itself rides in the ticket **body**, framed as untrusted data, not instructions — the same idiom `junco import` uses for issue content it didn't write.
 
 ## Visibility
 

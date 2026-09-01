@@ -1,5 +1,5 @@
 /**
- * Label-free issue dispatch — the shared core behind `junco dispatch` and the
+ * Label-free issue dispatch — the shared core behind `junco import` and the
  * dashboard's external-repo dispatch. Frontmatter is 100% machine-built from
  * gh JSON output; the (untrusted) issue text only ever lands in the body,
  * inside an explicit data-not-instructions block. Spec:

@@ -312,7 +312,7 @@ Subcommands:
                   frontmatter, and lint results without submitting
   lint <file>  Validate a ticket without submitting — plan-lint plus repo,
                   origin, and branch-collision preflight (exit 1 on errors)
-  dispatch <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
+  import <ref>  Fetch a GitHub issue (owner/repo#N or URL) and queue a ticket
                   for it — forks & clones unowned repos automatically
   skill install [--harness <name|path>]...  Link the junco-dispatch skill into
                   harness skills dirs via <dataDir>/skills (names: claude,
@@ -1762,14 +1762,19 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   }
 
   // ------------------------------------------------------------
-  // dispatch <owner/repo#N | issue-url>: fetch a GitHub issue and queue a
-  // ticket for it, forking + cloning unowned repos automatically. Lazy import
-  // keeps this (and its gh/git dependency graph) off every other subcommand.
+  // import <owner/repo#N | issue-url>: fetch a GitHub issue and queue a
+  // ticket for it, forking + cloning unowned repos automatically. Named
+  // `import` (not `dispatch`, which this used to be called — no alias, that
+  // verb pointed the opposite way from the junco-dispatch SKILL, which
+  // authors NEW work rather than adopting an existing issue): the operation
+  // brings an external thing under junco's management, same as `terraform
+  // import`. Deferred module load keeps this (and its gh/git dependency
+  // graph) off every other subcommand.
   // ------------------------------------------------------------
-  if (subcommand === "dispatch") {
+  if (subcommand === "import") {
     const ref = positionals[1];
     if (!ref) {
-      process.stderr.write(`Usage: junco dispatch <owner/repo#N | issue-url>\n`);
+      process.stderr.write(`Usage: junco import <owner/repo#N | issue-url>\n`);
       return 2;
     }
     const cfg = loadConfigFn(configPath);
@@ -1777,13 +1782,13 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       deps.dispatchIssueFn ?? (await import("./externalDispatch.js")).dispatchIssue;
     try {
       const r = await dispatchFn(cfg, ref);
-      printFn(`dispatched: ${r.destPath}\n`);
+      printFn(`imported: ${r.destPath}\n`);
       if (r.external) {
         printFn(`external repo — fork: ${r.forkNwo} · clone: ${r.clonePath}\n`);
       }
       return 0;
     } catch (e) {
-      process.stderr.write(`junco dispatch: ${e instanceof Error ? e.message : String(e)}\n`);
+      process.stderr.write(`junco import: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
   }

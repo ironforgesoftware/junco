@@ -130,11 +130,11 @@ The explicit end-of-life for a parked batch: archives it out of the pending revi
 
 ## Issue-scoped assess
 
-`junco assess owner/repo#N` (or a full issue URL) points the audit at one issue instead of sweeping the whole repo. Target resolution goes through the same `resolveIssueTarget` helper `junco dispatch` and `junco analyze` use: a fail-fast `gh issue view` fetch, then either resolve against an already-watched repo or **auto-provision** an unwatched one — fork, clone into a managed directory, add it to the watchlist.
+`junco assess owner/repo#N` (or a full issue URL) points the audit at one issue instead of sweeping the whole repo. Target resolution goes through the same `resolveIssueTarget` helper `junco import` and `junco analyze` use: a fail-fast `gh issue view` fetch, then either resolve against an already-watched repo or **auto-provision** an unwatched one — fork, clone into a managed directory, add it to the watchlist.
 
 **This auto-provisioning is asymmetric with the plain `owner/repo` form above, and that's deliberate.** `junco assess <nwo>` on its own still requires the repo be already watched — no clone is provisioned for it. An issue reference is treated as an explicit, single-issue ask; a bare repo target is a broader operation that shouldn't silently provision a clone just because you typed a name it recognizes as `owner/repo`-shaped.
 
-The audit prompt gains an extra section carrying the issue's title and body, framed the same way `junco dispatch`/`junco analyze` frame issue text: explicit untrusted data, not instructions, with an instruction to scope the audit to the code that issue implicates (findings outside that scope are still reported, just deprioritized).
+The audit prompt gains an extra section carrying the issue's title and body, framed the same way `junco import`/`junco analyze` frame issue text: explicit untrusted data, not instructions, with an instruction to scope the audit to the code that issue implicates (findings outside that scope are still reported, just deprioritized).
 
 Findings park exactly like a whole-repo audit's do — same store, same `junco assess review` / `junco assess file` flow, same dashboard review view. The one difference is in what gets filed: each finding's issue body gets a `**Context:** <owner/repo>#<N>` line immediately before the machine-readable block. GitHub turns that into an automatic cross-reference, so every filed finding shows up on the original issue's timeline for free. **No comment is posted on the issue itself** — an issue-scoped assess run is read-only apart from the issues it files; posting prose on the original issue is a different, deliberate command, `junco analyze` (see the [analysis comments guide](./analyze.md)).
 

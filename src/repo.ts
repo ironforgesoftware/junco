@@ -325,7 +325,7 @@ export async function validateRepoContext(
     if (fr.code !== 0 || !fr.stdout.trim()) {
       throw new GitOpError(
         `push_remote ${JSON.stringify(ctx.pushRemote)} is not a remote on ${ctx.repo} — ` +
-          `run junco dispatch (or add the fork remote) first`,
+          `run junco import (or add the fork remote) first`,
       );
     }
     const forkNwo = nwoFromRemoteUrl(fr.stdout.trim());

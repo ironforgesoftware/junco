@@ -75,7 +75,7 @@ The config surface is additive and off by default:
   clone for a repo you don't own always runs as the bot, even though it's human-triggered —
   the fork it creates is the daemon's future push target, so it has to live on the bot's
   account from the start. This covers every call site that shares the provisioning path:
-  `junco dispatch`, `junco analyze`, `junco assess` pointed at an unowned repo's issue (clone
+  `junco import`, `junco analyze`, `junco assess` pointed at an unowned repo's issue (clone
   only — it deliberately skips the fork), and the dashboard's add-repo flow. The issue read
   that precedes it (`gh issue view`) stays on your ambient login.
 - **Per-worktree commit identity.** Every PR-flow worktree gets `extensions.worktreeConfig`
@@ -160,7 +160,7 @@ those repos already read as `direct` and `junco auth grant` has nothing to do on
 
 ### Unwatched-repo dispatch: what happens without a grant
 
-`junco dispatch`, `junco analyze`, and `junco assess <owner/repo#N>` all resolve an
+`junco import`, `junco analyze`, and `junco assess <owner/repo#N>` all resolve an
 unwatched repo the same way, classifying the bot's access before touching anything:
 
 | Repo state (bot's access)                                         | Mode        | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                            |
