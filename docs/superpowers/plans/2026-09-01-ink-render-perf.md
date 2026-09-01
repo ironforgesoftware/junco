@@ -1101,6 +1101,8 @@ function lastAltEnter(chunks: string[]): number {
 Run: `npx vitest run tests/dashboardCmd.test.ts tests/useSuspendTty.test.tsx > /tmp/out 2>&1; echo "exit: $?"; grep -E "✓|×" /tmp/out`
 Expected: `exit: 1`; only "renders incrementally" fails (`undefined` vs `true`). The suspend case passes already — it pins Ink-internal behavior the option relies on; if it FAILS, stop: the option is unsafe with the custom suspend path and the finding goes back to the maintainer.
 
+**Found during execution:** the suspend case as first written FAILED in BOTH modes — not a hazard, a harness artifact. Ink throttles frames to one per ~33 ms window; suspending inside the mount frame's window with an instant fake child let the blank frame and the resume frame coalesce into one trailing render whose output equalled the last written one, so nothing was written. With a 100 ms gap before suspending and a 100 ms child (the shape of a real gh device-flow handoff), both modes write the erase before the alt-screen leave and every line after re-entry (incremental: `ESC[1G<line>ESC[K` per line). The test now uses that timing and additionally asserts the blank frame's erase precedes the leave.
+
 - [ ] **Step 4: Set the option**
 
 In `src/dashboardCmd.ts` replace the constant with:

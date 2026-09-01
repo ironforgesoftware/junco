@@ -196,6 +196,9 @@ describe("INK_RENDER_OPTIONS (Ctrl-C must reach the hosted wizard/App handlers)"
   it("keeps the fullscreen alternate-screen buffer", () => {
     expect(INK_RENDER_OPTIONS.alternateScreen).toBe(true);
   });
+  it("renders incrementally so an animation frame rewrites only changed lines", () => {
+    expect(INK_RENDER_OPTIONS.incrementalRendering).toBe(true);
+  });
 
   it("localSnapshot factories are pulled through the same lazy Promise.all", async () => {
     const { readFileSync } = await import("node:fs");
