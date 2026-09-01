@@ -34,8 +34,10 @@
   "bin": {
     "junco": "dist/cli.js"
   },
+  "exports": {},
   "files": [
     "dist",
+    "!dist/**/*.js.map",
     "templates",
     "skills",
     "examples",
