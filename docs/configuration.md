@@ -27,7 +27,7 @@ Set `JUNCO_CONFIG` to point junco at a specific config file, bypassing the canon
 }
 ```
 
-`tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `sandbox`, `critic`, `planLint`, `observability`, `github`, `assess` — is a sectioned object with sensible defaults; set only the keys you want to override. The queue and every other on-disk directory Junco keeps default to a location under `dataDir` (below) — nothing here needs to be set to get a working queue.
+`tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `sandbox`, `critic`, `planLint`, `observability`, `github`, `botAccount`, `planSets`, `assess`, `skills` — is a sectioned object with sensible defaults; set only the keys you want to override. The queue and every other on-disk directory Junco keeps default to a location under `dataDir` (below) — nothing here needs to be set to get a working queue.
 
 ## Unified data root
 
@@ -269,6 +269,24 @@ With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog 
 {
   "worker": {
     "applyFallbackToAgent": false
+  }
+}
+```
+
+## Plan sets
+
+`planSets` gates the plan-set compiler — one fenced `junco-plan` document compiled into a dependency-ordered set of tickets and pull requests (see [Tickets § Plan sets](tickets.md#plan-sets-the-junco-plan-fence)). Off by default. With it off, `junco submit --plan` and the GitHub bridge's `junco-plan` door refuse; the dependency machinery every plan set runs on (`depends_on:` claim gating, the merge sweep, failure cascade) stays on regardless, so hand-authored `depends_on:` sets never need this section.
+
+| Key                         | Default | Reload  | Effect                                                                                                                                                                                                                                                                                             |
+| --------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `planSets.enabled`          | `false` | restart | Compile `junco-plan` fences into ticket sets — `junco submit --plan <file> --repo <path>` locally, and the bridge's plan-set door (a vouched issue body or an approved plan comment carrying the fence).                                                                                           |
+| `planSets.mergePollSeconds` | `60`    | live    | Cadence (min 5) of the daemon's dependency sweep, which stamps `deps_satisfied` once a dependency is done and its PR merged, and cascades the dependents of a failed one to `failed/`. Runs with the bridge disabled too — it is what unblocks any `depends_on:` ticket, compiled or hand-written. |
+| `planSets.maxTasks`         | `10`    | live    | Cap (min 1) on tasks per plan; a larger plan is refused whole at compile time, with every validation error printed at once.                                                                                                                                                                        |
+
+```json
+{
+  "planSets": {
+    "enabled": true
   }
 }
 ```

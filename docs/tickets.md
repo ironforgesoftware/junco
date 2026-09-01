@@ -37,7 +37,7 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 | `retry_count`     | integer             | Worker-managed transparent-retry counter. Don't set by hand.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `depends_on`      | string[]            | Ticket ids that must be satisfied before this ticket is claimed: each referenced ticket finished successfully AND (when it opened a pull request) that PR was merged. Unsatisfied edges leave the ticket queued; a terminally failed dependency parks this ticket in failed/ (dependency cascade).                                                                                                                                                                                                                                                 |
 | `deps_satisfied`  | string[]            | Worker-managed: `depends_on` entries the dependency sweep has confirmed satisfied. Don't set by hand.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `plan`            | mapping             | Optional plan-set membership/provenance: ties this ticket to an approved plan. `{ id: string, task: string, hash: string }` — `hash` is worker-managed (content hash of the approved plan).                                                                                                                                                                                                                                                                                                                                                        |
+| `plan`            | mapping             | Optional plan-set membership/provenance: ties this ticket to an approved plan. `{ id: string, task: string, hash: string }` — `hash` is worker-managed (content hash of the approved plan). Stamped by the compiler — don't set by hand. → [Plan sets](#plan-sets-the-junco-plan-fence)                                                                                                                                                                                                                                                            |
 | `audit`           | mapping             | Selects the audit flavor (see above). `{ auto_plan: bool, issue: number, issue_title: string }` — `issue`/`issue_title` are present only when scoped via `junco audit owner/repo#N`, and steer the audit and filed findings' `Context:` line. Machine-composed by `junco audit` — don't set by hand. `assess:` is a permanently accepted legacy alias (same shape); when a ticket carries both, `audit:` wins. → [Repo audit guide](./audit.md)                                                                                                    |
 | `investigate`     | mapping             | Selects the investigation flavor (see above). `{ issue: number, title: string }`. Machine-composed by `junco investigate` — don't set by hand. `analyze:` is a permanently accepted legacy alias (same shape); when a ticket carries both, `investigate:` wins. → [Issue investigation guide](./investigate.md)                                                                                                                                                                                                                                    |
 | `github_request`  | mapping             | Dispatcher-settable. `{ create_issue: true }` asks the worker to create a GitHub tracking issue for this ticket at claim time — on the clone's origin repo, under the worker's own gh identity (the bot account when configured) — and stamp the `github:` provenance block itself, so the resulting PR closes the issue on merge. Best-effort: if creation fails (offline, no permission, non-GitHub origin) the ticket still runs, unlinked. Ignored on fork-push (`push_remote: fork`), amend (`amends_pr`), and Q&A/audit/investigate tickets. |
@@ -199,6 +199,62 @@ npx tsc --noEmit
 ```
 ````
 
+## Plan sets (the `junco-plan` fence)
+
+A _plan set_ is one fenced YAML document that Junco compiles into a dependency-ordered set of PR-flow tickets — each task becomes its own ticket and its own pull request, and a task is claimed only after every task it `depends_on` has finished successfully and had its PR merged. It is the compiler behind the `depends_on` / `deps_satisfied` / `plan` frontmatter fields above: you write the plan, the compiler writes the tickets. Compilation is gated by `planSets.enabled` (default **off** — see [Configuration § Plan sets](configuration.md#plan-sets)); the dependency machinery underneath (claim gating on `depends_on`, the merge sweep, the failure cascade) is always on, so hand-authored tickets with `depends_on:` work with the lever off.
+
+Two doors compile a plan set:
+
+- **Local:** `junco submit --plan <file> --repo <path>` reads the **last** complete `junco-plan` fence in `<file>` — a plan document is not a ticket and carries no frontmatter; anything outside the fence is ignored — validates it, and drops the compiled children straight into the inbox. Re-running with an edited plan supersedes the previous revision's still-unclaimed children. `junco lint` validates tickets, not plan documents: the compiler's own validator runs at submit time and prints every error at once.
+- **GitHub bridge:** with plan sets on, a labeled issue whose vouched body carries a `junco-plan` fence (`junco submit --as-issue --plan <file> --repo <path>` parks exactly that), or a planning session that emits one instead of a single `junco-ticket` fence, is compiled on labeling/approval. The bridge then maintains a plan-set dashboard comment, set-level lifecycle labels, and a degraded-mode comment on the first failure. → [GitHub mode](./github-mode.md)
+
+### The fence
+
+````markdown
+```junco-plan
+version: 1
+shared_context: |
+  Constraints every task inherits — build and test commands, conventions, what never changes.
+tasks:
+  - id: api-endpoint
+    title: Add the /v1/items endpoint
+    description: |
+      Self-contained, for an agent that sees only this task, the shared context, and the
+      ids of its prerequisites. What to build and why.
+    acceptance:
+      - WHEN GET /v1/items is called THE SYSTEM SHALL return 200 with a JSON array.
+    prohibitions:
+      - Do not touch the UI package.
+    verification: |
+      npm test
+  - id: items-ui
+    title: Render the items list from /v1/items
+    depends_on: [api-endpoint]
+    description: |
+      Consume the endpoint the api-endpoint task added; it is merged by the time this runs.
+    acceptance:
+      - WHEN the items page loads THE SYSTEM SHALL render one row per item returned.
+    verification: |
+      npm test
+```
+````
+
+| Field                  | Required | Meaning                                                                                                                                               |
+| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`              | yes      | Always `1`.                                                                                                                                           |
+| `shared_context`       | no       | Prose every child ticket carries under its `## Shared context` section.                                                                               |
+| `tasks[].id`           | yes      | `[a-z0-9][a-z0-9-]{0,31}`, unique within the plan, and not purely numeric or `r<digits>` — that shape collides with the queue's retry-suffix grammar. |
+| `tasks[].title`        | yes      | The child ticket's `#` heading.                                                                                                                       |
+| `tasks[].depends_on`   | no       | Ids of other tasks in the same document. Forward references are fine; unknown ids, self-edges, and cycles are refused.                                |
+| `tasks[].description`  | yes      | What to build and why — the top of the child ticket's body.                                                                                           |
+| `tasks[].acceptance`   | yes      | Non-empty list; becomes the child's `## Behavior` assertions.                                                                                         |
+| `tasks[].prohibitions` | no       | Becomes the child's `## Prohibitions` list.                                                                                                           |
+| `tasks[].verification` | no       | Shell commands, one per line; emitted as the child's `## Verification` bash block, which the worker runs.                                             |
+
+**What the compiler builds.** Each task becomes a ticket `<plan-id>-<task-id>` (the plan id is `plan-<file-slug>` on the local door), with `repo:` stamped from `--repo` (or the watchlist, on the bridge), a `plan: { id, task, hash }` provenance block, and `depends_on:` remapped to the sibling ticket ids. Every free-text field is plain prose: a frontmatter delimiter (`---`), a code fence (` ``` `), or a `## `-prefixed heading inside `title`, `description`, `acceptance`, `prohibitions`, `verification`, or `shared_context` is **refused**, not stripped — each collides with structure the compiler builds into the child body. Use `###` or deeper for a subheading. A plan with more than `planSets.maxTasks` tasks (default 10) is refused whole; validation collects every error before deciding, and nothing dispatches on any error.
+
+Never hand-author `plan:` or `depends_on:` on a compiled set — the compiler owns them. `examples/plan-set.md` is a complete, compilable example.
+
 ## Submitting tickets
 
 ```bash
@@ -213,6 +269,9 @@ junco submit --patch ./my-series.patch --repo /absolute/path/to/your-repo \
   --title "Fix off-by-one in pagination" \
   --why "Backport the upstream fix" \
   --verify "npx tsc --noEmit"
+
+# Compile a plan set (requires planSets.enabled) into its child tickets:
+junco submit --plan ./my-plan.md --repo /absolute/path/to/your-repo
 
 # Print the inbox path:
 junco inbox-path
