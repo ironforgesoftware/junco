@@ -47,11 +47,11 @@ export type AgentEvent = AgentSessionEvent;
  * surface this small lets `runAgent` be exercised with a fake (see
  * tests/session.test.ts) and isolates the real SDK to `makePiSessionFactory`.
  *
- * Verified against the installed SDK 0.84.2 (`dist/core/agent-session.d.ts`):
- *   - subscribe(listener): () => void   (line 276)
- *   - prompt(text, options?): Promise<void>  (line 355; resolves after the agent loop finishes)
- *   - dispose(): void   (line 283)
- *   - abort(): Promise<void>   (line 433)
+ * Verified against the installed SDK 0.84.4 (`dist/core/agent-session.d.ts`):
+ *   - subscribe(listener): () => void   (line 285)
+ *   - prompt(text, options?): Promise<void>  (line 364; resolves after the agent loop finishes)
+ *   - dispose(): void   (line 292)
+ *   - abort(): Promise<void>   (line 449)
  */
 export interface AgentSessionLike {
   subscribe(listener: (event: AgentEvent) => void): () => void;
@@ -402,7 +402,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  * `credentials` explicitly is load-bearing: `ModelRuntime.create`'s own
  * default is a store file-backed at `authPath`, and that backend CREATES the
  * file (`CreateModelRuntimeOptions.credentials`/`.authPath`, `dist/core/
- * model-runtime.d.ts:4-6`, verified against 0.84.2 — `AuthStorage` itself is
+ * model-runtime.d.ts:4-6`, verified against 0.84.4 — `AuthStorage` itself is
  * no longer exported from the SDK's root; only `readStoredCredential` is,
  * per `dist/index.d.ts:4`). A null `cfg.model.apiKey` seeds nothing and
  * defers to the SDK's own provider env-var fallback at request time.
@@ -579,7 +579,7 @@ export async function resolveSandbox(
 }
 
 /** The `ModelRuntime` surface junco uses, kept narrow so the cast at this
- * boundary is auditable (verified against 0.84.2 `dist/core/model-runtime.d.ts`:
+ * boundary is auditable (verified against 0.84.4 `dist/core/model-runtime.d.ts`:
  * `getModel`/`getModels`/`registerProvider`). */
 interface SdkModelRuntime {
   getModel(providerId: string, modelId: string): unknown;
@@ -644,10 +644,10 @@ function sdkRegistryOps(
 }
 
 /** The subset of the SDK's resolved `Model<Api>` fields `getResolvedModelInfo`
- * surfaces (verified against the installed 0.84.2: `@earendil-works/pi-ai`
+ * surfaces (verified against the installed 0.84.4: `@earendil-works/pi-ai`
  * resolves as a nested dependency of `pi-coding-agent`, not hoisted to the
  * workspace root — `node_modules/@earendil-works/pi-coding-agent/node_modules/
- * @earendil-works/pi-ai/dist/types.d.ts:670-691`: `id`, `provider`, `baseUrl`,
+ * @earendil-works/pi-ai/dist/types.d.ts:695-716`: `id`, `provider`, `baseUrl`,
  * `api`, `cost` all present on every resolved model regardless of cascade
  * path). */
 interface SdkResolvedModelFields {

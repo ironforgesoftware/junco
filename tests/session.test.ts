@@ -941,7 +941,7 @@ describe("models.json file path — SDK resolution", () => {
         {
           model: {
             // A real builtin-catalog provider/model id (verified against the
-            // installed 0.84.2: pi-ai/dist/providers/data/anthropic.json).
+            // installed 0.84.4: pi-ai/dist/providers/data/anthropic.json).
             id: "anthropic/claude-sonnet-4-5",
             source: "catalog",
             baseUrlExplicit: false,
