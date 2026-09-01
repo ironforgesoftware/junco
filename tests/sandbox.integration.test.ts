@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { selectBackend, defaultExecProbe } from "../src/agent/sandbox/backend.js";
 import {
   buildPolicy,
@@ -178,6 +178,34 @@ describe("sandbox integration (real OS enforcement)", () => {
     expect(r.out).toContain("PUBLIC");
     expect(r.out).not.toContain("TOPSECRET");
     expect(r.out).toMatch(/exit=[^0]/);
+  });
+
+  // #340: Mach lookup is enumerated, not blanket. The one name the toolchain
+  // needs (opendirectoryd's libinfo — getpwuid for a Directory Services user)
+  // must still answer, and securityd — the login keychain, which is what
+  // `git credential-osxkeychain` reads — must not. Under the old blanket allow
+  // `security list-keychains` exited 0 from inside the sandbox.
+  it("reaches only the enumerated Mach services: user lookup works, the keychain does not (#340)", async (ctx) => {
+    requireBackend(ctx);
+    ctx.skip(
+      backend.name !== "seatbelt",
+      "Mach lookup is a Seatbelt concept; bwrap has no securityd",
+    );
+    const work = tmp("junco-it-work-");
+    const scratch = tmp("junco-it-scratch-");
+    const r = await run(
+      [
+        `echo "user=$(id -un)"`,
+        `"${process.execPath}" -e 'console.log("node-user=" + require("os").userInfo().username)'; echo "node=$?"`,
+        `security list-keychains >/dev/null 2>&1; echo "keychain=$?"`,
+      ].join("; "),
+      { work, scratch },
+    );
+    const me = userInfo().username;
+    expect(r.out).toContain(`user=${me}`);
+    expect(r.out).toContain(`node-user=${me}`);
+    expect(r.out).toContain("node=0");
+    expect(r.out).toMatch(/keychain=[^0]/);
   });
 });
 
