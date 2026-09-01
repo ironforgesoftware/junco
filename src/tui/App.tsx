@@ -12,7 +12,7 @@ import { bumpRender } from "./renderCount.js";
 import type { DashboardClient } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState } from "./state.js";
-import { lifecycleLabels } from "../githubInbox.js";
+import { githubTicketId, lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
 import type { GithubRepoMapping } from "../types.js";
 import type { UpdateInfo } from "../updateCheck.js";
@@ -795,6 +795,37 @@ export function App(props: AppProps): React.JSX.Element {
       }
     });
   }, [client, currentNwo, currentIssue, showToast]);
+
+  // `t` on an issue — open the transcript of the ticket the bridge built for
+  // it (#330). `enter` is taken by the issue-body detail view, so the
+  // transcript needs its own key. Mirrors openQueueTranscript: the queue
+  // snapshot decides live-vs-finished, and a miss toasts rather than opening
+  // an empty view. Takes its target as arguments so the detail view can pass
+  // its FROZEN snapshot instead of the live rail selection. Bridged ticket
+  // ids (`gh-<owner>-<repo>-<hash>-<n>`) carry no stamp prefix, so a direct
+  // `r.id === id` compare (no stripStamp) is correct here, unlike the local
+  // queue rows elsewhere that use `displayId`.
+  const openIssueTranscript = useCallback(
+    (nwo: string | null | undefined, issue: DashIssue | null | undefined): void => {
+      if (!nwo || !issue) return;
+      const id = githubTicketId(nwo, issue.number);
+      const running = queueSnap?.running.some((r) => r.id === id) ?? false;
+      const recent = queueSnap?.recent.some((r) => r.id === id) ?? false;
+      const waiting = queueSnap?.waiting.some((r) => r.id === id) ?? false;
+      if (running || recent) {
+        openTranscript(id, { expectLive: running });
+        setView("transcript");
+        return;
+      }
+      showToast(
+        "info",
+        waiting
+          ? `#${issue.number}: not started yet — no transcript`
+          : `#${issue.number}: no ticket in flight`,
+      );
+    },
+    [queueSnap, openTranscript, showToast],
+  );
 
   const openBrowser = useCallback(() => {
     if (!currentNwo || !currentIssue) return;
@@ -1965,6 +1996,8 @@ export function App(props: AppProps): React.JSX.Element {
       if (key.escape) return void setView("main");
       if (input === "]" || key.downArrow) return void scrollBy(1);
       if (input === "[" || key.upArrow) return void scrollBy(-1);
+      if (input === "t")
+        return void openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null);
       return;
     }
 
@@ -2240,6 +2273,7 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "k" || key.upArrow) return void moveIssue(-1);
     if (input === "g") return void moveIssueTo(0);
     if (input === "G") return void moveIssueTo(filteredIssues.length - 1);
+    if (input === "t") return void openIssueTranscript(currentNwo, currentIssue);
     if (key.return) return void openDetail();
     // Named issue verbs (dispatch/approve/analyze + shift variants)
     // dispatch at layer 3d via the derived keymap.

@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- On the dashboard, `t` on a GitHub issue opens the transcript of the ticket the bridge built for it — live-following while the run is in flight — so a labeled issue can be watched without hunting for its row in the queue section (#330). Works from the issue list and from the open issue detail view; a toast explains when nothing is in flight for that issue (`enter` still opens the issue body).
+
 ### Changed
 
 - A parked `--as-issue` body now carries the plan **once** — rendered markdown wrapped in invisible `junco:ticket` delimiters — instead of a rendered copy plus a collapsed machine fence (#329). Half the issue size, no desync surface between the two copies, and editing the parked plan in GitHub's UI before applying the label now edits exactly what runs. The bridge reads markers first and still falls back to a `junco-ticket` fence, so issues parked by older versions launch unchanged; `--as-issue --plan` keeps its fence (YAML payload).
