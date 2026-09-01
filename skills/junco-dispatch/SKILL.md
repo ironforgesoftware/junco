@@ -5,11 +5,11 @@ description: 'Use when the user wants to dispatch work to the local junco task-q
 
 # Junco dispatch
 
-Package a unit of work into a plan-shaped markdown file with junco frontmatter, then submit it to its destination. The destination is decided by a probe, not a phrase: when GitHub integration and the bot account are both on and the target repo is bridge-watched, the ticket is filed as a parked, unlabeled GitHub issue via `junco submit --as-issue`; otherwise it goes to the configured inbox via `junco submit`. A `junco-local:` trigger, or a brief that says "to the inbox" / "local inbox", forces the inbox; "park it on github" / "junco as issue: …" / "dispatch as issue" forces the issue destination even when the probe would not pick it (the CLI's refusal then says why it cannot). See "Dispatch procedure" below. Either way the junco worker claims the resulting ticket, runs it through its configured coding agent, and opens a draft PR on completion; the issue destination just adds one more human gate before that first claim — nothing runs until a human applies the trigger label.
+Package a unit of work into a plan-shaped markdown file with junco frontmatter, then submit it to its destination. The destination is decided by a probe, not a phrase: when GitHub integration and the bot account are both on and the target repo is bridge-watched, the ticket is filed as a parked, unlabeled GitHub issue via `junco submit --as-issue`; otherwise it goes to the configured inbox via `junco submit`. A `junco-local:` trigger, or a brief that says "to the inbox" / "local inbox", forces the inbox; "park it on github" / "junco as issue: …" / "dispatch as issue" forces the issue destination even when the probe would not pick it (the CLI's refusal then says why it cannot). See "Dispatch procedure" below. Either way the junco worker claims the resulting ticket, then either applies its patch series directly (apply mode) or runs it through the configured coding agent (plan mode), and opens a draft PR either way; the issue destination just adds one more human gate before that first claim — nothing runs until a human applies the trigger label.
 
 **Why this skill exists:** plan quality is the single biggest lever on the agent's performance. In testing, a well-structured plan ran several times faster and used far fewer tokens than a loose prompt doing the same work. This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
 
-**Two families of work.** Most of this skill is about _authoring_ a plan-shaped ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR. Two modes are different, and author nothing: _assess_ triggers `junco assess`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an assess run never opens a PR. See "Assess mode" below. _analyze_ triggers `junco analyze`, a read-only investigation of a single issue that parks a drafted comment for review; posting it is a separate, human-confirmed step, and an analyze run never opens a PR either. See "Analyze mode" below.
+**Two families of work.** Most of this skill is about _authoring_ a ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR, or (when you already know the exact bytes) emitting a pre-built patch series instead of prose Steps — see "Apply mode" below. Two modes are different, and author nothing: _assess_ triggers `junco assess`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an assess run never opens a PR. See "Assess mode" below. _analyze_ triggers `junco analyze`, a read-only investigation of a single issue that parks a drafted comment for review; posting it is a separate, human-confirmed step, and an analyze run never opens a PR either. See "Analyze mode" below.
 
 ## When to trigger
 
@@ -30,7 +30,7 @@ Fire this skill when the user explicitly asks to dispatch work:
 
 ## Supporting files
 
-- `TEMPLATE.md` — the canonical plan template. Every ticket uses this exact shape.
+- `TEMPLATE.md` — the canonical ticket shapes: the full plan-ticket template (Steps/Files/Scope) that most tickets use, plus the minimal apply-ticket shape for when you already know the exact bytes (see "Apply mode" below).
 - `EXAMPLE.md` — three worked examples (trivial 1-commit; moderate 2-commit; amend). Use as shape anchors when generating.
 
 Read these via the Read tool when you need to quote or reference the template.
@@ -93,6 +93,8 @@ The compiler refuses (never strips) a plan whose free-text fields — `title`, `
 
 ## Drafting procedure
 
+**First, the mode question:** did I resolve every unknown — do I know the exact bytes? Yes → skip the numbered steps below and build a patch ticket instead (see "Apply mode (patch tickets)"). No → continue with today's plan ticket, steps 1–6 below. Forcing certainty you do not have is the failure mode to avoid — an unresolved unknown belongs in a plan ticket's Steps, not smoothed over by a patch built on a guess.
+
 1. **Read the template.** Use Read tool on `~/.claude/skills/junco-dispatch/TEMPLATE.md` to load the canonical shape. Do not paraphrase from memory.
 2. **Choose an example as anchor — conditionally.** Read `EXAMPLE.md` only when the plan shape is unfamiliar to you or your last ticket failed plan-lint structurally; otherwise skip the read.
 3. **Discover repo specifics for Pre-flight context + Reference.** Read the repo's `package.json` / `pyproject.toml` / `Cargo.toml` to capture build tool + version + key dependency versions. Read 1–2 files central to the change to extract reusable signatures (barrel exports, function signatures, type shapes). Paste these inline in the ticket — every Read avoided at execute time saves ~30 seconds. **Verify-before-drafting:** before populating Reference and Files sections, READ the actual target file(s). Do NOT assume field names, line numbers, imports, or interface shapes from memory — they have been wrong in the past (a plan-render listed a `description` field on a model that didn't exist, and called an `image` field "an HTTPS URL" when it was actually a CSS gradient). The plan-lint `files_paths_exist` rule will warn if your Files-table paths don't match the repo state.
@@ -146,13 +148,15 @@ Empirical lessons from repeated testing. Bake these into every plan body:
 
 ## Plan-lint (automatic pre-dispatch check)
 
-The junco worker runs a deterministic linter on every ticket before claiming it. Tickets that fail lint move directly to `failed/` with a `phase_error` like `plan-lint: no_cd_in_verification: ...` — they never reach the agent. Rules currently enforced:
+The junco worker runs a deterministic linter on every ticket before claiming it. Tickets that fail lint move directly to `failed/` with a `phase_error` like `plan-lint: no_cd_in_verification: ...` — they never run, whether that would have meant an agent turn (plan mode) or `git am` (apply mode). Rules currently enforced on a plan ticket's Steps/Files prose:
 
 - No `cd ` lines inside the `## Verification` fenced bash block
 - Every `### Step N` block contains exactly one `git commit` line
 - Every path in the Files table appears in at least one Step body
 - Every label in frontmatter exists on the GitHub repo (`gh label list`)
 - No forbidden phrases (`TBD`, `Similar to Step N`, `think carefully`, `consider all cases`)
+
+An apply ticket (see "Apply mode" below) has no Steps/Files section for these rules to check; lint validates its `junco-patch` fence instead — a well-formed series with in-repo paths and no binary hunk — plus a warning if it's missing a `## Verification` block.
 
 If you generate a ticket and lint rejects it, fix the specific rule cited and re-dispatch. The linter exists to catch known foot-guns _before_ spawning a 5-minute agent run.
 
@@ -280,6 +284,35 @@ Use this when the user wants to fix / extend an open PR that junco originally op
 - PR is merged / closed — suggest a fresh ticket instead
 - Changes require rewriting history (squash/rebase) — tell the user the worker won't force-push; offer to do it manually or start fresh
 - The requested change is fundamentally different direction — recommend closing the PR and dispatching a fresh ticket
+
+## Apply mode (patch tickets)
+
+Mining junco's own transcripts showed why this mode exists: executor bash calls outnumbered edits roughly 3:1, and about 60% of them were spent re-locating and re-verifying content the ticket already contained — `cat -A`/`sed -n l` hunting for whitespace byte-by-byte, `awk` measuring column widths to reproduce an alignment the plan only described in prose. Ticket bodies ran 61–95% scaffolding around a 5–39% verbatim payload, and structurally identical work varied 8× in wall-clock. Prose cannot carry bytes; a patch can — when you already know the exact bytes a change needs, emit them instead of describing them for an agent to retype.
+
+**The question:** did I resolve every unknown — do I know the exact bytes? Yes → apply mode. No → today's plan ticket (Steps 1–6 above). Forcing certainty you do not have is the failure mode to avoid.
+
+### How to produce the series
+
+1. Make the edit in a scratch worktree of the target repo — a disposable clone or `git worktree add`, not the operator's live checkout.
+2. Commit it in logical steps: one commit per reviewable unit. Each commit becomes one commit on the eventual PR, in the same order and with the same message — `git am` takes both straight from the series.
+3. Generate the series: `git format-patch <base>..HEAD --stdout`.
+4. Wrap it in a `junco-patch` fence LONGER than any backtick run that appears inside the series. A commit message or an added file that itself contains a fenced code block would otherwise close your fence early and silently truncate the series — the same reason `wrapInFence` picks a fence length mechanically for `junco submit --plan`/`--as-issue`.
+5. Keep a short `## Why` above the fence and a `## Verification` block below it. Verification is the only execution-time check apply mode has: it still runs and still gates the PR, and the critic is skipped only when the patch applied cleanly with no fallback.
+
+The ergonomic door: `junco submit --patch <file> --repo <path> [--title T] [--why W] [--verify CMD]` composes the ticket from an already-generated `git format-patch` file — fence, wrapping, and frontmatter are all handled for you. Authoring the fence directly in a ticket body (as above) is the same mechanism without the CLI's help; reach for it when the ticket needs frontmatter the `--patch` door doesn't expose (labels, a linked issue, a non-default `base_branch`).
+
+### When NOT to use apply mode
+
+- The work needs a test-fix loop or judgment calls at execute time — apply mode has no agent turn to make those calls; use a plan ticket instead.
+- The change depends on files you have not read. A patch you cannot vouch for byte-for-byte is exactly the "forcing certainty" failure mode above.
+- The issue may sit parked long enough for the tree to move — a long-parked issue risks the target moving before a human applies the trigger label, so the patch's clean application is no longer guaranteed by the time it runs.
+- Amend tickets (`amends_pr`), plan-set children, and Q&A tickets (no `repo:`) are unsupported combinations with a `junco-patch` fence — don't compose one into any of these.
+
+**The fallback, and why it changes the guarantee.** If the patch fails to apply — or applies but the ticket's own `## Verification` then fails — junco escalates to ONE agent session that treats the patch as a specification rather than bytes to replay (`worker.applyFallbackToAgent`, on by default), and the PR body discloses that a fallback ran. Once that happens the PR is no longer byte-identical to the patch that was reviewed — apply mode is for a change you're confident applies cleanly, not a "worth a shot" patch.
+
+### What the reviewer sees
+
+The parked issue or ticket shows the exact diff before anything runs — that is the point of the label gate in apply mode. Keep `## Why` short and above the fence, so the reviewer reads the rationale first and then the literal bytes that would land, instead of a prose description standing in for them.
 
 ## Assess mode (audit a repo → review → file)
 

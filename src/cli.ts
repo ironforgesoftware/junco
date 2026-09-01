@@ -70,6 +70,7 @@ import { renderService } from "./service.js";
 import { inboxPath, submitTicket } from "./dispatch.js";
 import { extractPlanSetBody } from "./githubInbox.js";
 import { submitAsIssue } from "./submitAsIssue.js";
+import { composePatchTicket, parsePatchSeries } from "./patchTicket.js";
 import { parsePlanSet, compilePlan, hashPlan } from "./planCompiler.js";
 import {
   materializePlanSet,
@@ -303,6 +304,10 @@ Subcommands:
                   via the bot account — a human applies the trigger label to launch it
   submit --as-issue --plan <file> --repo <path>  Same, but parks a junco-plan
                   fence issue instead of a single ticket — labeling compiles the set
+  submit --patch <file> --repo <path> [--title T] [--why W] [--verify CMD]
+                  Compose an apply ticket from a git format-patch file and
+                  submit it (combine with --as-issue or --dry-run, same as a
+                  file ticket)
   submit --dry-run <file>  Report the destination (issue vs inbox), discarded
                   frontmatter, and lint results without submitting
   lint <file>  Validate a ticket without submitting — plan-lint plus repo,
@@ -326,9 +331,14 @@ Options:
                         [default: launchd on macOS, systemd elsewhere]
   --plan                (unwatch) Print what would be deleted as JSON; delete nothing;
                         (submit) Compile a junco-plan fence into child tickets
-  --repo <path>        (submit --plan) Repo path stamped into the compiled tickets
+  --repo <path>        (submit --plan, submit --patch) Repo path stamped into the
+                        compiled/composed ticket(s)
   --as-issue            (submit) File as a parked, unlabeled GitHub issue via the
                         bot account instead of the local inbox
+  --patch <file>        (submit) Compose an apply ticket from a git format-patch file
+  --title <text>        (submit --patch) Ticket pr_title; also seeds the id slug
+  --why <text>          (submit --patch) ## Why text; defaults to a line naming the patch file
+  --verify <cmd>        (submit --patch) Shell command for a ## Verification block
   --dry-run             (submit) Decide and report, write nothing; (data migrate) preview
   --help, -h            Show this help message
   --version             Print junco's version and exit
@@ -379,6 +389,13 @@ function parseCli(argv: string[]): ReturnType<typeof parseArgs> {
       plan: { type: "boolean", default: false },
       repo: { type: "string" },
       "as-issue": { type: "boolean", default: false },
+      // submit --patch: compose an apply ticket from a git format-patch file
+      // (takes a value — unlike --plan, which is a boolean). See the submit
+      // branch below (cli.ts) and composePatchTicket (patchTicket.ts).
+      patch: { type: "string" },
+      title: { type: "string" },
+      why: { type: "string" },
+      verify: { type: "string" },
     },
     allowPositionals: true,
     strict: true,
@@ -1431,36 +1448,100 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // submit: place a ticket into the inbox
   // ------------------------------------------------------------
   if (subcommand === "submit") {
-    const fileArg = positionals[1];
-    if (!fileArg) {
-      process.stderr.write(`Usage: junco submit <file|->\n`);
-      return 2;
-    }
-
+    let fileArg = positionals[1];
     let content: string;
-    try {
-      if (fileArg === "-") {
-        const readStdinFn =
-          deps.readStdinFn ??
-          (() =>
-            new Promise<string>((resolve, reject) => {
-              let buf = "";
-              process.stdin.setEncoding("utf8");
-              process.stdin.on("data", (chunk) => {
-                buf += chunk;
-              });
-              process.stdin.on("end", () => resolve(buf));
-              process.stdin.on("error", reject);
-            }));
-        content = await readStdinFn();
-      } else {
-        content = readFileSync(fileArg, "utf8");
+
+    // submit --patch <file> --repo <path> [--title T] [--why W] [--verify CMD]:
+    // compose an apply ticket from a `git format-patch` file (composePatchTicket,
+    // patchTicket.ts) and fall through into the SAME dry-run / --as-issue / local
+    // -submit branches below as an ordinary file ticket — no behavior forks. This
+    // branch only ever sets `content` (+ a synthetic `fileArg` for display/idHint
+    // parity with the file-sourced path); everything after it is unchanged.
+    if (typeof values.patch === "string") {
+      // final-review item 13: reject usage errors up front, at exit 2, rather
+      // than silently discarding a positional (fileArg was clobbered by
+      // `fileArg = patchArg` below with no warning) or failing late with a
+      // confusing "no junco-plan fence found in '<patchfile>'" once --plan's
+      // own branch runs against a composed patch ticket that never had one.
+      if (fileArg) {
+        process.stderr.write(
+          "junco submit: --patch and a positional file argument are mutually exclusive\n",
+        );
+        return 2;
       }
-    } catch (e) {
-      process.stderr.write(
-        `junco submit: cannot read '${fileArg}': ${e instanceof Error ? e.message : String(e)}\n`,
-      );
-      return 1;
+      if (values.plan === true) {
+        process.stderr.write("junco submit: --patch and --plan are mutually exclusive\n");
+        return 2;
+      }
+      const patchArg = values.patch;
+      const repoFlag = values.repo as string | undefined;
+      if (!repoFlag) {
+        process.stderr.write("Usage: junco submit --patch <file> --repo <path>\n");
+        return 2;
+      }
+      let patchRaw: string;
+      try {
+        patchRaw = readFileSync(patchArg, "utf8");
+      } catch (e) {
+        process.stderr.write(
+          `junco submit --patch: cannot read '${patchArg}': ${e instanceof Error ? e.message : String(e)}\n`,
+        );
+        return 1;
+      }
+      const titleFlag = values.title as string | undefined;
+      const stem = basename(patchArg).replace(/\.[^./]+$/, "");
+      const today = new Date().toISOString().slice(0, 10);
+      const id = `${slugifyId(titleFlag ?? stem)}-${today}`;
+      const whyFlag =
+        (values.why as string | undefined) ??
+        `Apply the patch series from \`${basename(patchArg)}\`.`;
+      const composed = composePatchTicket({
+        patch: patchRaw,
+        repo: repoFlag,
+        id,
+        title: titleFlag,
+        why: whyFlag,
+        verify: values.verify as string | undefined,
+      });
+      if (parsePatchSeries(composed) === null) {
+        process.stderr.write(
+          `junco submit --patch: '${patchArg}' is not a well-formed \`git format-patch\` series ` +
+            "(needs an mbox `From <sha> …` header and at least one `diff --git` hunk)\n",
+        );
+        return 1;
+      }
+      content = composed;
+      fileArg = patchArg;
+    } else {
+      if (!fileArg) {
+        process.stderr.write(`Usage: junco submit <file|->\n`);
+        return 2;
+      }
+
+      try {
+        if (fileArg === "-") {
+          const readStdinFn =
+            deps.readStdinFn ??
+            (() =>
+              new Promise<string>((resolve, reject) => {
+                let buf = "";
+                process.stdin.setEncoding("utf8");
+                process.stdin.on("data", (chunk) => {
+                  buf += chunk;
+                });
+                process.stdin.on("end", () => resolve(buf));
+                process.stdin.on("error", reject);
+              }));
+          content = await readStdinFn();
+        } else {
+          content = readFileSync(fileArg, "utf8");
+        }
+      } catch (e) {
+        process.stderr.write(
+          `junco submit: cannot read '${fileArg}': ${e instanceof Error ? e.message : String(e)}\n`,
+        );
+        return 1;
+      }
     }
 
     const cfg = loadConfigFn(configPath);

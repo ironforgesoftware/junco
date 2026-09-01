@@ -28,6 +28,9 @@
  *                          a binary hunk [apply only]
  * - patch_has_verification (warn): apply ticket should still carry a ## Verification block
  *                          [apply only]
+ * - patch_no_amend:        an apply ticket cannot carry `amends_pr` — amend mode never rebuilds
+ *                          the PR body, so a fallback session would force-push onto a human's
+ *                          open PR with no disclosure [apply only]
  * - no_forbidden_phrases:  no TBD / "Similar to Step N" / "think carefully" / etc. [shared;
  *                          apply tickets scan PROSE only — the fenced mbox is excluded]
  * - no_cd_in_steps (warn): no absolute `cd /Users/...` in Step bodies [prose only]
@@ -442,6 +445,33 @@ function checkPatchSeries(body: string): LintViolation[] {
   return violations;
 }
 
+/**
+ * An apply ticket (junco-patch fence) can never amend an existing PR.
+ * SKILL.md/TEMPLATE.md already document the combination as unsupported, but
+ * nothing enforced it structurally — reachability matters once the
+ * escalation ladder can dispatch a fallback agent session: amend mode never
+ * rebuilds the PR body (prFlow.ts's Phase 12 amend branch only refreshes the
+ * URL), so a fallback there would force-push agent commits onto a human's
+ * open PR with no disclosure anywhere. This ERROR catches the combination at
+ * submit/lint time; prFlow.ts's own Phase-4 termination is the runtime
+ * backstop for a ticket that reaches claim some other way (lint disabled or
+ * non-blocking).
+ */
+function checkPatchAmend(body: string, frontmatter: Record<string, unknown>): LintViolation[] {
+  if (extractPatchBody(body) === null) return []; // not an apply ticket
+  if (!amendsParsesToPr(frontmatter.amends_pr)) return []; // not (really) an amend ticket
+  return [
+    {
+      rule: "patch_no_amend",
+      severity: "error",
+      message:
+        "an apply ticket (junco-patch fence) cannot amend an existing PR (amends_pr) — amend " +
+        "mode never rebuilds the PR body, so a fallback agent session would force-push onto a " +
+        "human's open PR with no disclosure. Dispatch this as a fresh ticket instead.",
+    },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Label cache + check
 // ---------------------------------------------------------------------------
@@ -706,6 +736,7 @@ export function lintTicket(
     violations.push(...checkNoCdInSteps(body));
   }
   violations.push(...checkPatchSeries(body));
+  violations.push(...checkPatchAmend(body, frontmatter));
   // Apply tickets: scan PROSE only — the fenced mbox is the diff/commit
   // messages a dispatcher generated, not instructions to an agent, and its
   // content is byte-exact by construction. Scanning it whole means a patch

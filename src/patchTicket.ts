@@ -6,6 +6,7 @@
  * delimited body (#329) carries the series byte-exact.
  */
 import { extractPatchBody, replaceFencedBlock, PATCH_FENCE } from "./githubInbox.js";
+import { wrapInFence } from "./submitAsIssue.js";
 
 /** Refuse a series larger than this (the local route has no other cap; the
  * GitHub route is already bounded by the 64 KB issue-body limit). */
@@ -96,4 +97,50 @@ export function firstPatchSubject(series: PatchSeries): string | null {
   if (!m) return null;
   const subject = m[1].replace(PATCH_TAG_PREFIX, "").trim();
   return subject || null;
+}
+
+/**
+ * Compose a full apply ticket (frontmatter + body) from a `git format-patch`
+ * series — the `junco submit --patch` door (Stage 3a, spec 2026-08-31-apply-
+ * tickets-design.md). Used by the CLI so hand-authoring a `junco-patch`
+ * fence is no longer the only way to submit an apply ticket.
+ *
+ * The series is wrapped with `wrapInFence` (submitAsIssue.ts), never a
+ * hand-rolled three-backtick fence: `wrapInFence` picks a fence longer than
+ * any backtick run already inside the payload, so a patch that itself adds a
+ * fenced markdown file still round-trips through `parsePatchSeries` /
+ * `extractPatchBody` instead of truncating at the payload's own inner fence.
+ *
+ * `pr_title` is emitted only when `opts.title` is given; omitted, the PR flow
+ * derives the title from the series' own first `Subject:` line instead (see
+ * pr.ts `derivePrTitle`) — the same fallback a hand-authored apply ticket
+ * gets. `## Verification` is emitted only when `opts.verify` is given —
+ * without it the composed ticket still lints clean: `patch_has_verification`
+ * is a WARNING, not an error (planLint.ts `checkPatchSeries`).
+ *
+ * `opts.why` defaults to a generic one-line placeholder when omitted. This
+ * function has no notion of a source filename (only the series bytes), so a
+ * more specific default — naming the actual patch file the operator passed
+ * to `--patch` — is the CLI's job (src/cli.ts), built before calling here.
+ */
+export function composePatchTicket(opts: {
+  patch: string;
+  repo: string;
+  id: string;
+  title?: string;
+  why?: string;
+  verify?: string;
+}): string {
+  const fm: string[] = ["---", `id: ${opts.id}`, `repo: ${JSON.stringify(opts.repo)}`];
+  if (opts.title) fm.push(`pr_title: ${JSON.stringify(opts.title)}`);
+  fm.push("---");
+
+  const why = opts.why?.trim() || "Apply the attached `git format-patch` series.";
+  const sections = [`## Why\n\n${why}`, wrapInFence(PATCH_FENCE, opts.patch)];
+  const verify = opts.verify?.trim();
+  if (verify) {
+    sections.push(`## Verification\n\n\`\`\`bash\n${verify}\n\`\`\``);
+  }
+
+  return fm.join("\n") + "\n\n" + sections.join("\n\n") + "\n";
 }

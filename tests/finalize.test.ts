@@ -120,6 +120,7 @@ describe("finalizePr — collision safety (issue #48)", () => {
     criticRetriesUsed: 0,
     prQueued: false,
     staleBase: false,
+    applyFallback: null,
   };
 
   it("uniquifies rather than clobbering an existing failed/ record", () => {
@@ -152,6 +153,7 @@ describe("finalizePr — cost accounting (Phase-3)", () => {
     criticRetriesUsed: 0,
     prQueued: false,
     staleBase: false,
+    applyFallback: null,
   };
 
   it("renders cost=$X.XXXX (4dp) in the Tokens line", () => {
@@ -192,6 +194,7 @@ describe("computePrStatus (timeout salvage)", () => {
     criticRetriesUsed: 0,
     prQueued: false,
     staleBase: false,
+    applyFallback: null,
     ...over,
   });
 
@@ -269,6 +272,7 @@ describe("finalizePr offline note", () => {
     criticRetriesUsed: 0,
     prQueued: false,
     staleBase: false,
+    applyFallback: null,
     ...over,
   });
 

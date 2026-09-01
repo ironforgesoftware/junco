@@ -54,6 +54,7 @@ function basePrOutcome(): PrOutcome {
     criticRetriesUsed: 0,
     prQueued: false,
     staleBase: false,
+    applyFallback: null,
   };
 }
 

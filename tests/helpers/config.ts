@@ -111,6 +111,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     planLintBlockOnError: false,
     planLintCheckLabels: false,
     commitLeftoversEnabled: false,
+    applyFallbackToAgent: true,
     dailyBudgetUsd: 0,
     healthHost: "127.0.0.1",
     healthPort: 8787,

@@ -967,6 +967,46 @@ index 1111111..2222222 100644
     expect(r.violations.map((v) => v.rule)).not.toContain("no_forbidden_phrases");
     expect(r.ok).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // patch_no_amend (final-review B1): an apply ticket can never amend an
+  // existing PR — amend mode never rebuilds the PR body, so a fallback
+  // session would force-push agent commits onto a human's open PR with no
+  // disclosure. Structural enforcement at lint time, mirroring prFlow.ts's
+  // own Phase-4 runtime termination.
+  // -------------------------------------------------------------------------
+
+  it("errors when a patch ticket also carries a real amends_pr", () => {
+    const r = lintTicket(patchBody, { amends_pr: 42 }, { checkLabels: false });
+    const v = r.violations.find((x) => x.rule === "patch_no_amend");
+    expect(v?.severity).toBe("error");
+    expect(r.ok).toBe(false);
+  });
+
+  it("does not fire patch_no_amend on a plain agent (non-apply) ticket with amends_pr — that combination is normal amend mode", () => {
+    // Discriminates the fence-presence gate: without it, EVERY amends_pr
+    // ticket would wrongly error, breaking ordinary amend tickets that carry
+    // no patch series at all.
+    const r = lintTicket("# Amend\n\nFix the thing.\n", { amends_pr: 42 }, { checkLabels: false });
+    expect(r.violations.map((v) => v.rule)).not.toContain("patch_no_amend");
+  });
+
+  it("does not fire patch_no_amend on an apply ticket with no amends_pr — that's the ordinary, supported case", () => {
+    // Discriminates the amends_pr-presence gate: without it, EVERY apply
+    // ticket would wrongly error, breaking the whole apply-ticket feature.
+    const r = lintTicket(patchBody, {}, { checkLabels: false });
+    expect(r.violations.map((v) => v.rule)).not.toContain("patch_no_amend");
+    expect(r.ok).toBe(true);
+  });
+
+  it("does not fire patch_no_amend on an apply ticket whose amends_pr is malformed (#210 parity: a value that derives to NaN is not a real amend)", () => {
+    // Mirrors repoContext.ts's own parse: an amends_pr that doesn't parse to
+    // a PR number leaves ctx.amendsPr null, so fulfillment (and here, this
+    // guard) must not fire on it either — same rule checkGithubRequestScope
+    // already applies via amendsParsesToPr.
+    const r = lintTicket(patchBody, { amends_pr: "banana" }, { checkLabels: false });
+    expect(r.violations.map((v) => v.rule)).not.toContain("patch_no_amend");
+  });
 });
 
 // ---------------------------------------------------------------------------

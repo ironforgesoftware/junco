@@ -30,6 +30,9 @@ import { listOps, type OutboxOp } from "../src/githubOutbox.js";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket } from "../src/types.js";
 import type { AgentSessionLike } from "../src/agent/session.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
+import { dataTreePaths } from "../src/dataTree.js";
+import { transcriptPathFor } from "../src/slug.js";
+import { parseTranscriptLine } from "../src/agent/transcriptSchema.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 import { run, cloneHarness } from "./helpers/gitHarness.js";
@@ -250,6 +253,8 @@ describe("runPrFlow", () => {
     expect(flow.requeued).toBe(false);
     expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/123");
     expect(flow.commitCount).toBeGreaterThan(0);
+    // Stage 4a: an ordinary agent-driven ticket records mode "agent".
+    expect(flow.mode).toBe("agent");
     const dst = flow.dst;
     expect(dst.startsWith(h.done)).toBe(true);
     const text = readFileSync(dst, "utf8");
@@ -1385,6 +1390,9 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(flow.status).toBe("completed");
     expect(flow.commitCount).toBe(1);
     expect(readFileSync(flow.dst, "utf8")).toContain("status: completed");
+    // Stage 4a: a clean apply (no fallback) records mode "apply", not "agent" —
+    // the task-history ledger's honest record of HOW this ticket executed.
+    expect(flow.mode).toBe("apply");
   });
 
   it("an apply ticket still runs spec verification and opens a PR", async () => {
@@ -1458,7 +1466,14 @@ describe("apply-mode tickets (2026-08-31)", () => {
 
   it("an apply ticket skips the critic pass", async () => {
     // criticEnabled: true proves the skip is apply-mode's doing, not just
-    // critic being globally off.
+    // critic being globally off. This is also the Stage-2a narrowing's
+    // inverse pin: a CLEAN apply (no fallback) must still skip the critic
+    // even with criticEnabled true — appliedCleanly is true here, so
+    // skipCritic short-circuits before deps.criticSessionFactory is ever
+    // read. Contrast "a fallback session's critic pass actually dispatches
+    // when criticEnabled is true" below, which is the same setup minus a
+    // clean apply (a conflicting one that escalates instead) and proves the
+    // opposite: the critic DOES run once appliedCleanly is false.
     const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1 });
     const { task, path } = makeTicket(
       h,
@@ -1485,8 +1500,12 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(flow.commitCount).toBe(1);
   });
 
-  it("a failed apply fails the ticket instead of requeueing it (the requeue trap)", async () => {
-    const cfg = makeConfig(h);
+  it("a failed apply fails terminally when applyFallbackToAgent is false (the requeue trap survives)", async () => {
+    // Spread-override style (CLAUDE.md config-field rule): the toggle
+    // defaults to true, so this test states it explicitly to exercise the
+    // OFF path — Stage 1's terminal-fail-not-requeue invariant must stay
+    // byte-for-byte identical to before Stage 2a existed.
+    const cfg = makeConfig(h, { applyFallbackToAgent: false });
     const { task, path } = makeTicket(
       h,
       "apply-conflict.md",
@@ -1496,7 +1515,9 @@ describe("apply-mode tickets (2026-08-31)", () => {
 
     const flow = await runPrFlow(cfg, task, path, ctx, {
       sessionFactoryFor: () => () => {
-        throw new Error("agent session must never be constructed for an apply ticket");
+        throw new Error(
+          "agent session must never be constructed when applyFallbackToAgent is false",
+        );
       },
       dirs: { done: h.done, failed: h.failed },
     });
@@ -1517,6 +1538,354 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(text).not.toMatch(/retry_count: 1/);
     expect(text).not.toMatch(/not_before:/);
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("a failed apply falls back to the agent when applyFallbackToAgent is true", async () => {
+    const capture = join(h.root, "pr-body-fallback-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/999"; exit 0`;
+    // applyFallbackToAgent defaults to true — not overridden, on purpose.
+    const cfg = makeConfig(h, { ghBin: ghShim(h.root, "gh-apply-fallback.sh", prCreate) });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback.md",
+      `---\nid: apply-fallback\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let sessionConstructed = false;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => {
+        sessionConstructed = true;
+        return commitFactory({ commit: true })(fcfg, cwd);
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(sessionConstructed).toBe(true);
+    expect(flow.status).toBe("completed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/999");
+    expect(flow.commitCount).toBeGreaterThan(0);
+    // Stage 4a: the apply failed and an agent finished the ticket — mode
+    // "apply_fallback", not a bare "apply" (the diff never landed byte-for-byte).
+    expect(flow.mode).toBe("apply_fallback");
+    // The disclosure banner (buildPrBody) names the failure and that an
+    // agent completed the work — asserted via the captured PR body since
+    // PrOutcome.applyFallback isn't itself part of PrFlowResult.
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("Apply-mode fallback");
+    expect(body).toMatch(/did not apply/);
+    // The banner now names the actual CONFLICT line (final-review follow-up:
+    // pickInformativeReasonLine + the stdout+stderr capture fix), not a bare
+    // "git am" substring — asserted precisely by the dedicated test below.
+    expect(body).toMatch(/conflict/i);
+    expect(body).toMatch(/agent completed/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // final-review follow-up: a real content conflict's disclosure reason must
+  // name the conflicting file (git's CONFLICT line), not git's own
+  // least-informative "Applying: <subject>" progress line — end-to-end
+  // through the real PR body gh receives, not just the unit-level pickers.
+  // -------------------------------------------------------------------------
+
+  it("the disclosure banner surfaces the real CONFLICT line from a real git am conflict, not git's 'Applying:' line", async () => {
+    const capture = join(h.root, "pr-body-fallback-conflict-line-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1010"; exit 0`;
+    const cfg = makeConfig(h, {
+      ghBin: ghShim(h.root, "gh-apply-fallback-conflict-line.sh", prCreate),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback-conflict-line.md",
+      `---\nid: apply-fallback-conflict-line\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => commitFactory({ commit: true })(fcfg, cwd),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    const body = readFileSync(capture, "utf8");
+    // Before the (stdout+stderr) capture fix: `reason` was just git's generic
+    // "error: Failed to merge in the changes." (plus hint: noise), so the
+    // banner's parenthetical never named conflict.txt at all. Before the
+    // line-picker fix (previous round): the banner would have quoted git's
+    // "Applying: <subject>" line instead of the CONFLICT line even once the
+    // CONFLICT text WAS captured.
+    expect(body).toMatch(/CONFLICT \(content\): Merge conflict in conflict\.txt/);
+    expect(body).not.toMatch(/\(git am --3way failed \(exit \d+\): Applying:/);
+    expect(body).not.toMatch(/hint:/i);
+  });
+
+  it("a failed apply followed by its Stage-2a fallback appends ONE chronological transcript — apply frames (carrying the failure), then the fallback session's", async () => {
+    const cfg = makeConfig(h, { transcriptsEnabled: true });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback-tx.md",
+      `---\nid: apply-fallback-tx\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => commitFactory({ commit: true })(fcfg, cwd),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.mode).toBe("apply_fallback");
+
+    const transcriptPath = transcriptPathFor(dataTreePaths(cfg).transcripts, task.id);
+    const lines = readFileSync(transcriptPath, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "");
+    const parsed = lines.map((l) => parseTranscriptLine(l));
+
+    const metaLines = parsed.filter((p) => p.kind === "junco" && p.record.type === "junco_meta");
+    expect(metaLines).toHaveLength(1); // exactly once, despite two run-shaped writers
+    expect(parsed[0].kind).toBe("junco");
+    if (parsed[0].kind === "junco") expect(parsed[0].record.type).toBe("junco_meta");
+
+    const runStartFlows = parsed
+      .filter((p) => p.kind === "junco" && p.record.type === "junco_run_start")
+      .map((p) => (p.kind === "junco" && p.record.type === "junco_run_start" ? p.record.flow : ""));
+    // The FAILED apply's own frame pair lands FIRST, then the fallback's.
+    expect(runStartFlows).toEqual(["apply", "pr_apply_fallback"]);
+
+    const runEnds = parsed.filter((p) => p.kind === "junco" && p.record.type === "junco_run_end");
+    expect(runEnds).toHaveLength(2);
+    const applyEnd = runEnds[0];
+    if (applyEnd.kind === "junco" && applyEnd.record.type === "junco_run_end") {
+      // The apply's own run_end carries the git-am failure — the operator can
+      // see WHY it fell back, not just that an agent eventually finished it.
+      expect(applyEnd.record.stopReason).toBe("apply_failed");
+      expect(applyEnd.record.errorMessage).toMatch(/git am --3way failed/);
+    }
+
+    // Real turn activity happened for the fallback session (SDK passthrough
+    // lines) — proves the second half is a genuine agent run.
+    expect(parsed.some((p) => p.kind === "sdk")).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // final-review R3: Stage 4b lets a conflicting apply ticket keep claiming
+  // through a LATCHED provider gate (unlike an ordinary agent ticket, which
+  // the gate blocks from re-claiming). Once the apply fails and escalates to
+  // the fallback, an in-session gate-class error (SDK returns a 401 as
+  // errorMessage, not a throw) used to requeue via requeueTicketKeepBudget —
+  // budget never consumed — so the ticket reclaims, conflicts, and fails the
+  // fallback again roughly every retryBackoffSeconds, FOREVER, as long as the
+  // gate stays latched. The fix consumes the retry budget for a fallback
+  // session's gate-class failure specifically, bounding the loop by
+  // maxTransientRetries like any other transient failure — while leaving an
+  // ORDINARY agent ticket's gate-class requeue (proven budget-free by the
+  // "gate-class zero-commit 401" test in the "provider gate wiring" describe
+  // below) untouched.
+  // -------------------------------------------------------------------------
+
+  function throwingApplyFallbackFactory(
+    message: string,
+  ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+    return (_cfg, _cwd) => async () => ({
+      subscribe() {
+        return () => {};
+      },
+      async prompt() {
+        throw new Error(message);
+      },
+      dispose() {},
+      abort: async () => {},
+    });
+  }
+
+  it("a Stage-2a fallback session's gate-class failure CONSUMES the retry budget — bounding the reclaim loop (R3)", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback-gate401.md",
+      `---\nid: apply-fallback-gate401\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: throwingApplyFallbackFactory("401 invalid x-api-key"),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.requeued).toBe(true);
+    expect(flow.dst).toContain(join("Junco", "inbox"));
+    const content = readFileSync(flow.dst, "utf8");
+    // Before the fix: no retry_count at all (requeueTicketKeepBudget never
+    // bumps it) — the same-conflicting ticket reclaims and fails identically
+    // every cycle for as long as the gate stays latched.
+    expect(content).toMatch(/retry_count: 1/);
+    expect(content).toMatch(/not_before:/);
+    expect(gate.failureCalls).toEqual([{ cls: "auth", reason: "401 invalid x-api-key" }]);
+    expect(readdirSync(h.wtsRoot)).toHaveLength(0); // worktree cleaned for the retry
+  });
+
+  it("a Stage-2a fallback session's gate-class failure with the retry budget exhausted finalizes to failed/, terminating the loop (R3)", async () => {
+    const cfg = makeConfig(h, { maxTransientRetries: 0 });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback-gate401-exhausted.md",
+      `---\nid: apply-fallback-gate401-exhausted\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: throwingApplyFallbackFactory("401 invalid x-api-key"),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    // Before the fix, this path NEVER finalizes — requeueTicketKeepBudget
+    // always returns {requeued:true} unconditionally, so the budget-exhausted
+    // case is unreachable and the loop runs forever.
+    expect(flow.status).toBe("failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(gate.failureCalls).toEqual([{ cls: "auth", reason: "401 invalid x-api-key" }]);
+    expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // preserved, terminal
+  });
+
+  it("a fallback session's critic pass actually dispatches when criticEnabled is true (proves the narrowed skip gate, not Stage 1's blanket per-ticket skip)", async () => {
+    // The previous fallback test above runs with this file's default
+    // criticEnabled: false, so it can't distinguish the narrowed gate
+    // (skipCritic = appliedCleanly) from Stage 1's old, unconditional
+    // "skip for any patch ticket" — both would pass identically with the
+    // critic off. This test turns the critic ON and proves it is actually
+    // invoked (and returns a real verdict) once a fallback has run.
+    const capture = join(h.root, "pr-body-fallback-critic-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1000"; exit 0`;
+    const cfg = makeConfig(h, {
+      criticEnabled: true,
+      criticMaxRetries: 1,
+      ghBin: ghShim(h.root, "gh-apply-fallback-critic.sh", prCreate),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback-critic.md",
+      `---\nid: apply-fallback-critic\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let criticConstructed = false;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      criticSessionFactory: () => {
+        criticConstructed = true;
+        return criticFactory("JUNCO_VERIFY: PASS")();
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    // The critic session WAS constructed and returned a real verdict.
+    expect(criticConstructed).toBe(true);
+    // "skipped" never renders a pass/missing banner (buildPrBody: the skip
+    // metadata never surfaces in the PR body) — the presence of the pass
+    // banner is itself proof this is a genuine verdict, not the apply-mode
+    // skip metadata reading as a pass by coincidence.
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("✅ **Critic pass:**");
+  });
+
+  it("a successful apply never constructs a session regardless of the toggle", async () => {
+    for (const applyFallbackToAgent of [true, false]) {
+      const cfg = makeConfig(h, { applyFallbackToAgent });
+      const { task, path } = makeTicket(
+        h,
+        `apply-noagent-toggle-${applyFallbackToAgent}.md`,
+        `---\nid: apply-noagent-toggle-${applyFallbackToAgent}\nrepo: ${h.work}\n---\n${applyTicketBody(h.work)}`,
+      );
+      const ctx = ctxFor(cfg, task);
+
+      const flow = await runPrFlow(cfg, task, path, ctx, {
+        sessionFactoryFor: () => () => {
+          throw new Error("agent session must never be constructed for a clean apply");
+        },
+        dirs: { done: h.done, failed: h.failed },
+      });
+
+      expect(flow.status).toBe("completed");
+      expect(flow.commitCount).toBe(1);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // final-review R2: gate.reportSuccess() must not fire on a clean apply — the
+  // "success" evidence is entirely `git am`, not a model session, so telling
+  // the gate the PROVIDER is healthy on it would wrongly clear a latch
+  // (auth_error/quota_exhausted/misconfig) an operator hasn't actually fixed.
+  // -------------------------------------------------------------------------
+
+  it("a clean apply does NOT report success to the gate — the only evidence is git am, not a model session", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "apply-gate-clean.md",
+      `---\nid: apply-gate-clean\nrepo: ${h.work}\n---\n${applyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: () => () => {
+        throw new Error("agent session must never be constructed for a clean apply");
+      },
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.mode).toBe("apply");
+    expect(gate.successCalls).toBe(0);
+    expect(gate.failureCalls).toEqual([]);
+  });
+
+  it("an apply-FALLBACK session (a real model turn ran) still reports success to the gate — the guard is mode-based, not a blanket apply-mode suppression", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "apply-gate-fallback.md",
+      `---\nid: apply-gate-fallback\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => commitFactory({ commit: true })(fcfg, cwd),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.mode).toBe("apply_fallback");
+    // Discriminates against an overly-broad fix that suppresses
+    // reportSuccess for ANY patchSeries-carrying ticket: a fallback session
+    // genuinely ran and finished the ticket, so the gate DOES hear about it.
+    expect(gate.successCalls).toBe(1);
   });
 
   it("a junco-patch fence present but not a well-formed series fails loud instead of falling through to the agent", async () => {
@@ -1553,6 +1922,406 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(text).not.toMatch(/retry_count: 1/);
     expect(text).not.toMatch(/not_before:/);
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("apply + failing verification escalates to the agent, then re-verifies", async () => {
+    // Capture the PR body gh received — PrOutcome.applyFallback isn't itself
+    // part of PrFlowResult, so its kind is asserted via the disclosure banner
+    // (same technique as the Stage 2a fallback test above).
+    const capture = join(h.root, "pr-body-verify-escalate-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1001"; exit 0`;
+    // verifyBlockOnFail: true makes this discriminating: if the escalation
+    // were removed, Phase 10's gate would see the ORIGINAL (failing)
+    // verification and route this ticket to failed/ instead of opening a PR.
+    const cfg = makeConfig(h, {
+      verifyBlockOnFail: true,
+      ghBin: ghShim(h.root, "gh-apply-verify-escalate.sh", prCreate),
+    });
+    // The series adds feature.txt but never touches marker.txt, so the
+    // Verification block fails on the freshly-applied tree; the fallback
+    // session's commitFactory({ file: "marker.txt" }) creates it, and the
+    // re-run passes.
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-escalate.md",
+      `---\nid: apply-verify-escalate\nrepo: ${h.work}\n---\n${applyTicketBody(h.work, {
+        verification: "grep -q work marker.txt",
+      })}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let sessionConstructed = false;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => {
+        sessionConstructed = true;
+        return commitFactory({ commit: true, file: "marker.txt" })(fcfg, cwd);
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(sessionConstructed).toBe(true);
+    expect(flow.status).toBe("completed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/1001");
+    // The patch series' own commit plus the fallback session's commit.
+    expect(flow.commitCount).toBeGreaterThanOrEqual(2);
+    // Stage 4a: the apply succeeded but verification failed and an agent
+    // finished the ticket — still "apply_fallback" (the second rung of the
+    // escalation ladder), not "apply".
+    expect(flow.mode).toBe("apply_fallback");
+
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("Apply-mode fallback");
+    expect(body).toMatch(/applied, but its Verification block failed/);
+    // The RE-RUN verification (post-escalation) is what lands in the banner:
+    // 1/1 passed, not the original 0/1 failure.
+    expect(body).toContain("✅ **Spec verification:** 1/1 checks passed.");
+  });
+
+  it("apply success + a later verification-escalation fallback append ONE chronological transcript — apply frames, then the fallback session's, no duplicate junco_meta", async () => {
+    const cfg = makeConfig(h, { transcriptsEnabled: true, verifyBlockOnFail: true });
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-escalate-tx.md",
+      `---\nid: apply-verify-escalate-tx\nrepo: ${h.work}\n---\n${applyTicketBody(h.work, {
+        verification: "grep -q work marker.txt",
+      })}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) =>
+        commitFactory({ commit: true, file: "marker.txt" })(fcfg, cwd),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.mode).toBe("apply_fallback");
+
+    const transcriptPath = transcriptPathFor(dataTreePaths(cfg).transcripts, task.id);
+    const lines = readFileSync(transcriptPath, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "");
+    const parsed = lines.map((l) => parseTranscriptLine(l));
+
+    const metaLines = parsed.filter((p) => p.kind === "junco" && p.record.type === "junco_meta");
+    expect(metaLines).toHaveLength(1); // exactly once, despite two run-shaped writers
+    expect(parsed[0].kind).toBe("junco");
+    if (parsed[0].kind === "junco") expect(parsed[0].record.type).toBe("junco_meta");
+
+    const runStartFlows = parsed
+      .filter((p) => p.kind === "junco" && p.record.type === "junco_run_start")
+      .map((p) => (p.kind === "junco" && p.record.type === "junco_run_start" ? p.record.flow : ""));
+    // The clean apply's own frame pair lands FIRST, then the verification
+    // fallback's — one chronological record, not two competing files.
+    expect(runStartFlows).toEqual(["apply", "pr_apply_fallback"]);
+
+    const runEndCount = parsed.filter(
+      (p) => p.kind === "junco" && p.record.type === "junco_run_end",
+    ).length;
+    expect(runEndCount).toBe(2);
+
+    // Real turn activity happened for the fallback session (SDK passthrough
+    // lines) — proves the second half is a genuine agent run, not another
+    // zero-activity apply-shaped frame pair.
+    expect(parsed.some((p) => p.kind === "sdk")).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // final-review R5: Stage 2b (the verification-rung fallback) must thread the
+  // fallback session's OWN RunResult with full fidelity — mirroring Stage 2a
+  // (Phase 4's apply-failure fallback), which already assigns straight into
+  // `result`. Before the fix, only `fallback.usage` survived: a guard-killed
+  // or timed-out fallback finalized as plain "completed" (computePrStatus
+  // reads the ORIGINAL clean-apply result, which is never timed out/aborted),
+  // no partial banner, gate.reportSuccess() still fired, and the PR body
+  // showed the synthesized apply result's "Applied N patch(es)" / zero tool
+  // calls / stop_reason "apply" directly under the fallback disclosure
+  // banner — self-contradictory.
+  // -------------------------------------------------------------------------
+
+  it("a Stage-2b fallback that TIMES OUT finalizes as timeout_partial with a partial-run banner, not a self-contradictory 'completed' (R5)", async () => {
+    const capture = join(h.root, "pr-body-verify-fallback-timeout-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1003"; exit 0`;
+    const cfg = makeConfig(h, {
+      ghBin: ghShim(h.root, "gh-apply-verify-fallback-timeout.sh", prCreate),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-fallback-timeout.md",
+      `---\nid: apply-verify-fallback-timeout\nrepo: ${h.work}\ntimeout_minutes: 0.005\n---\n${applyTicketBody(
+        h.work,
+        { verification: "grep -q work marker.txt" },
+      )}`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const gate = fakeGate();
+
+    // Hangs until runAgent's timeout timer aborts it — never creates
+    // marker.txt, so verification would fail again even post-fallback, but
+    // that's not what this test is proving (see the toggle-off/verify-block
+    // test for the gate outcome; this one isolates the timeout-fidelity bug).
+    function hangingFactory(): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
+      return (_cfg, _cwd) => async () => {
+        let resolveHang: (() => void) | null = null;
+        return {
+          subscribe() {
+            return () => {};
+          },
+          async prompt() {
+            await new Promise<void>((r) => {
+              resolveHang = r;
+            });
+          },
+          dispose() {},
+          abort: async () => {
+            resolveHang?.();
+          },
+        };
+      };
+    }
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => hangingFactory()(fcfg, cwd),
+      gate,
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    // Before the fix: "completed" (computePrStatus read the ORIGINAL clean
+    // apply's synthesized result, which is never timedOut).
+    expect(flow.status).toBe("timeout_partial");
+    // Before the fix: fired unconditionally (result.timedOut was false).
+    expect(gate.successCalls).toBe(0);
+
+    const body = readFileSync(capture, "utf8");
+    // The generic partial-run banner (buildPrBody) — absent before the fix.
+    expect(body).toMatch(/⚠️ \*\*Partial run\.\*\* This PR was opened from a session that hit/);
+    expect(body).toContain("Apply-mode fallback"); // the disclosure banner still fires
+    // Before the fix, the metadata directly under that banner read "Applied 1
+    // patch(es)…" / "Tool calls: 0" / "Stop reason: `apply`" — the fallback
+    // agent's OWN (empty, since it never got to speak) summary now applies
+    // instead, so the misleading apply-shaped metadata must not appear.
+    expect(body).not.toContain("Applied 1 patch(es)");
+    expect(body).not.toContain("Stop reason: `apply`");
+  }, 20000);
+
+  it("apply + failing verification with the toggle off keeps today's Phase-10 block", async () => {
+    const cfg = makeConfig(h, { applyFallbackToAgent: false, verifyBlockOnFail: true });
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-toggle-off.md",
+      `---\nid: apply-verify-toggle-off\nrepo: ${h.work}\n---\n${applyTicketBody(h.work, {
+        verification: "grep -q work marker.txt",
+      })}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: () => () => {
+        throw new Error(
+          "agent session must never be constructed when applyFallbackToAgent is false",
+        );
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(flow.phaseError).toMatch(/^verification gate blocked push/);
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: failed");
+    expect(text).toContain("verification gate blocked push");
+    expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("a verification-escalation session's critic pass actually dispatches when criticEnabled is true (proves the same narrowed skip gate as Stage 2a)", async () => {
+    // Same proof as "a fallback session's critic pass actually dispatches..."
+    // above (Stage 2a, apply failure), but for Stage 2b (verification
+    // failure): appliedCleanly must flip to false here too, or the critic
+    // session below would never be constructed and this test would hang on
+    // its own throw instead of resolving.
+    const capture = join(h.root, "pr-body-verify-escalate-critic-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1002"; exit 0`;
+    const cfg = makeConfig(h, {
+      criticEnabled: true,
+      criticMaxRetries: 1,
+      ghBin: ghShim(h.root, "gh-apply-verify-escalate-critic.sh", prCreate),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-escalate-critic.md",
+      `---\nid: apply-verify-escalate-critic\nrepo: ${h.work}\n---\n${applyTicketBody(h.work, {
+        verification: "grep -q work marker.txt",
+      })}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let criticConstructed = false;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) =>
+        commitFactory({ commit: true, file: "marker.txt" })(fcfg, cwd),
+      criticSessionFactory: () => {
+        criticConstructed = true;
+        return criticFactory("JUNCO_VERIFY: PASS")();
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(criticConstructed).toBe(true);
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("✅ **Critic pass:**");
+  });
+
+  it("an AGENT ticket with failing verification is unaffected (no escalation)", async () => {
+    // Mode-detection guard: the escalation trigger requires patchSeries !==
+    // null. A plain agent ticket (no junco-patch fence) with a failing
+    // Verification block must still hit today's unconditional Phase-10 gate,
+    // not a second agent turn — sessionFactoryFor is asserted called EXACTLY
+    // once (the main run); it would be 2 if the new branch mistakenly fired
+    // for a non-apply ticket.
+    const cfg = makeConfig(h, { verifyBlockOnFail: true });
+    const body = `# Feature with failing verification
+
+Make a change.
+
+## Verification
+
+\`\`\`bash
+exit 1
+\`\`\`
+`;
+    const { task, path } = makeTicket(
+      h,
+      "agent-verify-fail.md",
+      `---\nid: agent-verify-fail\nrepo: ${h.work}\n---\n${body}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let sessionCalls = 0;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => {
+        sessionCalls += 1;
+        return commitFactory({ commit: true })(fcfg, cwd);
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(sessionCalls).toBe(1);
+    expect(flow.status).toBe("failed");
+    expect(flow.phaseError).toMatch(/^verification gate blocked push/);
+  });
+
+  // -------------------------------------------------------------------------
+  // final-review B1: an apply ticket can never amend an existing PR. Amend
+  // mode's Phase 12 branch never rebuilds the PR body, so a fallback there
+  // would substitute agent work for the reviewed diff with NO disclosure
+  // anywhere. Phase 4 must terminate BEFORE entering apply mode or the agent
+  // path — never let the combination run, conflicting series or not.
+  // -------------------------------------------------------------------------
+
+  it("an apply ticket that also amends an existing PR is refused before apply mode or the agent path ever runs (final-review B1)", async () => {
+    const cfg = makeConfig(h, {
+      ghBin: ghCases(h.root, "gh-apply-amend.sh", {
+        '"pr view "*':
+          'echo \'{"state":"OPEN","headRefName":"junco/amend-apply","baseRefName":"main","isDraft":true,"url":"https://github.com/owner/repo/pull/77","isCrossRepository":false}\'; exit 0',
+      }),
+    });
+
+    // Seed an existing open-PR head branch on origin (validate + amend fetch).
+    run(["git", "-C", h.work, "checkout", "-b", "junco/amend-apply"]);
+    writeFileSync(join(h.work, "existing.txt"), "prior PR work\n");
+    run(["git", "-C", h.work, "add", "existing.txt"]);
+    run(["git", "-C", h.work, "commit", "-m", "prior commit"]);
+    run(["git", "-C", h.work, "push", "-u", "origin", "junco/amend-apply"]);
+    run(["git", "-C", h.work, "checkout", "main"]);
+
+    const { task, path } = makeTicket(
+      h,
+      "apply-amend.md",
+      `---\nid: apply-amend\nrepo: ${h.work}\namends_pr: 77\n---\n${applyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      // Proves apply mode never ran EITHER: a conflicting-fallback path would
+      // also throw here, but this fixture's series applies cleanly — if the
+      // termination were missing, this factory would simply never be called
+      // (a clean apply constructs no session either) and the test would pass
+      // for the WRONG reason. The commit-count/PR assertions below are what
+      // actually discriminate a skipped apply from a completed one.
+      sessionFactoryFor: () => () => {
+        throw new Error("agent session must never be constructed for an apply+amend ticket");
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.commitCount).toBe(0); // git am never ran — no commits counted
+    expect(flow.phaseError).toMatch(/cannot amend an existing PR/);
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: failed");
+    // pushed:false / no gh network write — the existing PR was never touched,
+    // only ever named (from Phase 1's amend-target resolution).
+    expect(text).toContain("pushed: false");
+    expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("an amend ticket with a WELL-FORMED but conflicting patch series is refused, not escalated to the fallback (the case B1 exists to prevent)", async () => {
+    // Same shape as the test above, but with a series that would actually
+    // conflict against the amend branch's tip if apply mode were mistakenly
+    // entered — proving the termination fires BEFORE `git am` is even
+    // attempted, not merely before a clean apply's follow-on phases.
+    const cfg = makeConfig(h, {
+      ghBin: ghCases(h.root, "gh-apply-amend-conflict.sh", {
+        '"pr view "*':
+          'echo \'{"state":"OPEN","headRefName":"junco/amend-apply-conflict","baseRefName":"main","isDraft":true,"url":"https://github.com/owner/repo/pull/88","isCrossRepository":false}\'; exit 0',
+      }),
+    });
+    const seriesBody = conflictingApplyTicketBody(h.work);
+
+    run(["git", "-C", h.work, "checkout", "-b", "junco/amend-apply-conflict"]);
+    run(["git", "-C", h.work, "push", "-u", "origin", "junco/amend-apply-conflict"]);
+    run(["git", "-C", h.work, "checkout", "main"]);
+
+    const { task, path } = makeTicket(
+      h,
+      "apply-amend-conflict.md",
+      `---\nid: apply-amend-conflict\nrepo: ${h.work}\namends_pr: 88\n---\n${seriesBody}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: () => () => {
+        throw new Error(
+          "agent session must never be constructed — apply+amend must never reach the fallback",
+        );
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("failed");
+    expect(flow.phaseError).toMatch(/cannot amend an existing PR/);
+    // Not routed through the requeue trap either — the same terminal shape
+    // as every other Phase-4 termination.
+    expect(flow.requeued).toBe(false);
   });
 });
 
@@ -2338,6 +3107,7 @@ describe("buildPrBody github provenance", () => {
     criticRetriesUsed: 0,
     prQueued: false,
     staleBase: false,
+    applyFallback: null,
   };
   const okResult = {
     finalText: "done.",
@@ -2386,5 +3156,85 @@ describe("buildPrBody github provenance", () => {
       "> ⚠️ Built offline from a possibly stale base — rebase check recommended.",
     );
     expect(buildPrBody(t, ctx, emptyOutcome, okResult)).not.toContain("stale base");
+  });
+
+  // -------------------------------------------------------------------------
+  // Apply-fallback disclosure (Stage 2a, apply-tickets-design.md): approval
+  // semantics require this banner never be silent — a human on the GitHub
+  // route approved a specific diff, and the fallback means the PR no longer
+  // contains it.
+  // -------------------------------------------------------------------------
+
+  it("renders a disclosure banner naming the failure reason when applyFallback is set", () => {
+    const t = bodyTicket(null);
+    const outcome: PrOutcome = {
+      ...emptyOutcome,
+      applyFallback: {
+        kind: "apply",
+        reason: "git am --3way failed (exit 128): conflict in feature.txt",
+      },
+    };
+    const body = buildPrBody(t, ctx, outcome, okResult);
+    expect(body).toContain("Apply-mode fallback");
+    expect(body).toMatch(/did not apply/);
+    expect(body).toContain("git am --3way failed (exit 128): conflict in feature.txt");
+    expect(body).toMatch(/agent completed this ticket/i);
+    expect(body).toMatch(/NOT byte-identical/);
+  });
+
+  it("renders a verification-failure variant of the banner", () => {
+    const t = bodyTicket(null);
+    const outcome: PrOutcome = {
+      ...emptyOutcome,
+      applyFallback: { kind: "verification", reason: "grep -q foo failed (exit 1)" },
+    };
+    const body = buildPrBody(t, ctx, outcome, okResult);
+    expect(body).toContain("Apply-mode fallback");
+    expect(body).toMatch(/Verification block failed/);
+    expect(body).toContain("grep -q foo failed (exit 1)");
+  });
+
+  it("renders nothing extra when applyFallback is null", () => {
+    const t = bodyTicket(null);
+    expect(buildPrBody(t, ctx, emptyOutcome, okResult)).not.toContain("Apply-mode fallback");
+  });
+
+  // -------------------------------------------------------------------------
+  // final-review O13/item 12: prefer a CONFLICT/error/fatal line over git's
+  // own least-informative "Applying: <subject>" progress line, which usually
+  // lands first in a multi-line `git am` failure reason.
+  // -------------------------------------------------------------------------
+
+  it("prefers a CONFLICT/error line over git's leading 'Applying:' line for the disclosure reason", () => {
+    const t = bodyTicket(null);
+    const outcome: PrOutcome = {
+      ...emptyOutcome,
+      applyFallback: {
+        kind: "apply",
+        reason:
+          "git am --3way failed (exit 128): Applying: feat: add levels 15-19\n" +
+          "error: patch failed: game.js:1\n" +
+          "error: game.js: patch does not apply\n" +
+          "Patch failed at 0001 feat: add levels 15-19",
+      },
+    };
+    const body = buildPrBody(t, ctx, outcome, okResult);
+    // Before the fix: reasonFirstLine was reason.split("\n")[0] — git's own
+    // "Applying: <subject>" progress line, naming nothing about the cause.
+    expect(body).toContain("error: patch failed: game.js:1");
+    expect(body).not.toMatch(/\(Applying: feat: add levels 15-19\)/);
+  });
+
+  it("falls back to the first line when no CONFLICT/error/fatal line is present (single-line reason)", () => {
+    const t = bodyTicket(null);
+    const outcome: PrOutcome = {
+      ...emptyOutcome,
+      applyFallback: {
+        kind: "apply",
+        reason: "git am --3way failed (exit 128): conflict in feature.txt",
+      },
+    };
+    const body = buildPrBody(t, ctx, outcome, okResult);
+    expect(body).toContain("git am --3way failed (exit 128): conflict in feature.txt");
   });
 });

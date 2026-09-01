@@ -10,25 +10,32 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { applyPatchSeries } from "../src/applyPatch.js";
+import { applyPatchSeries, buildApplyFallbackPrompt } from "../src/applyPatch.js";
 import { parsePatchSeries, type PatchSeries } from "../src/patchTicket.js";
-import type { RunResult } from "../src/types.js";
+import type { Config, RunResult } from "../src/types.js";
+import { parseTicket } from "../src/ticket.js";
 import { makeConfig } from "./helpers/config.js";
 import { cloneHarness, run } from "./helpers/gitHarness.js";
+import { dataTreePaths } from "../src/dataTree.js";
+import { transcriptPathFor } from "../src/slug.js";
+import { parseTranscriptLine, type JuncoRecord } from "../src/agent/transcriptSchema.js";
 
-function cfgFor(root: string) {
-  return makeConfig({
-    dataDir: root,
-    queueRoot: join(root, "Junco"),
-    worktreeRoot: join(root, "wts"),
-    tools: [],
-    criticEnabled: false,
-    planLintEnabled: false,
-    verifyEnabled: false,
-    supervisorEnabled: false,
-    healthEnabled: false,
-    removeWorktreeOnSuccess: false,
-  });
+function cfgFor(root: string, overrides: Partial<Config> = {}) {
+  return makeConfig(
+    {
+      dataDir: root,
+      queueRoot: join(root, "Junco"),
+      worktreeRoot: join(root, "wts"),
+      tools: [],
+      criticEnabled: false,
+      planLintEnabled: false,
+      verifyEnabled: false,
+      supervisorEnabled: false,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: false,
+    },
+    overrides,
+  );
 }
 
 /** Wrap a raw mbox series in a junco-patch fence and run it through Task 1's
@@ -103,7 +110,7 @@ describe("applyPatchSeries", () => {
     const series = toPatchSeries(raw);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, series);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
     const log = run(["git", "-C", work, "log", "--oneline"]).trim().split("\n");
@@ -135,7 +142,7 @@ describe("applyPatchSeries", () => {
     expect(series.count).toBe(2);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, series);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
     const log = run(["git", "-C", work, "log", "--oneline"]).trim().split("\n");
@@ -168,7 +175,7 @@ describe("applyPatchSeries", () => {
     run(["git", "-C", work, "commit", "-q", "-m", "chore: annotate three"]);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, series);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
     const contents = execFileSync("cat", [join(work, "game.js")], { encoding: "utf8" });
@@ -199,12 +206,54 @@ describe("applyPatchSeries", () => {
     run(["git", "-C", work, "commit", "-q", "-m", "chore: rename two differently"]);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, conflicting);
+    const out = await applyPatchSeries(cfg, work, "t1", conflicting);
 
     expect(out.ok).toBe(false);
     expect((out as { reason: string }).reason).toMatch(/conflict|failed/i);
     expect(run(["git", "-C", work, "status", "--porcelain"]).trim()).toBe("");
     expect(existsSync(join(work, ".git", "rebase-apply"))).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // final-review follow-up: on a real content conflict, git's substantive
+  // lines (Applying:/Using index info/Falling back to 3-way/Auto-merging/
+  // CONFLICT (content):.../Patch failed at) land on STDOUT; stderr carries
+  // only a generic "error: Failed to merge in the changes." plus `hint:`
+  // boilerplate. `stderr || stdout` (the old code) picked stderr whenever it
+  // was non-empty — always, on a content conflict — so `reason` never named
+  // the conflicting file. This discriminates against that: it fails on the
+  // old code, whose `reason` is just the generic stderr message.
+  // -------------------------------------------------------------------------
+
+  it("a real content conflict's reason names the conflicting file (CONFLICT line) and drops hint: noise", async () => {
+    const { root, work } = setup();
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "two", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+
+    const raw = buildRealSeries(work, [
+      {
+        file: "game.js",
+        content: levelsFile(["one", "TWO-CHANGED", "three"]),
+        message: "feat: rename two",
+      },
+    ]);
+    const conflicting = toPatchSeries(raw);
+
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "dos", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "chore: rename two differently"]);
+
+    const cfg = cfgFor(root);
+    const out = await applyPatchSeries(cfg, work, "t1", conflicting);
+
+    expect(out.ok).toBe(false);
+    const reason = (out as { reason: string }).reason;
+    // Before the fix: reason was just "git am --3way failed (exit 128):
+    // error: Failed to merge in the changes." plus hint: lines — this file
+    // name and CONFLICT marker were never present anywhere in it.
+    expect(reason).toMatch(/CONFLICT \(content\): Merge conflict in game\.js/);
+    expect(reason).not.toMatch(/hint:/i);
   });
 
   it("reports zero usage and an apply stopReason on success", async () => {
@@ -223,12 +272,347 @@ describe("applyPatchSeries", () => {
     const series = toPatchSeries(raw);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, series);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
     const result = (out as { result: RunResult }).result;
     expect(result.usage.total).toBe(0);
     expect(result.stopReason).toBe("apply");
     expect(result.toolCalls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyPatchSeries — transcript frames for agent-less runs (Stage 4a):
+// closes Stage 1's documented "apply tickets produce no transcript" gap.
+// ---------------------------------------------------------------------------
+
+describe("applyPatchSeries — transcript frames (Stage 4a)", () => {
+  let roots: string[] = [];
+
+  afterEach(() => {
+    for (const r of roots) rmSync(r, { recursive: true, force: true });
+    roots = [];
+  });
+
+  function setup(): { root: string; work: string } {
+    const root = mkdtempSync(join(tmpdir(), "junco-applypatch-tx-"));
+    roots.push(root);
+    const { work } = cloneHarness(root);
+    return { root, work };
+  }
+
+  /** One clean, applicable one-commit series touching game.js. */
+  function cleanSeries(work: string): PatchSeries {
+    writeFileSync(join(work, "game.js"), levelsFile(["easy", "hard"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+    const raw = buildRealSeries(work, [
+      {
+        file: "game.js",
+        content: levelsFile(["easy", "medium", "hard"]),
+        message: "feat: add a level",
+      },
+    ]);
+    return toPatchSeries(raw);
+  }
+
+  /** A series guaranteed to conflict with the current tip of `work` (mirrors
+   * the "fails cleanly on a real conflict" fixture above). */
+  function conflictingSeries(work: string): PatchSeries {
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "two", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+    const raw = buildRealSeries(work, [
+      {
+        file: "game.js",
+        content: levelsFile(["one", "TWO-CHANGED", "three"]),
+        message: "feat: rename two",
+      },
+    ]);
+    const conflicting = toPatchSeries(raw);
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "dos", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "chore: rename two differently"]);
+    return conflicting;
+  }
+
+  function parseFrames(lines: string[]): JuncoRecord[] {
+    return lines.map((l) => {
+      const parsed = parseTranscriptLine(l);
+      if (parsed.kind !== "junco") throw new Error(`unexpected non-junco line: ${l}`);
+      return parsed.record;
+    });
+  }
+
+  /** In-memory transcript sink (mirrors tests/runEnvelope.test.ts's memorySink):
+   * avoids the real fs sink's async open/flush, which races a synchronous
+   * read run immediately after applyPatchSeries resolves. fileExists reflects
+   * whether anything has been written yet, so a second call against the same
+   * sink observes "the file already exists" exactly like the real fs would. */
+  function memorySink(): {
+    lines: string[];
+    transcriptSink: () => { write: (l: string) => void; end: () => void };
+    fileExists: () => boolean;
+  } {
+    const lines: string[] = [];
+    return {
+      lines,
+      transcriptSink: () => ({
+        write: (l: string) => void lines.push(l),
+        end: () => {},
+      }),
+      fileExists: () => lines.length > 0,
+    };
+  }
+
+  it("a successful apply writes junco_meta + junco_run_start(flow apply) + junco_run_end(stopReason apply), no turn/tool frames", async () => {
+    const { root, work } = setup();
+    const series = cleanSeries(work);
+    const cfg = cfgFor(root, { transcriptsEnabled: true });
+    const mem = memorySink();
+
+    const out = await applyPatchSeries(cfg, work, "apply-tx-ok", series, {
+      transcriptSink: mem.transcriptSink,
+      fileExists: mem.fileExists,
+    });
+    expect(out.ok).toBe(true);
+
+    const frames = parseFrames(mem.lines);
+    expect(frames.map((f) => f.type)).toEqual(["junco_meta", "junco_run_start", "junco_run_end"]);
+
+    const meta = frames[0] as { type: "junco_meta"; ticketId: string };
+    expect(meta.ticketId).toBe("apply-tx-ok");
+
+    const start = frames[1] as { type: "junco_run_start"; flow: string; body: string };
+    expect(start.flow).toBe("apply");
+    expect(start.body).toContain("1 patch");
+    expect(start.body).toContain("game.js");
+
+    const end = frames[2] as {
+      type: "junco_run_end";
+      stopReason: string | null;
+      usage: { total: number; costUsd: number };
+      errorMessage: string | null;
+      durationMs: number;
+    };
+    expect(end.stopReason).toBe("apply");
+    expect(end.usage).toEqual({ input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 });
+    expect(end.errorMessage).toBeNull();
+    expect(end.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("cfg.transcriptsEnabled: false writes nothing", async () => {
+    const { root, work } = setup();
+    const series = cleanSeries(work);
+    const cfg = cfgFor(root); // transcriptsEnabled defaults false (tests/helpers/config.ts)
+
+    const out = await applyPatchSeries(cfg, work, "apply-tx-off", series);
+    expect(out.ok).toBe(true);
+
+    const path = transcriptPathFor(dataTreePaths(cfg).transcripts, "apply-tx-off");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("a failed apply (toggle off, terminal) still writes the frame pair — junco_run_end carries the failure reason", async () => {
+    const { root, work } = setup();
+    const conflicting = conflictingSeries(work);
+    const cfg = cfgFor(root, { transcriptsEnabled: true, applyFallbackToAgent: false });
+    const mem = memorySink();
+
+    const out = await applyPatchSeries(cfg, work, "apply-tx-fail", conflicting, {
+      transcriptSink: mem.transcriptSink,
+      fileExists: mem.fileExists,
+    });
+    expect(out.ok).toBe(false);
+    const reason = (out as { reason: string }).reason;
+
+    const frames = parseFrames(mem.lines);
+    expect(frames.map((f) => f.type)).toEqual(["junco_meta", "junco_run_start", "junco_run_end"]);
+
+    const start = frames[1] as { type: "junco_run_start"; flow: string };
+    expect(start.flow).toBe("apply");
+
+    const end = frames[2] as {
+      type: "junco_run_end";
+      stopReason: string | null;
+      errorMessage: string | null;
+      usage: { total: number; costUsd: number };
+      durationMs: number;
+    };
+    expect(end.stopReason).toBe("apply_failed");
+    expect(end.errorMessage).toBe(reason);
+    expect(end.errorMessage).toMatch(/git am --3way failed/);
+    expect(end.usage).toEqual({ input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 });
+    expect(end.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("two apply runs against the same ticket id append to one file without a duplicate junco_meta", async () => {
+    const { root, work } = setup();
+    const cfg = cfgFor(root, { transcriptsEnabled: true });
+    const mem = memorySink();
+    const series1 = cleanSeries(work);
+    const out1 = await applyPatchSeries(cfg, work, "apply-tx-dup", series1, {
+      transcriptSink: mem.transcriptSink,
+      fileExists: mem.fileExists,
+    });
+    expect(out1.ok).toBe(true);
+
+    writeFileSync(join(work, "other.js"), "one\n", "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add other.js"]);
+    const raw2 = buildRealSeries(work, [
+      { file: "other.js", content: "one\ntwo\n", message: "feat: extend other" },
+    ]);
+    const series2 = toPatchSeries(raw2);
+    const out2 = await applyPatchSeries(cfg, work, "apply-tx-dup", series2, {
+      transcriptSink: mem.transcriptSink,
+      fileExists: mem.fileExists,
+    });
+    expect(out2.ok).toBe(true);
+
+    const frames = parseFrames(mem.lines);
+    expect(frames.filter((f) => f.type === "junco_meta")).toHaveLength(1);
+    expect(frames.map((f) => f.type)).toEqual([
+      "junco_meta",
+      "junco_run_start",
+      "junco_run_end",
+      "junco_run_start",
+      "junco_run_end",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildApplyFallbackPrompt — Stage 2a escalation ladder.
+// ---------------------------------------------------------------------------
+
+describe("buildApplyFallbackPrompt", () => {
+  const series: PatchSeries = {
+    raw:
+      "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n" +
+      "Subject: [PATCH] feat: add levels 15-19\n\n" +
+      "diff --git a/game.js b/game.js\n" +
+      "index abc1234..def5678 100644\n" +
+      "--- a/game.js\n" +
+      "+++ b/game.js\n" +
+      "@@ -1,3 +1,4 @@\n" +
+      '+  "fifteen",\n',
+    count: 1,
+    files: ["game.js"],
+  };
+  const task = parseTicket(
+    "/q/t.md",
+    "---\nid: t\nrepo: /r\n---\n# Add levels 15-19\n\nExtend the LEVELS array in game.js.\n",
+    30,
+  );
+
+  it("contains the ticket's prose, the series verbatim, and the failure reason", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, {
+      kind: "apply",
+      detail: "git am --3way failed (exit 128): conflict in game.js",
+    });
+    expect(prompt).toContain("Extend the LEVELS array in game.js.");
+    expect(prompt).toContain(series.raw); // the series verbatim — the agent must read the diff
+    expect(prompt).toContain("git am --3way failed (exit 128): conflict in game.js");
+  });
+
+  it("instructs implementing the intended change against current reality, not replaying bytes", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, {
+      kind: "apply",
+      detail: "conflict",
+    });
+    expect(prompt).toMatch(/treat it as the\s*\n?\s*specification/i);
+    expect(prompt).toMatch(/implement the same\s*\n?\s*intent against what is actually there/i);
+  });
+
+  it("never tells the agent to run git am or git apply — the series already failed", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, { kind: "apply", detail: "conflict" });
+    expect(prompt).toMatch(/do not run `git am` or `git apply`/i);
+    // A prohibition, not a step: no bare imperative line telling it to run either.
+    expect(prompt).not.toMatch(/^\s*git am\b/m);
+    expect(prompt).not.toMatch(/^\s*git apply\b/m);
+  });
+
+  it("a verification-kind failure names the Verification block instead of the apply step", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, {
+      kind: "verification",
+      detail: "grep -q 'line one' feature.txt failed (exit 1)",
+    });
+    expect(prompt).toMatch(/applied cleanly.*Verification.*failed/i);
+    expect(prompt).toContain("grep -q 'line one' feature.txt failed (exit 1)");
+  });
+
+  // ---------------------------------------------------------------------
+  // final-review R6: the "already been tried and rolled back" claim is only
+  // true on the APPLY rung (git am --abort really ran); on the VERIFICATION
+  // rung the series applied cleanly and its commits are already in the
+  // worktree — saying "rolled back" there is false and contradicts the
+  // prompt's own opening sentence, inviting the agent to redo work that's
+  // already present.
+  // ---------------------------------------------------------------------
+
+  it("an APPLY-kind failure still says the series was rolled back", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, { kind: "apply", detail: "conflict" });
+    expect(prompt).toMatch(/rolled back/i);
+  });
+
+  it("a VERIFICATION-kind failure does NOT claim the series was rolled back — it applied and is already committed", () => {
+    const prompt = buildApplyFallbackPrompt(task, series, {
+      kind: "verification",
+      detail: "grep -q 'line one' feature.txt failed (exit 1)",
+    });
+    // Before the fix, this was unconditional text shared by both kinds — an
+    // outright false statement on this rung (nothing was rolled back).
+    expect(prompt).not.toMatch(/rolled back/i);
+    // It should instead be honest that the series already applied/committed
+    // and that the job is to fix what the checks caught, not redo the work.
+    expect(prompt).toMatch(/already applied|already .* committed|already in this worktree/i);
+    // Still forbids re-running git am/git apply (for a different reason).
+    expect(prompt).toMatch(/do not run `git am` or `git apply`/i);
+  });
+
+  // ---------------------------------------------------------------------
+  // final-review O5: the series must appear exactly ONCE in the prompt — the
+  // fenced "### Intended change" block. Before the fix, `task.body` (which
+  // still carries the whole junco-patch fence) was appended verbatim as
+  // "### The ticket", doubling the series for a large patch.
+  // ---------------------------------------------------------------------
+
+  it("embeds the series exactly once, even though the ticket's own body still carries the junco-patch fence", () => {
+    const bodyWithFence = [
+      "# Add levels 15-19",
+      "",
+      "Extend the LEVELS array in game.js.",
+      "",
+      "````junco-patch",
+      series.raw,
+      "````",
+      "",
+      "## Verification",
+      "",
+      "```bash",
+      "node --check game.js",
+      "```",
+      "",
+    ].join("\n");
+    const taskWithFence = parseTicket(
+      "/q/t2.md",
+      `---\nid: t2\nrepo: /r\n---\n${bodyWithFence}`,
+      30,
+    );
+    const prompt = buildApplyFallbackPrompt(taskWithFence, series, {
+      kind: "apply",
+      detail: "conflict",
+    });
+    // series.raw itself contains no newline-terminated repeats of its own
+    // text, so a plain occurrence count is a safe, exact discriminator.
+    const occurrences = prompt.split(series.raw).length - 1;
+    expect(occurrences).toBe(1);
+    // The ticket's own prose survives (stripPatchFence removes only the fence).
+    expect(prompt).toContain("Extend the LEVELS array in game.js.");
+    expect(prompt).toContain("## Verification");
+    // The fence marker itself is gone from the "### The ticket" section.
+    expect(prompt).not.toContain("junco-patch");
   });
 });

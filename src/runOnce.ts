@@ -5,6 +5,7 @@ import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
 import { discoverTasks, claim } from "./queue.js";
 import { parseTicket } from "./ticket.js";
+import { parsePatchSeries } from "./patchTicket.js";
 import { makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalize } from "./finalize.js";
@@ -167,19 +168,44 @@ export async function claimNextTask(
 
   // Readiness gate: when there IS eligible work, don't claim it unless the
   // inference endpoint can actually serve it. Runs AFTER the dependency
-  // filter so a fully-blocked queue never probes the endpoint.
+  // filter so a fully-blocked queue never probes the endpoint. NARROWED
+  // (Stage 4b, spec 2026-08-31-apply-tickets-design.md): an apply ticket
+  // (body carries a junco-patch mbox fence) is executed by `git am` with no
+  // agent session — no endpoint round-trip, no provider quota — so a downed
+  // endpoint or a latched provider gate must not hold it hostage alongside
+  // agent tickets that genuinely need inference.
+  let claimable = unblocked;
   if (opts.readyFn && !(await opts.readyFn())) {
     // readyFn wraps BOTH the endpoint reachability probe and the provider
     // gate (daemon.ts) — a latched/backed-off gate blocks claiming exactly
     // like an unreachable endpoint does, so "inference endpoint not ready"
     // is misleading when only the gate is the reason. Stay readiness-neutral.
-    log.warn("not ready to claim (endpoint or provider gate); leaving inbox untouched this poll", {
-      eligible: unblocked.length,
+    // final-review R4: the fence test alone is body-only — "executed by
+    // `git am` with no agent session" (the comment above the ORIGINAL,
+    // narrower filter) is only true on the PR-flow branch. executeClaimed
+    // routes on analyze → assess → hasRepo, all ahead of/around apply mode,
+    // so an analyze:/assess: ticket, or a repo-less one, that happens to
+    // carry a junco-patch fence would otherwise be claimed here and then
+    // handed to a flow that DOES need inference. Narrow to PR-flow tickets.
+    claimable = unblocked.filter(
+      (t) => t.hasRepo && !t.assess && !t.analyze && parsePatchSeries(t.body) !== null,
+    );
+    if (claimable.length === 0) {
+      log.warn(
+        "not ready to claim (endpoint or provider gate); leaving inbox untouched this poll",
+        {
+          eligible: unblocked.length,
+        },
+      );
+      return null;
+    }
+    log.info("endpoint not ready — claiming apply tickets only", {
+      applyReady: claimable.length,
+      deferred: unblocked.length - claimable.length,
     });
-    return null;
   }
 
-  for (const t of unblocked) {
+  for (const t of claimable) {
     const repoKey =
       t.hasRepo && typeof t.frontmatter.repo === "string"
         ? canonicalizeRepoKey(resolve(expandHome(t.frontmatter.repo)))
@@ -273,6 +299,7 @@ export async function executeClaimed(
       usage: Usage | undefined,
       durationMs: number | undefined,
       prUrl?: string | null,
+      mode?: TaskRecord["mode"],
     ): void => {
       (deps.appendTaskRecordFn ?? appendTaskRecord)(cfg, {
         v: 1,
@@ -286,6 +313,7 @@ export async function executeClaimed(
         costUsd: usage?.costUsd ?? 0,
         ...(next.github ? { nwo: next.github.nwo, issue: next.github.issue } : {}),
         ...(prUrl != null && prUrl !== "" ? { prUrl } : {}),
+        ...(mode ? { mode } : {}),
         retryCount: next.retryCount,
       });
     };
@@ -384,7 +412,7 @@ export async function executeClaimed(
           else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
           log.info("finalized (pr-flow)", { dst: flow.dst, status: flow.status });
           if (!flow.requeued)
-            recordHistory("pr", flow.status, flow.usage, flow.durationMs, flow.prUrl);
+            recordHistory("pr", flow.status, flow.usage, flow.durationMs, flow.prUrl, flow.mode);
           return;
         }
         // ctx === null means no usable `repo:` — fall through to the Q&A path.

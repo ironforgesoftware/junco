@@ -390,6 +390,10 @@ export const ConfigSchema = z.object({
       retryBackoffSeconds: z.number().min(0).default(60),
       maxConcurrent: z.number().int().min(1).default(1),
       commitLeftovers: z.boolean().default(false),
+      // Escalation ladder Stage 2a (apply-tickets-design.md): a failed
+      // junco-patch apply falls back to the agent (patch-as-spec) rather than
+      // failing the ticket terminally. On by default.
+      applyFallbackToAgent: z.boolean().default(true),
       // Daily USD spend cap (Phase-3 Task 5): 0 = off (spend ledger never
       // consulted). Once today's spend reaches this, the provider gate enters
       // budget_exhausted until local midnight — see providerGate.ts.
@@ -713,6 +717,7 @@ export function assembleConfig(
     retryBackoffSeconds: d.worker.retryBackoffSeconds,
     maxConcurrent: d.worker.maxConcurrent,
     commitLeftoversEnabled: d.worker.commitLeftovers,
+    applyFallbackToAgent: d.worker.applyFallbackToAgent,
     dailyBudgetUsd: d.worker.dailyBudgetUsd,
     supervisorEnabled: d.supervisor.enabled,
     supervisorBudgetPerKind: d.supervisor.budgetPerKind,
