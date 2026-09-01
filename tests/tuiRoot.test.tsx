@@ -5,7 +5,7 @@ import { Root } from "../src/tui/Root.js";
 import { defaultAnswers } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
 import { makeAppProps } from "./helpers/localFixtures.js";
-import { until } from "./helpers/until.js";
+import { until, UNTIL_TRIES } from "./helpers/until.js";
 
 afterEach(cleanup);
 
@@ -47,12 +47,8 @@ async function press(stdin: { write: (s: string) => void }, key: string): Promis
   stdin.write(key);
   await tick();
 }
-// Generous ceiling for the Enter-through walkthrough (see wizardApp.test.tsx:
-// exits as soon as the condition holds; only paid under CPU oversubscription).
-const LONG_TRIES = 500;
-
 /** Press `key` repeatedly — but only while `fromMarker` still shows — until
- * `toMarker` appears. Verbatim from tests/wizardApp.test.tsx (see the doc
+ * `toMarker` appears. Adapted from tests/wizardApp.test.tsx (see the doc
  * comment there): the Model chapter's "pick" step is mounted from a bare
  * Promise .then(), so under CPU starvation a single keystroke can arrive in
  * the gap before its useInput subscribes and be dropped for good. */
@@ -62,7 +58,7 @@ async function pressUntilAdvanced(
   lastFrame: () => string | undefined,
   fromMarker: string,
   toMarker: string,
-  tries: number,
+  tries = UNTIL_TRIES,
 ): Promise<void> {
   for (let i = 0; i < tries; i++) {
     const frame = lastFrame() ?? "";
@@ -82,35 +78,34 @@ async function driveToWritten(
   stdin: { write: (s: string) => void },
   lastFrame: () => string | undefined,
 ): Promise<void> {
-  await until(() => (lastFrame() ?? "").includes("friend"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("friend"));
   await press(stdin, ENTER); // begin
-  await until(() => (lastFrame() ?? "").includes("Where should junco"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("Where should junco"));
   await press(stdin, ENTER); // dataDir default
-  await until(() => (lastFrame() ?? "").includes("How is the model configured?"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("How is the model configured?"));
   await press(stdin, ENTER); // inline
-  await until(() => (lastFrame() ?? "").includes("Inference endpoint base URL"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("Inference endpoint base URL"));
   await press(stdin, ENTER); // url default
-  await until(() => (lastFrame() ?? "").includes("API key for the endpoint?"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("API key for the endpoint?"));
   await press(stdin, ENTER); // key default
-  await until(() => (lastFrame() ?? "").includes("1 model"), LONG_TRIES);
-  await pressUntilAdvanced(stdin, ENTER, lastFrame, "1 model", "Which folders", LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("1 model"));
+  await pressUntilAdvanced(stdin, ENTER, lastFrame, "1 model", "Which folders");
   await press(stdin, ENTER); // empty roots → continue
   await until(
     () =>
       (lastFrame() ?? "").includes("GitHub bridge") ||
       (lastFrame() ?? "").includes("Enable the GitHub"),
-    LONG_TRIES,
   );
   await press(stdin, ENTER); // Off
-  await until(() => (lastFrame() ?? "").includes("Who should junco act as"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("Who should junco act as"));
   await press(stdin, ENTER); // ambient gh login (default)
-  await until(() => (lastFrame() ?? "").includes("Which extras"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("Which extras"));
   await press(stdin, ENTER); // keep recommended set
-  await until(() => (lastFrame() ?? "").includes("No known agent harnesses detected"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("No known agent harnesses detected"));
   await press(stdin, ENTER); // no harnesses detected (fake io) → continue
-  await until(() => (lastFrame() ?? "").includes("This is the exact config.json"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("This is the exact config.json"));
   await press(stdin, ENTER); // Write config → io.write()
-  await until(() => (lastFrame() ?? "").includes("Wrote config:"), LONG_TRIES);
+  await until(() => (lastFrame() ?? "").includes("Wrote config:"));
 }
 
 describe("Root FTUE switcher", () => {
@@ -205,7 +200,7 @@ describe("Root FTUE switcher", () => {
     expect(buildAppProps).not.toHaveBeenCalled(); // wizard first — no App yet
     await driveToWritten(r.stdin, () => r.lastFrame());
     await press(r.stdin, "q"); // result is set — q finishes → outcome "written"
-    await until(() => (r.lastFrame() ?? "").includes("repos"), LONG_TRIES);
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
     expect(loadSpy).toHaveBeenCalledTimes(1);
     expect(loadSpy).toHaveBeenCalledWith("/tmp/x/config.json");
     // Every App render received the config loadConfigFn returned — never a stale one.

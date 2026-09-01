@@ -2,6 +2,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    // vi.restoreAllMocks() before every test: a vi.spyOn left behind by a
+    // failed (or forgetful) test must not leak into the next one.
+    restoreMocks: true,
     coverage: {
       provider: "v8",
       include: ["src/**"],
