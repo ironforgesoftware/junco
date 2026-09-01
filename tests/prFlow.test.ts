@@ -1677,6 +1677,174 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(text).not.toMatch(/not_before:/);
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
   });
+
+  it("apply + failing verification escalates to the agent, then re-verifies", async () => {
+    // Capture the PR body gh received — PrOutcome.applyFallback isn't itself
+    // part of PrFlowResult, so its kind is asserted via the disclosure banner
+    // (same technique as the Stage 2a fallback test above).
+    const capture = join(h.root, "pr-body-verify-escalate-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1001"; exit 0`;
+    // verifyBlockOnFail: true makes this discriminating: if the escalation
+    // were removed, Phase 10's gate would see the ORIGINAL (failing)
+    // verification and route this ticket to failed/ instead of opening a PR.
+    const cfg = makeConfig(h, {
+      verifyBlockOnFail: true,
+      ghBin: ghShim(h.root, "gh-apply-verify-escalate.sh", prCreate),
+    });
+    // The series adds feature.txt but never touches marker.txt, so the
+    // Verification block fails on the freshly-applied tree; the fallback
+    // session's commitFactory({ file: "marker.txt" }) creates it, and the
+    // re-run passes.
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-escalate.md",
+      `---\nid: apply-verify-escalate\nrepo: ${h.work}\n---\n${applyTicketBody(h.work, {
+        verification: "grep -q work marker.txt",
+      })}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let sessionConstructed = false;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => {
+        sessionConstructed = true;
+        return commitFactory({ commit: true, file: "marker.txt" })(fcfg, cwd);
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(sessionConstructed).toBe(true);
+    expect(flow.status).toBe("completed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/1001");
+    // The patch series' own commit plus the fallback session's commit.
+    expect(flow.commitCount).toBeGreaterThanOrEqual(2);
+
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("Apply-mode fallback");
+    expect(body).toMatch(/applied, but its Verification block failed/);
+    // The RE-RUN verification (post-escalation) is what lands in the banner:
+    // 1/1 passed, not the original 0/1 failure.
+    expect(body).toContain("✅ **Spec verification:** 1/1 checks passed.");
+  });
+
+  it("apply + failing verification with the toggle off keeps today's Phase-10 block", async () => {
+    const cfg = makeConfig(h, { applyFallbackToAgent: false, verifyBlockOnFail: true });
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-toggle-off.md",
+      `---\nid: apply-verify-toggle-off\nrepo: ${h.work}\n---\n${applyTicketBody(h.work, {
+        verification: "grep -q work marker.txt",
+      })}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: () => () => {
+        throw new Error(
+          "agent session must never be constructed when applyFallbackToAgent is false",
+        );
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(flow.phaseError).toMatch(/^verification gate blocked push/);
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: failed");
+    expect(text).toContain("verification gate blocked push");
+    expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("a verification-escalation session's critic pass actually dispatches when criticEnabled is true (proves the same narrowed skip gate as Stage 2a)", async () => {
+    // Same proof as "a fallback session's critic pass actually dispatches..."
+    // above (Stage 2a, apply failure), but for Stage 2b (verification
+    // failure): appliedCleanly must flip to false here too, or the critic
+    // session below would never be constructed and this test would hang on
+    // its own throw instead of resolving.
+    const capture = join(h.root, "pr-body-verify-escalate-critic-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1002"; exit 0`;
+    const cfg = makeConfig(h, {
+      criticEnabled: true,
+      criticMaxRetries: 1,
+      ghBin: ghShim(h.root, "gh-apply-verify-escalate-critic.sh", prCreate),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-escalate-critic.md",
+      `---\nid: apply-verify-escalate-critic\nrepo: ${h.work}\n---\n${applyTicketBody(h.work, {
+        verification: "grep -q work marker.txt",
+      })}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let criticConstructed = false;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) =>
+        commitFactory({ commit: true, file: "marker.txt" })(fcfg, cwd),
+      criticSessionFactory: () => {
+        criticConstructed = true;
+        return criticFactory("JUNCO_VERIFY: PASS")();
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(criticConstructed).toBe(true);
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("✅ **Critic pass:**");
+  });
+
+  it("an AGENT ticket with failing verification is unaffected (no escalation)", async () => {
+    // Mode-detection guard: the escalation trigger requires patchSeries !==
+    // null. A plain agent ticket (no junco-patch fence) with a failing
+    // Verification block must still hit today's unconditional Phase-10 gate,
+    // not a second agent turn — sessionFactoryFor is asserted called EXACTLY
+    // once (the main run); it would be 2 if the new branch mistakenly fired
+    // for a non-apply ticket.
+    const cfg = makeConfig(h, { verifyBlockOnFail: true });
+    const body = `# Feature with failing verification
+
+Make a change.
+
+## Verification
+
+\`\`\`bash
+exit 1
+\`\`\`
+`;
+    const { task, path } = makeTicket(
+      h,
+      "agent-verify-fail.md",
+      `---\nid: agent-verify-fail\nrepo: ${h.work}\n---\n${body}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let sessionCalls = 0;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) => {
+        sessionCalls += 1;
+        return commitFactory({ commit: true })(fcfg, cwd);
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(sessionCalls).toBe(1);
+    expect(flow.status).toBe("failed");
+    expect(flow.phaseError).toMatch(/^verification gate blocked push/);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -217,6 +217,28 @@ function formatPlanLintPhaseError(errors: { rule: string; message: string }[]): 
   return "plan-lint: " + parts.join("; ");
 }
 
+/**
+ * Format a failed VerificationResult for the Stage-2b escalation ladder
+ * (apply-tickets-design.md): both `buildApplyFallbackPrompt`'s `detail` (what
+ * the escalated agent sees as "why it failed") and `PrOutcome.applyFallback.
+ * reason` (what the PR-body disclosure banner's first line names). Same
+ * shape as buildPrBody's own verification banner below (first 5 failures,
+ * 300-char snippet) so the escalated agent sees the same signal a human
+ * reviewer would.
+ */
+function formatVerificationFailureDetail(verification: VerificationResult): string {
+  const lines = verification.failedOutputs
+    .slice(0, 5)
+    .map(
+      ({ preview, exitCode, output }) =>
+        `- \`${preview}\` → exit ${exitCode}\n  ${output.trim().slice(0, 300)}`,
+    );
+  return (
+    `${verification.blocksPassed}/${verification.blocksRun} verification checks passed. ` +
+    `Failures:\n${lines.join("\n")}`
+  );
+}
+
 /** Port of worker.py `worktree_is_dirty`: `git status --porcelain` non-empty. */
 async function worktreeIsDirty(cfg: Config, wtPath: string): Promise<boolean> {
   const cp = await git(cfg, ["status", "--porcelain"], { cwd: wtPath, check: false });
@@ -632,11 +654,16 @@ export async function runPrFlow(
     );
   }
 
-  // True only for a clean `git am` apply with no Stage-2a escalation — the
+  // True only for a clean `git am` apply with no Stage-2a/2b escalation — the
   // diff IS the spec, so both the no-sweep rule below (Phase 6) and the
   // critic skip (Phase 9) apply. A fallback ran the agent, so from here on
-  // this ticket is treated exactly like a plain agent ticket.
-  const appliedCleanly = patchSeries !== null && prOutcome.applyFallback === null;
+  // this ticket is treated exactly like a plain agent ticket. `let` (not
+  // `const`): Stage 2b's verification escalation (Phase 9, below) flips this
+  // to false the moment it fires, so the critic gate right after it sees an
+  // agent-improvised ticket exactly as Stage 2a's Phase-4 fallback already
+  // does — Phase 6 (which runs first) still reads the original clean-apply
+  // value.
+  let appliedCleanly = patchSeries !== null && prOutcome.applyFallback === null;
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
   // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
@@ -910,6 +937,72 @@ export async function runPrFlow(
       } else {
         log.info(
           `spec verification: ${prOutcome.verification.blocksPassed}/${prOutcome.verification.blocksRun} checks passed`,
+        );
+      }
+
+      // Stage 2b escalation ladder (apply-tickets-design.md): the patch
+      // applied cleanly, but the ticket's own `## Verification` block then
+      // failed. Same shape as Stage 2a's apply-failure fallback (Phase 4)
+      // above — the agent gets the patch as SPEC plus the verification
+      // failure as context, not bytes to replay — but triggered by a failed
+      // check instead of a failed `git am`. Trigger, ALL required:
+      //   - the ticket applied a series (patchSeries !== null),
+      //   - no fallback has run yet (never escalate twice — this block sets
+      //     prOutcome.applyFallback below, which also excludes a ticket that
+      //     already fell back in Phase 4 for an apply failure),
+      //   - verification actually reported failures, and
+      //   - the toggle is on.
+      // ONE attempt, never a loop (ruling R3): after the re-verify below,
+      // whatever it says stands — Phase 10 gates on it exactly as usual.
+      if (
+        patchSeries !== null &&
+        prOutcome.applyFallback === null &&
+        prOutcome.verification.failedOutputs.length > 0 &&
+        cfg.applyFallbackToAgent
+      ) {
+        const detail = formatVerificationFailureDetail(prOutcome.verification);
+        log.warn(
+          "spec verification failed on a clean apply — falling back to the agent " +
+            "(worker.applyFallbackToAgent)",
+        );
+        prOutcome.applyFallback = { kind: "verification", reason: detail };
+        // Flips the critic-skip narrowing right below: the diff is no longer
+        // the whole story once the agent has improvised against it, so the
+        // critic pass treats this ticket like an ordinary agent ticket —
+        // mirrors Phase 4's Stage-2a `appliedCleanly = false`. Phase 6 (the
+        // no-sweep rule) already ran on the original clean-apply value above
+        // and is unaffected by this reassignment.
+        appliedCleanly = false;
+        const fallbackPrompt = buildApplyFallbackPrompt(task, patchSeries, {
+          kind: "verification",
+          detail,
+        });
+        const fallback = await runEnveloped(
+          flowCfg,
+          {
+            ticketId: task.id,
+            flow: "pr_apply_fallback",
+            body: fallbackPrompt,
+            cwd: wtPath,
+            timeoutMs: task.timeoutSeconds * 1000,
+          },
+          {
+            createSession: makeAgentSessionFactory(),
+            abortSignal: deps.abortSignal,
+            onProgress: deps.onProgress,
+            onGuardDecision: deps.onGuardDecision,
+            spend: deps.spend,
+          },
+        );
+        extraUsages.push(fallback.usage);
+        log.info(`apply fallback (verification): agent abortedByGuard=${fallback.abortedByGuard}`);
+        // Re-count/list commits (mirrors the critic corrective-retry
+        // re-evaluation below) and re-run verification exactly once.
+        newCommits = await countNewCommits(cfg, wtPath, sinceRef);
+        prOutcome.commits = await listNewCommits(cfg, wtPath, sinceRef);
+        prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+        log.info(
+          `spec verification (post-fallback): ${prOutcome.verification.blocksPassed}/${prOutcome.verification.blocksRun} checks passed`,
         );
       }
 
