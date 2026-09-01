@@ -2,11 +2,15 @@ import { describe, it, expect } from "vitest";
 import { buildSandbox, toolOptionsFor } from "../src/agent/sandbox/index.js";
 import { noneBackend } from "../src/agent/sandbox/backend.js";
 import { makeOpLock, lockOps } from "../src/agent/sandbox/opLock.js";
+import { SandboxViolation } from "../src/agent/sandbox/pathJail.js";
 import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 
+// Synthetic, non-existent roots: canonicalize() realpaths whatever exists, and
+// on macOS a real /home resolves to /System/Volumes/Data/home — which would
+// silently miss a deny rule spelled /home/... and turn the probes below green.
 const policy: SandboxPolicy = {
   writableRoots: ["/work/tree"],
-  readDenyPaths: ["/home/x/.ssh"],
+  readDenyPaths: ["/sbxroot/home/x/.ssh"],
   readDenyFiles: [],
   readAllowPaths: [],
   network: false,
@@ -19,10 +23,21 @@ describe("toolOptionsFor", () => {
     const o = toolOptionsFor("bash", "/work/tree", noneBackend, policy) as any;
     expect(typeof o.operations.exec).toBe("function");
   });
-  it("wires read/write/edit/ls/find/grep operations", () => {
-    for (const name of ["read", "write", "edit", "ls", "find", "grep"] as const) {
+  it("wires read/write/edit/ls/find/grep operations to the path jail", async () => {
+    // One target denies every tool: under readDenyPaths for the read jail and
+    // outside writableRoots for the write jail. "Wired" means "must throw".
+    const denied = "/sbxroot/home/x/.ssh/id_rsa";
+    const probes: Record<string, (ops: any) => Promise<unknown>> = {
+      read: (o) => o.readFile(denied),
+      write: (o) => o.writeFile(denied, ""),
+      edit: (o) => o.readFile(denied),
+      ls: (o) => o.readdir(denied),
+      find: (o) => o.glob("*", denied, { ignore: [], limit: 1 }),
+      grep: (o) => o.readFile(denied),
+    };
+    for (const [name, probe] of Object.entries(probes)) {
       const o = toolOptionsFor(name, "/work/tree", noneBackend, policy) as any;
-      expect(o.operations).toBeTruthy();
+      await expect(probe(o.operations)).rejects.toBeInstanceOf(SandboxViolation);
     }
   });
 });
