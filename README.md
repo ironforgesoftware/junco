@@ -124,8 +124,8 @@ review instead of filing them right away. `junco audit review` lists what's
 pending; `junco audit review <id>` shows each finding's fingerprint, severity,
 and title; `junco audit file <id> --all` (or `--only <fingerprint,…>`) files the
 ones you confirm as GitHub issues titled `[<severity>] <title> (<ruleId>)`. Every
-finding carries a fingerprint, and filing dedupes against your own most recent
-500 issues on that repo — closed ones included — so nothing is filed twice.
+finding carries a fingerprint, and filing dedupes on it against the repo's most
+recent 500 issues — any author, closed ones included — so nothing is filed twice.
 
 It works on any watched repo, owned or not. On a repo you own, filed issues get
 `junco:finding` + `severity/<level>` labels (best-effort), and `--auto-plan` adds
