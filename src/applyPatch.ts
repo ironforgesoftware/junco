@@ -20,20 +20,86 @@ import { join } from "node:path";
 import type { Config, RunResult, Ticket, Usage } from "./types.js";
 import { git } from "./git.js";
 import type { PatchSeries } from "./patchTicket.js";
+import {
+  guardOptionsFromConfig,
+  openRunTranscriptSink,
+  writeTranscriptRecord,
+  writeRunEnd,
+  endSink,
+  type RunTranscriptDeps,
+} from "./agent/runEnvelope.js";
+import type { RunStartRecord } from "./agent/transcriptSchema.js";
 
 const ZERO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
 const AM_TIMEOUT_MS = 120_000;
 
 export type ApplyOutcome = { ok: true; result: RunResult } | { ok: false; reason: string };
 
-export interface ApplyDeps {
+export interface ApplyDeps extends RunTranscriptDeps {
   gitFn?: typeof git;
   nowFn?: () => number;
+}
+
+/** Patch-series summary shared by the finalText, the PR body, and (Stage 4a)
+ * the transcript's junco_run_start body — one wording, three consumers. */
+function patchSummary(series: PatchSeries): string {
+  return `${series.count} patch(es) touching ${series.files.length} file(s): ${series.files.join(", ")}.`;
+}
+
+/**
+ * Best-effort observability for a successful agent-less apply (Stage 4a,
+ * apply-tickets-design.md): junco_meta (first write) + junco_run_start(flow
+ * "apply", the patch SUMMARY as body, zero-usage-implied — no session ran) +
+ * junco_run_end(stopReason "apply", the real durationMs). No turn/tool frames
+ * — nothing but `git am` ran. Written ONLY on success: a failed apply either
+ * fails the ticket terminally (nothing to show) or falls back to the agent,
+ * whose OWN runEnveloped call becomes the first writer and owns junco_meta —
+ * writing a frame pair here for a failed apply would risk pre-creating an
+ * empty transcript file that then suppresses that first writer's junco_meta.
+ * When a later escalation (Stage 2a apply-failure, or Stage 2b's own
+ * verification-failure fallback after THIS successful apply) does run the
+ * agent, its runEnveloped call opens this SAME path and appends — one
+ * chronological record, no duplicate junco_meta (openRunTranscriptSink's
+ * create-vs-append decision is shared, not reimplemented).
+ */
+function writeApplyTranscript(
+  cfg: Config,
+  ticketId: string,
+  wtPath: string,
+  series: PatchSeries,
+  durationMs: number,
+  deps: RunTranscriptDeps,
+): void {
+  const sink = openRunTranscriptSink(cfg, ticketId, deps);
+  writeTranscriptRecord(
+    sink,
+    JSON.stringify({
+      type: "junco_run_start",
+      flow: "apply",
+      body: `Applying ${patchSummary(series)}`,
+      cwd: wtPath,
+      modelId: cfg.model.id,
+      tools: cfg.tools,
+      timeoutMs: AM_TIMEOUT_MS,
+      guard: { enabled: false, ...guardOptionsFromConfig(cfg) },
+      ts: new Date().toISOString(),
+    } satisfies RunStartRecord) + "\n",
+  );
+  writeRunEnd(sink, {
+    errorMessage: null,
+    stopReason: "apply",
+    timedOut: false,
+    abortedByGuard: false,
+    usage: ZERO_USAGE,
+    durationMs,
+  });
+  endSink(sink);
 }
 
 export async function applyPatchSeries(
   cfg: Config,
   wtPath: string,
+  ticketId: string,
   series: PatchSeries,
   deps: ApplyDeps = {},
 ): Promise<ApplyOutcome> {
@@ -59,16 +125,18 @@ export async function applyPatchSeries(
         reason: `git am --3way failed (exit ${r.code})${detail ? `: ${detail}` : ""}`,
       };
     }
+    const durationMs = now() - startedAt;
+    writeApplyTranscript(cfg, ticketId, wtPath, series, durationMs, deps);
     return {
       ok: true,
       result: {
-        finalText: `Applied ${series.count} patch(es) touching ${series.files.length} file(s): ${series.files.join(", ")}.`,
+        finalText: `Applied ${patchSummary(series)}`,
         toolCalls: [],
         usage: ZERO_USAGE,
         stopReason: "apply",
         errorMessage: null,
         timedOut: false,
-        durationMs: now() - startedAt,
+        durationMs,
         abortedByGuard: false,
       },
     };

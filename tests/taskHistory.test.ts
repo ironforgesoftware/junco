@@ -50,6 +50,31 @@ describe("appendTaskRecord", () => {
       }),
     ).not.toThrow();
   });
+
+  it("carries the optional mode field through to the appended JSON line (v:1 unchanged — additive)", () => {
+    const record = rec({ mode: "apply" });
+    expect(record.v).toBe(1);
+    const appended: Array<{ p: string; s: string }> = [];
+    appendTaskRecord(cfg, record, {
+      mkdirFn: (() => {}) as never,
+      appendFn: ((p: string, s: string) => void appended.push({ p, s })) as never,
+    });
+    expect(JSON.parse(appended[0].s) as TaskRecord).toEqual(record);
+    expect((JSON.parse(appended[0].s) as TaskRecord).mode).toBe("apply");
+  });
+
+  it("an omitted mode round-trips as undefined — legacy (pre-mode) records still parse", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const realCfg = {
+      dataDir: mkdtempSync(join(tmpdir(), "junco-hist-mode-")),
+    } as unknown as Config;
+    const record = rec({ id: "legacy-no-mode" }); // no mode field at all
+    appendTaskRecord(realCfg, record);
+    const back = readTaskHistory(realCfg, { since: new Date("2026-07-01T00:00:00Z") });
+    expect(back).toHaveLength(1);
+    expect(back[0].mode).toBeUndefined();
+  });
 });
 
 describe("makeTaskHistoryReader", () => {

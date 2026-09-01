@@ -30,6 +30,9 @@ import { listOps, type OutboxOp } from "../src/githubOutbox.js";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket } from "../src/types.js";
 import type { AgentSessionLike } from "../src/agent/session.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
+import { dataTreePaths } from "../src/dataTree.js";
+import { transcriptPathFor } from "../src/slug.js";
+import { parseTranscriptLine } from "../src/agent/transcriptSchema.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
 import { run, cloneHarness } from "./helpers/gitHarness.js";
@@ -250,6 +253,8 @@ describe("runPrFlow", () => {
     expect(flow.requeued).toBe(false);
     expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/123");
     expect(flow.commitCount).toBeGreaterThan(0);
+    // Stage 4a: an ordinary agent-driven ticket records mode "agent".
+    expect(flow.mode).toBe("agent");
     const dst = flow.dst;
     expect(dst.startsWith(h.done)).toBe(true);
     const text = readFileSync(dst, "utf8");
@@ -1385,6 +1390,9 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(flow.status).toBe("completed");
     expect(flow.commitCount).toBe(1);
     expect(readFileSync(flow.dst, "utf8")).toContain("status: completed");
+    // Stage 4a: a clean apply (no fallback) records mode "apply", not "agent" —
+    // the task-history ledger's honest record of HOW this ticket executed.
+    expect(flow.mode).toBe("apply");
   });
 
   it("an apply ticket still runs spec verification and opens a PR", async () => {
@@ -1563,6 +1571,9 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(flow.requeued).toBe(false);
     expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/999");
     expect(flow.commitCount).toBeGreaterThan(0);
+    // Stage 4a: the apply failed and an agent finished the ticket — mode
+    // "apply_fallback", not a bare "apply" (the diff never landed byte-for-byte).
+    expect(flow.mode).toBe("apply_fallback");
     // The disclosure banner (buildPrBody) names the failure and that an
     // agent completed the work — asserted via the captured PR body since
     // PrOutcome.applyFallback isn't itself part of PrFlowResult.
@@ -1724,6 +1735,10 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(flow.prUrl).toBe("https://github.com/owner/repo/pull/1001");
     // The patch series' own commit plus the fallback session's commit.
     expect(flow.commitCount).toBeGreaterThanOrEqual(2);
+    // Stage 4a: the apply succeeded but verification failed and an agent
+    // finished the ticket — still "apply_fallback" (the second rung of the
+    // escalation ladder), not "apply".
+    expect(flow.mode).toBe("apply_fallback");
 
     const body = readFileSync(capture, "utf8");
     expect(body).toContain("Apply-mode fallback");
@@ -1731,6 +1746,55 @@ describe("apply-mode tickets (2026-08-31)", () => {
     // The RE-RUN verification (post-escalation) is what lands in the banner:
     // 1/1 passed, not the original 0/1 failure.
     expect(body).toContain("✅ **Spec verification:** 1/1 checks passed.");
+  });
+
+  it("apply success + a later verification-escalation fallback append ONE chronological transcript — apply frames, then the fallback session's, no duplicate junco_meta", async () => {
+    const cfg = makeConfig(h, { transcriptsEnabled: true, verifyBlockOnFail: true });
+    const { task, path } = makeTicket(
+      h,
+      "apply-verify-escalate-tx.md",
+      `---\nid: apply-verify-escalate-tx\nrepo: ${h.work}\n---\n${applyTicketBody(h.work, {
+        verification: "grep -q work marker.txt",
+      })}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: (fcfg, cwd) =>
+        commitFactory({ commit: true, file: "marker.txt" })(fcfg, cwd),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    expect(flow.mode).toBe("apply_fallback");
+
+    const transcriptPath = transcriptPathFor(dataTreePaths(cfg).transcripts, task.id);
+    const lines = readFileSync(transcriptPath, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() !== "");
+    const parsed = lines.map((l) => parseTranscriptLine(l));
+
+    const metaLines = parsed.filter((p) => p.kind === "junco" && p.record.type === "junco_meta");
+    expect(metaLines).toHaveLength(1); // exactly once, despite two run-shaped writers
+    expect(parsed[0].kind).toBe("junco");
+    if (parsed[0].kind === "junco") expect(parsed[0].record.type).toBe("junco_meta");
+
+    const runStartFlows = parsed
+      .filter((p) => p.kind === "junco" && p.record.type === "junco_run_start")
+      .map((p) => (p.kind === "junco" && p.record.type === "junco_run_start" ? p.record.flow : ""));
+    // The clean apply's own frame pair lands FIRST, then the verification
+    // fallback's — one chronological record, not two competing files.
+    expect(runStartFlows).toEqual(["apply", "pr_apply_fallback"]);
+
+    const runEndCount = parsed.filter(
+      (p) => p.kind === "junco" && p.record.type === "junco_run_end",
+    ).length;
+    expect(runEndCount).toBe(2);
+
+    // Real turn activity happened for the fallback session (SDK passthrough
+    // lines) — proves the second half is a genuine agent run, not another
+    // zero-activity apply-shaped frame pair.
+    expect(parsed.some((p) => p.kind === "sdk")).toBe(true);
   });
 
   it("apply + failing verification with the toggle off keeps today's Phase-10 block", async () => {

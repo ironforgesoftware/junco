@@ -84,6 +84,15 @@ export interface PrOutcome {
    * clean apply. buildPrBody renders this as a disclosure banner — the PR is
    * no longer byte-identical to what a human approved on the GitHub route. */
   applyFallback: { kind: "apply" | "verification"; reason: string } | null;
+  /** Stage 4a (apply-tickets-design.md): HOW this ticket executed — set at
+   * Phase 4's branch point and, for a Stage 2b verification escalation,
+   * overwritten at that later point too (mirrors applyFallback's own
+   * reassignment there). Undefined for phases that fail before Phase 4 ever
+   * decides (validate/plan-lint/worktree-setup errors, and the malformed-
+   * fence terminal path) — nothing executed, so no mode is honest to claim.
+   * Optional/additive: flowResult() below threads it into PrFlowResult only
+   * when set. */
+  mode?: "agent" | "apply" | "apply_fallback";
 }
 
 function emptyPrOutcome(ctx: RepoContext): PrOutcome {
@@ -132,6 +141,12 @@ export interface PrFlowResult {
    * requeuedResult, which never produces a record). */
   usage?: Usage;
   durationMs?: number;
+  /** HOW this ticket executed (Stage 4a) — mirrors PrOutcome.mode; threaded
+   * through so runOnce's recordHistory("pr", …) call can write it to the
+   * task-history ledger without re-deriving it from the ticket body (which
+   * cannot see whether a fallback ran). Absent on requeuedResult, same as
+   * usage/durationMs — a requeue never records a history entry. */
+  mode?: "agent" | "apply" | "apply_fallback";
 }
 
 function flowResult(
@@ -152,6 +167,7 @@ function flowResult(
     prQueued: prOutcome.prQueued,
     usage: result.usage,
     durationMs: result.durationMs,
+    mode: prOutcome.mode,
   };
 }
 
@@ -550,9 +566,12 @@ export async function runPrFlow(
       patches: patchSeries.count,
       files: patchSeries.files.length,
     });
-    const outcome = await applyPatchSeries(cfg, wtPath, patchSeries);
+    const outcome = await applyPatchSeries(cfg, wtPath, task.id, patchSeries);
     if (outcome.ok) {
       result = outcome.result;
+      // Stage 4a: a clean apply — may still be overwritten below to
+      // "apply_fallback" if Phase 9's verification escalation fires.
+      prOutcome.mode = "apply";
     } else if (!cfg.applyFallbackToAgent) {
       // Terminal by design — see applyPatch.ts's header: a conflict is
       // deterministic, so Phase 5's transient classifier must never see it.
@@ -579,6 +598,7 @@ export async function runPrFlow(
           "(worker.applyFallbackToAgent)",
       );
       prOutcome.applyFallback = { kind: "apply", reason: outcome.reason };
+      prOutcome.mode = "apply_fallback";
       const fallbackPrompt = buildApplyFallbackPrompt(task, patchSeries, {
         kind: "apply",
         detail: outcome.reason,
@@ -620,6 +640,8 @@ export async function runPrFlow(
       phaseError,
     );
   } else {
+    // Stage 4a: an ordinary, agent-driven ticket (no junco-patch fence).
+    prOutcome.mode = "agent";
     const prompt = buildPromptWithRepoContext(task, ctx, wtPath, nwo, {
       amendTarget,
       commitLeftoversEnabled: cfg.commitLeftoversEnabled,
@@ -966,6 +988,7 @@ export async function runPrFlow(
             "(worker.applyFallbackToAgent)",
         );
         prOutcome.applyFallback = { kind: "verification", reason: detail };
+        prOutcome.mode = "apply_fallback";
         // Flips the critic-skip narrowing right below: the diff is no longer
         // the whole story once the agent has improvised against it, so the
         // critic pass treats this ticket like an ordinary agent ticket —

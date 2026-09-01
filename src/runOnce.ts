@@ -273,6 +273,7 @@ export async function executeClaimed(
       usage: Usage | undefined,
       durationMs: number | undefined,
       prUrl?: string | null,
+      mode?: TaskRecord["mode"],
     ): void => {
       (deps.appendTaskRecordFn ?? appendTaskRecord)(cfg, {
         v: 1,
@@ -286,6 +287,7 @@ export async function executeClaimed(
         costUsd: usage?.costUsd ?? 0,
         ...(next.github ? { nwo: next.github.nwo, issue: next.github.issue } : {}),
         ...(prUrl != null && prUrl !== "" ? { prUrl } : {}),
+        ...(mode ? { mode } : {}),
         retryCount: next.retryCount,
       });
     };
@@ -384,7 +386,7 @@ export async function executeClaimed(
           else await reporter.onFinal(next, outcomeFromPrFlow(flow)).catch(() => undefined);
           log.info("finalized (pr-flow)", { dst: flow.dst, status: flow.status });
           if (!flow.requeued)
-            recordHistory("pr", flow.status, flow.usage, flow.durationMs, flow.prUrl);
+            recordHistory("pr", flow.status, flow.usage, flow.durationMs, flow.prUrl, flow.mode);
           return;
         }
         // ctx === null means no usable `repo:` — fall through to the Q&A path.

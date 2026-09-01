@@ -83,9 +83,11 @@ export function openTicketTranscript(
  * a broken sink (a full disk, a closed stream) must NOT throw up through
  * `runEnveloped` and turn a completed/failed run into a rejection the caller
  * never asked for — degrade to a warning instead. Observability must never
- * change the run's outcome.
+ * change the run's outcome. Exported so a non-agent run-shaped writer
+ * (applyPatch.ts's agent-less apply frames, Stage 4a) can append its own
+ * junco_* records with the same discipline instead of a second try/catch.
  */
-function writeRecord(sink: TranscriptSink | null, line: string): void {
+export function writeTranscriptRecord(sink: TranscriptSink | null, line: string): void {
   if (!sink) return;
   try {
     sink.write(line);
@@ -98,8 +100,10 @@ function writeRecord(sink: TranscriptSink | null, line: string): void {
 
 /** Same best-effort discipline for closing the sink (#78, mirroring session.ts's
  * write-guard discipline for transcript.write — session.ts itself never calls
- * end() on the sink; the caller that opened it owns closing it). */
-function endSink(sink: TranscriptSink | null): void {
+ * end() on the sink; the caller that opened it owns closing it). Exported for
+ * the same reason as writeTranscriptRecord above — applyPatch.ts owns closing
+ * the sink it opens via openRunTranscriptSink. */
+export function endSink(sink: TranscriptSink | null): void {
   if (!sink) return;
   try {
     sink.end();
@@ -110,9 +114,14 @@ function endSink(sink: TranscriptSink | null): void {
   }
 }
 
-/** Shared by both run_end write sites (success + catch) — one field list. */
-function writeRunEnd(sink: TranscriptSink | null, fields: Omit<RunEndRecord, "type" | "ts">): void {
-  writeRecord(
+/** Shared by both run_end write sites (success + catch) — one field list.
+ * Exported: applyPatch.ts's agent-less apply frames (Stage 4a) write a
+ * junco_run_end too and must use the identical shape/discipline. */
+export function writeRunEnd(
+  sink: TranscriptSink | null,
+  fields: Omit<RunEndRecord, "type" | "ts">,
+): void {
+  writeTranscriptRecord(
     sink,
     JSON.stringify({
       type: "junco_run_end",
@@ -120,6 +129,54 @@ function writeRunEnd(sink: TranscriptSink | null, fields: Omit<RunEndRecord, "ty
       ...fields,
     } satisfies RunEndRecord) + "\n",
   );
+}
+
+/** Injectable fs seams shared by every opener of the per-ticket transcript
+ * sink (tests); default to real fs. */
+export interface RunTranscriptDeps {
+  transcriptSink?: TranscriptSinkFactory;
+  fileExists?: (path: string) => boolean;
+}
+
+/**
+ * Opens the per-ticket transcript sink for `ticketId` and writes the
+ * `junco_meta` header exactly once per file — the preamble every run-shaped
+ * writer needs before appending its own `junco_run_start`/`junco_run_end`
+ * (and, for an agent run, turn/tool frames in between). Extracted out of
+ * `runEnveloped` (Stage 4a) so `applyPatchSeries` (src/applyPatch.ts) can
+ * reuse the identical "create the file, or append if a prior writer already
+ * has" decision instead of a second junco_meta-on-first-write implementation
+ * that could drift from this one.
+ *
+ * Returns null when `cfg.transcriptsEnabled` is false, or when the sink could
+ * not be opened (the run continues without a transcript, same as
+ * `runEnveloped`'s own handling) — every write/close helper above treats a
+ * null sink as a no-op, so callers never need to branch on it themselves.
+ */
+export function openRunTranscriptSink(
+  cfg: Config,
+  ticketId: string,
+  deps: RunTranscriptDeps = {},
+): TranscriptSink | null {
+  if (!cfg.transcriptsEnabled) return null;
+  const path = transcriptPathFor(dataTreePaths(cfg).transcripts, ticketId);
+  const { sink, created } = openTicketTranscript(
+    path,
+    deps.transcriptSink ?? defaultTranscriptSink,
+    deps.fileExists ?? existsSync,
+  );
+  if (sink && created) {
+    writeTranscriptRecord(
+      sink,
+      JSON.stringify({
+        type: "junco_meta",
+        version: TRANSCRIPT_VERSION,
+        ticketId,
+        createdAt: new Date().toISOString(),
+      } satisfies MetaRecord) + "\n",
+    );
+  }
+  return sink;
 }
 
 /**
@@ -136,27 +193,10 @@ export async function runEnveloped(
   const guardManager = buildGuardManager(cfg);
   let sink: TranscriptSink | null = null;
   if (cfg.transcriptsEnabled) {
-    const path = transcriptPathFor(dataTreePaths(cfg).transcripts, spec.ticketId);
-    const opened = openTicketTranscript(
-      path,
-      deps.transcriptSink ?? defaultTranscriptSink,
-      deps.fileExists ?? existsSync,
-    );
-    sink = opened.sink;
-    if (sink && opened.created) {
-      writeRecord(
-        sink,
-        JSON.stringify({
-          type: "junco_meta",
-          version: TRANSCRIPT_VERSION,
-          ticketId: spec.ticketId,
-          createdAt: new Date().toISOString(),
-        } satisfies MetaRecord) + "\n",
-      );
-    }
+    sink = openRunTranscriptSink(cfg, spec.ticketId, deps);
     // Reconstructability (spec 1b): modelId is a STRING on purpose — never
     // serialize cfg.model (it can carry apiKey).
-    writeRecord(
+    writeTranscriptRecord(
       sink,
       JSON.stringify({
         type: "junco_run_start",

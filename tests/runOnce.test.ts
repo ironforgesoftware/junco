@@ -1821,6 +1821,7 @@ describe("task-history ledger (Task 4)", () => {
       prQueued: false,
       usage: { input: 10, output: 5, cacheRead: 0, total: 15, costUsd: 0.01 },
       durationMs: 4000,
+      mode: "apply",
     });
 
     const rec = fakeAppendTaskRecord();
@@ -1841,8 +1842,64 @@ describe("task-history ledger (Task 4)", () => {
       costUsd: 0.01,
       prUrl: "https://x/pull/1",
       retryCount: 3,
+      mode: "apply",
     });
     expect(r.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("PR path: prFlow's mode threads verbatim into the ledger record (apply_fallback, agent)", async () => {
+    for (const mode of ["apply_fallback", "agent"] as const) {
+      const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+      const j = join(root, "Junco");
+      seed(root, `pr-mode-${mode}`, "repo: /tmp/fake-repo-for-history\n");
+
+      const fakePrFlowFn = async (): Promise<PrFlowResult> => ({
+        dst: join(j, "done", `pr-mode-${mode}.md`),
+        status: "completed",
+        requeued: false,
+        prUrl: null,
+        commitCount: 1,
+        finalText: "done",
+        phaseError: null,
+        prQueued: false,
+        usage: { input: 1, output: 1, cacheRead: 0, total: 2, costUsd: 0 },
+        durationMs: 100,
+        mode,
+      });
+
+      const rec = fakeAppendTaskRecord();
+      await runOnce(cfg(root), { prFlowFn: fakePrFlowFn, appendTaskRecordFn: rec.fn });
+
+      expect(rec.calls).toHaveLength(1);
+      expect(rec.calls[0].mode).toBe(mode);
+    }
+  });
+
+  it("PR path: a completed pr-flow run with no mode on the flow result omits mode from the ledger record", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-run-"));
+    const j = join(root, "Junco");
+    seed(root, "pr-nomode", "repo: /tmp/fake-repo-for-history\n");
+
+    const fakePrFlowFn = async (): Promise<PrFlowResult> => ({
+      dst: join(j, "done", "pr-nomode.md"),
+      status: "completed",
+      requeued: false,
+      prUrl: null,
+      commitCount: 1,
+      finalText: "done",
+      phaseError: null,
+      prQueued: false,
+      usage: { input: 1, output: 1, cacheRead: 0, total: 2, costUsd: 0 },
+      durationMs: 100,
+      // mode omitted entirely
+    });
+
+    const rec = fakeAppendTaskRecord();
+    await runOnce(cfg(root), { prFlowFn: fakePrFlowFn, appendTaskRecordFn: rec.fn });
+
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0].mode).toBeUndefined();
+    expect("mode" in rec.calls[0]).toBe(false);
   });
 
   it("PR path: a requeued pr-flow run appends zero records", async () => {
@@ -1906,6 +1963,9 @@ describe("task-history ledger (Task 4)", () => {
       tokensOut: 3,
       costUsd: 0.02,
     });
+    // Stage 4a: mode is a pr-flow-only concept (apply/apply_fallback/agent) —
+    // assess never writes it.
+    expect(rec.calls[0].mode).toBeUndefined();
   });
 
   it("Assess path: a requeued assess-flow run appends zero records", async () => {

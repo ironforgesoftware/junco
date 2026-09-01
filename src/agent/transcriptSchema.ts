@@ -18,6 +18,7 @@ export type FlowKind =
   | "pr"
   | "pr_corrective"
   | "pr_apply_fallback"
+  | "apply"
   | "assess"
   | "analyze";
 

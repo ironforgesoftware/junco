@@ -12,24 +12,30 @@ import { execFileSync } from "node:child_process";
 
 import { applyPatchSeries, buildApplyFallbackPrompt } from "../src/applyPatch.js";
 import { parsePatchSeries, type PatchSeries } from "../src/patchTicket.js";
-import type { RunResult } from "../src/types.js";
+import type { Config, RunResult } from "../src/types.js";
 import { parseTicket } from "../src/ticket.js";
 import { makeConfig } from "./helpers/config.js";
 import { cloneHarness, run } from "./helpers/gitHarness.js";
+import { dataTreePaths } from "../src/dataTree.js";
+import { transcriptPathFor } from "../src/slug.js";
+import { parseTranscriptLine, type JuncoRecord } from "../src/agent/transcriptSchema.js";
 
-function cfgFor(root: string) {
-  return makeConfig({
-    dataDir: root,
-    queueRoot: join(root, "Junco"),
-    worktreeRoot: join(root, "wts"),
-    tools: [],
-    criticEnabled: false,
-    planLintEnabled: false,
-    verifyEnabled: false,
-    supervisorEnabled: false,
-    healthEnabled: false,
-    removeWorktreeOnSuccess: false,
-  });
+function cfgFor(root: string, overrides: Partial<Config> = {}) {
+  return makeConfig(
+    {
+      dataDir: root,
+      queueRoot: join(root, "Junco"),
+      worktreeRoot: join(root, "wts"),
+      tools: [],
+      criticEnabled: false,
+      planLintEnabled: false,
+      verifyEnabled: false,
+      supervisorEnabled: false,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: false,
+    },
+    overrides,
+  );
 }
 
 /** Wrap a raw mbox series in a junco-patch fence and run it through Task 1's
@@ -104,7 +110,7 @@ describe("applyPatchSeries", () => {
     const series = toPatchSeries(raw);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, series);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
     const log = run(["git", "-C", work, "log", "--oneline"]).trim().split("\n");
@@ -136,7 +142,7 @@ describe("applyPatchSeries", () => {
     expect(series.count).toBe(2);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, series);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
     const log = run(["git", "-C", work, "log", "--oneline"]).trim().split("\n");
@@ -169,7 +175,7 @@ describe("applyPatchSeries", () => {
     run(["git", "-C", work, "commit", "-q", "-m", "chore: annotate three"]);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, series);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
     const contents = execFileSync("cat", [join(work, "game.js")], { encoding: "utf8" });
@@ -200,7 +206,7 @@ describe("applyPatchSeries", () => {
     run(["git", "-C", work, "commit", "-q", "-m", "chore: rename two differently"]);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, conflicting);
+    const out = await applyPatchSeries(cfg, work, "t1", conflicting);
 
     expect(out.ok).toBe(false);
     expect((out as { reason: string }).reason).toMatch(/conflict|failed/i);
@@ -224,13 +230,193 @@ describe("applyPatchSeries", () => {
     const series = toPatchSeries(raw);
 
     const cfg = cfgFor(root);
-    const out = await applyPatchSeries(cfg, work, series);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
     const result = (out as { result: RunResult }).result;
     expect(result.usage.total).toBe(0);
     expect(result.stopReason).toBe("apply");
     expect(result.toolCalls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyPatchSeries — transcript frames for agent-less runs (Stage 4a):
+// closes Stage 1's documented "apply tickets produce no transcript" gap.
+// ---------------------------------------------------------------------------
+
+describe("applyPatchSeries — transcript frames (Stage 4a)", () => {
+  let roots: string[] = [];
+
+  afterEach(() => {
+    for (const r of roots) rmSync(r, { recursive: true, force: true });
+    roots = [];
+  });
+
+  function setup(): { root: string; work: string } {
+    const root = mkdtempSync(join(tmpdir(), "junco-applypatch-tx-"));
+    roots.push(root);
+    const { work } = cloneHarness(root);
+    return { root, work };
+  }
+
+  /** One clean, applicable one-commit series touching game.js. */
+  function cleanSeries(work: string): PatchSeries {
+    writeFileSync(join(work, "game.js"), levelsFile(["easy", "hard"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+    const raw = buildRealSeries(work, [
+      {
+        file: "game.js",
+        content: levelsFile(["easy", "medium", "hard"]),
+        message: "feat: add a level",
+      },
+    ]);
+    return toPatchSeries(raw);
+  }
+
+  /** A series guaranteed to conflict with the current tip of `work` (mirrors
+   * the "fails cleanly on a real conflict" fixture above). */
+  function conflictingSeries(work: string): PatchSeries {
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "two", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+    const raw = buildRealSeries(work, [
+      {
+        file: "game.js",
+        content: levelsFile(["one", "TWO-CHANGED", "three"]),
+        message: "feat: rename two",
+      },
+    ]);
+    const conflicting = toPatchSeries(raw);
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "dos", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "chore: rename two differently"]);
+    return conflicting;
+  }
+
+  function parseFrames(lines: string[]): JuncoRecord[] {
+    return lines.map((l) => {
+      const parsed = parseTranscriptLine(l);
+      if (parsed.kind !== "junco") throw new Error(`unexpected non-junco line: ${l}`);
+      return parsed.record;
+    });
+  }
+
+  /** In-memory transcript sink (mirrors tests/runEnvelope.test.ts's memorySink):
+   * avoids the real fs sink's async open/flush, which races a synchronous
+   * read run immediately after applyPatchSeries resolves. fileExists reflects
+   * whether anything has been written yet, so a second call against the same
+   * sink observes "the file already exists" exactly like the real fs would. */
+  function memorySink(): {
+    lines: string[];
+    transcriptSink: () => { write: (l: string) => void; end: () => void };
+    fileExists: () => boolean;
+  } {
+    const lines: string[] = [];
+    return {
+      lines,
+      transcriptSink: () => ({
+        write: (l: string) => void lines.push(l),
+        end: () => {},
+      }),
+      fileExists: () => lines.length > 0,
+    };
+  }
+
+  it("a successful apply writes junco_meta + junco_run_start(flow apply) + junco_run_end(stopReason apply), no turn/tool frames", async () => {
+    const { root, work } = setup();
+    const series = cleanSeries(work);
+    const cfg = cfgFor(root, { transcriptsEnabled: true });
+    const mem = memorySink();
+
+    const out = await applyPatchSeries(cfg, work, "apply-tx-ok", series, {
+      transcriptSink: mem.transcriptSink,
+      fileExists: mem.fileExists,
+    });
+    expect(out.ok).toBe(true);
+
+    const frames = parseFrames(mem.lines);
+    expect(frames.map((f) => f.type)).toEqual(["junco_meta", "junco_run_start", "junco_run_end"]);
+
+    const meta = frames[0] as { type: "junco_meta"; ticketId: string };
+    expect(meta.ticketId).toBe("apply-tx-ok");
+
+    const start = frames[1] as { type: "junco_run_start"; flow: string; body: string };
+    expect(start.flow).toBe("apply");
+    expect(start.body).toContain("1 patch");
+    expect(start.body).toContain("game.js");
+
+    const end = frames[2] as {
+      type: "junco_run_end";
+      stopReason: string | null;
+      usage: { total: number; costUsd: number };
+      errorMessage: string | null;
+      durationMs: number;
+    };
+    expect(end.stopReason).toBe("apply");
+    expect(end.usage).toEqual({ input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 });
+    expect(end.errorMessage).toBeNull();
+    expect(end.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("cfg.transcriptsEnabled: false writes nothing", async () => {
+    const { root, work } = setup();
+    const series = cleanSeries(work);
+    const cfg = cfgFor(root); // transcriptsEnabled defaults false (tests/helpers/config.ts)
+
+    const out = await applyPatchSeries(cfg, work, "apply-tx-off", series);
+    expect(out.ok).toBe(true);
+
+    const path = transcriptPathFor(dataTreePaths(cfg).transcripts, "apply-tx-off");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("a failed apply writes no transcript frames (nothing ran to completion)", async () => {
+    const { root, work } = setup();
+    const conflicting = conflictingSeries(work);
+    const cfg = cfgFor(root, { transcriptsEnabled: true });
+
+    const out = await applyPatchSeries(cfg, work, "apply-tx-fail", conflicting);
+    expect(out.ok).toBe(false);
+
+    const path = transcriptPathFor(dataTreePaths(cfg).transcripts, "apply-tx-fail");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("two apply runs against the same ticket id append to one file without a duplicate junco_meta", async () => {
+    const { root, work } = setup();
+    const cfg = cfgFor(root, { transcriptsEnabled: true });
+    const mem = memorySink();
+    const series1 = cleanSeries(work);
+    const out1 = await applyPatchSeries(cfg, work, "apply-tx-dup", series1, {
+      transcriptSink: mem.transcriptSink,
+      fileExists: mem.fileExists,
+    });
+    expect(out1.ok).toBe(true);
+
+    writeFileSync(join(work, "other.js"), "one\n", "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add other.js"]);
+    const raw2 = buildRealSeries(work, [
+      { file: "other.js", content: "one\ntwo\n", message: "feat: extend other" },
+    ]);
+    const series2 = toPatchSeries(raw2);
+    const out2 = await applyPatchSeries(cfg, work, "apply-tx-dup", series2, {
+      transcriptSink: mem.transcriptSink,
+      fileExists: mem.fileExists,
+    });
+    expect(out2.ok).toBe(true);
+
+    const frames = parseFrames(mem.lines);
+    expect(frames.filter((f) => f.type === "junco_meta")).toHaveLength(1);
+    expect(frames.map((f) => f.type)).toEqual([
+      "junco_meta",
+      "junco_run_start",
+      "junco_run_end",
+      "junco_run_start",
+      "junco_run_end",
+    ]);
   });
 });
 

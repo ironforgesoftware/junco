@@ -27,6 +27,14 @@ export interface TaskRecord {
   issue?: number;
   prUrl?: string;
   retryCount: number;
+  /** HOW a pr-kind ticket executed (apply-tickets-design.md Stage 4a):
+   * "apply" — a junco-patch series applied cleanly, no agent ran; "apply_fallback"
+   * — a series was present but an agent finished the work (either rung of the
+   * escalation ladder); "agent" — an ordinary agent-driven ticket. Optional and
+   * additive — v stays 1; older readers and pre-existing history lines (which
+   * never had this field) are unaffected. Only pr-kind records ever carry it —
+   * Q&A/assess/analyze finalize points never pass one. */
+  mode?: "agent" | "apply" | "apply_fallback";
 }
 
 export interface TaskHistoryDeps {
