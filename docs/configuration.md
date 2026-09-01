@@ -261,6 +261,18 @@ With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog 
 }
 ```
 
+## Apply-ticket fallback
+
+`worker.applyFallbackToAgent` (default `true`) governs the escalation ladder for [apply tickets](tickets.md#apply-tickets) — a ticket whose body carries a `junco-patch` fence, applied with `git am --3way` instead of an agent session. When the series fails to apply, or applies cleanly but the ticket's own `## Verification` block then fails, this lever decides what happens next: `true` dispatches exactly one agent turn (the patch as specification, plus the failure detail) to finish the ticket, and re-runs verification once on whatever it produces; `false` fails the ticket immediately instead, with no agent turn. It is a live-reload lever — see [Tickets § Escalation ladder](tickets.md#escalation-ladder-when-a-patch-does-not-apply-cleanly) for what the fallback means for the GitHub route's approval gate (the resulting PR is no longer byte-identical to the reviewed diff, and its body says so).
+
+```json
+{
+  "worker": {
+    "applyFallbackToAgent": false
+  }
+}
+```
+
 ## Update check
 
 `updateCheck` (default `true`) enables a best-effort daily check against the npm registry for a

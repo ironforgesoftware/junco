@@ -93,11 +93,24 @@ npx tsc --noEmit
 
 A PR-flow ticket (`repo:` present) whose **body** carries a `junco-patch` fence is an _apply ticket_. No frontmatter key selects it — detection is body-based only, the same way plan-set and Q&A-vs-PR-flow detection work elsewhere in Junco. Instead of driving an agent, Junco applies the fence's contents directly as a `git format-patch` mbox series: `git am --3way` applies AND commits the series in the provisioned worktree, so the series' own commit messages land as the PR's commits, in the same order they were generated.
 
-- **No agent session runs.** The PR flow's Phase 4 (see `ARCHITECTURE.md`) branches on the fence's presence: an apply ticket skips straight to `git am --3way` instead of driving the coding agent.
-- **Verification still gates the PR.** The ticket's own `## Verification` block runs exactly as it would for an agent-authored ticket, and a failing block still fails the PR the same way.
-- **The critic is skipped.** Comparing the landed diff against the spec is tautological when the diff _is_ the spec, so apply mode skips that pass — the outcome records the skip as `apply mode — the patch series is the spec` rather than a PASS/MISSING verdict.
-- **A conflict fails the ticket — it is never requeued.** A `git am --3way` conflict is deterministic: rerunning the identical series against the identical base fails the same way, so it is routed straight to `failed/` rather than through the transient-failure/requeue path. The `git am` output is folded into the failure note, `git am --abort` has already run, and the worktree is preserved (not pruned) so you can inspect it in a clean, un-wedged state.
-- **Leftovers are never swept.** Even with `commit_leftovers` enabled, a worktree left dirty after `git am` fails loud instead of being folded into an extra commit the series itself never authored — `git am` applies and commits in one step, so anything left uncommitted afterward means something is wrong.
+- **No agent session runs — on a clean apply.** The PR flow's Phase 4 (see `ARCHITECTURE.md`) branches on the fence's presence: an apply ticket skips straight to `git am --3way` instead of driving the coding agent. A failed apply, or a clean apply whose own `## Verification` block then fails, can still hand the ticket to one agent turn — see [Escalation ladder](#escalation-ladder-when-a-patch-does-not-apply-cleanly) below.
+- **Verification still gates the PR.** The ticket's own `## Verification` block runs exactly as it would for an agent-authored ticket, and a failing block still fails the PR the same way (subject to the escalation ladder below).
+- **The critic runs only once an agent has touched the ticket.** Comparing the landed diff against the spec is tautological when the diff _is_ the spec, so a clean apply with no fallback skips that pass — the outcome records the skip as `apply mode — the patch series is the spec` rather than a PASS/MISSING verdict. The moment either rung of the escalation ladder fires, the tautology no longer holds and the critic runs exactly as it would for an ordinary agent ticket.
+- **A conflict fails the ticket by default only when the fallback is disabled.** With `worker.applyFallbackToAgent` at its default (`true`), a `git am --3way` conflict escalates to the agent instead (see below). With the lever off, a conflict fails the ticket outright: it's routed straight to `failed/` rather than through the transient-failure/requeue path (a conflict against the same base is deterministic, so requeuing would just fail again identically), the `git am` output is folded into the failure note, `git am --abort` has already run, and the worktree is preserved (not pruned) so you can inspect it in a clean, un-wedged state.
+- **Leftovers are never swept — on a clean apply.** Even with `commit_leftovers` enabled, a worktree left dirty after a clean `git am` fails loud instead of being folded into an extra commit the series itself never authored — `git am` applies and commits in one step, so anything left uncommitted afterward means something is wrong. A fallback session is an ordinary agent ticket from that point on, so `commit_leftovers` applies to it normally.
+
+### Escalation ladder: when a patch does not apply cleanly
+
+Two things can go wrong with an apply ticket after Phase 4 starts, and both are handled by the same one-shot escalation, gated by `worker.applyFallbackToAgent` (default **true**):
+
+1. **The `git am --3way` itself fails** (a conflict against the current base). `git am --abort` runs immediately to leave the worktree clean.
+2. **The apply succeeds, but the ticket's own `## Verification` block then fails.** The patch landed, but doesn't actually work against the current tree.
+
+Either failure, with the lever on, dispatches **exactly one** agent session — never a loop. The agent receives the patch series as a **specification to implement against current reality**, not bytes to replay, plus the specific failure detail (the `git am` error, or the verification output); it's told explicitly not to re-run `git am`/`git apply`, since the series has already been tried (and rolled back, on an apply failure). Whatever that one session produces is re-verified once and the result stands — Phase 10's verification gate applies to it exactly as it would to any other ticket. With the lever off, either failure fails the ticket immediately instead, exactly as described in the bullets above.
+
+**What this means for the approval gate — stated plainly.** On the GitHub route, a human's trigger-label approval was given to a _specific reviewed diff_. If the fallback runs, the PR that opens is **no longer byte-identical to what was approved** — the agent improvised a solution, not replayed the approved bytes. The PR body carries an explicit disclosure banner saying exactly that, and the ticket should be reviewed as ordinary agent-authored work, not rubber-stamped on the strength of the original patch review. Operators who need the byte-identical guarantee to hold unconditionally should set `worker.applyFallbackToAgent` to `false` — a failed apply then fails the ticket outright instead of quietly substituting agent work for the reviewed diff. See [Configuration § Apply-ticket fallback](configuration.md#apply-ticket-fallback) for the lever itself.
+
+**How this shows up in `junco status` / the task-history ledger.** Every PR-kind ticket's finalize record carries a `mode` field: `"apply"` for a clean apply with no fallback, `"apply_fallback"` for either rung of the ladder above, or `"agent"` for an ordinary agent-driven ticket. That makes the wall-clock and token difference between "the diff just landed" and "an agent had to finish it" a queryable fact instead of something inferred from logs.
 
 ### Authoring rule: fence length
 
@@ -105,8 +118,8 @@ Wrap the series in a fence strictly longer than any backtick run that appears in
 
 ### Two limitations
 
-- **Authorship.** `git am` takes the commit author from the mbox `From:` header, so applied commits are authored by whoever generated the patch series — Junco is only the _committer_. There's no way to make applied commits read as authored by Junco/the bot short of rewriting the `From:` headers before submitting.
-- **No transcript.** An apply ticket runs no agent session, so `junco transcript <id>` and the dashboard's transcript view have nothing to show for it. Auditability for an apply ticket comes from `worker.log`, the ticket's done/failed record, and the PR's diff itself — not a transcript.
+- **Authorship.** `git am` takes the commit author from the mbox `From:` header, so applied commits are authored by whoever generated the patch series — Junco is only the _committer_. There's no way to make applied commits read as authored by Junco/the bot short of rewriting the `From:` headers before submitting. (A fallback session's commits are authored normally, like any other agent ticket.)
+- ~~No transcript.~~ **Corrected:** apply runs DO write a transcript. `junco transcript <id>` and the dashboard's transcript view record an apply run exactly like an agent run: `junco_meta` (first write) + a `junco_run_start` (`flow: "apply"`) + a `junco_run_end` frame bracket the `git am` attempt itself, on both the success and the failure path — there are no turn/tool frames, since nothing but `git am` ran. When the escalation ladder then dispatches an agent session, that session's own run opens the **same** transcript file and appends to it (no duplicate `junco_meta`), so a failed-then-escalated ticket produces **one chronological record**: the apply frames first, the agent session's frames after. Auditability for a clean apply still leans on `worker.log`, the ticket's done/failed record, and the PR's diff — but there is now a transcript to read too.
 
 ### Lint rules
 
@@ -192,14 +205,32 @@ junco submit ./my-ticket.md
 # From stdin:
 cat my-ticket.md | junco submit -
 
+# Compose and submit an apply ticket directly from a git format-patch file:
+junco submit --patch ./my-series.patch --repo /absolute/path/to/your-repo \
+  --title "Fix off-by-one in pagination" \
+  --why "Backport the upstream fix" \
+  --verify "npx tsc --noEmit"
+
 # Print the inbox path:
 junco inbox-path
 ```
 
+`junco submit --patch <file> --repo <path> [--title T] [--why W] [--verify CMD]` composes an
+apply ticket (the `junco-patch` fence, wrapped at a safe fence length automatically) from an
+existing `git format-patch` series so hand-authoring the fence is no longer the only way to
+submit one — `--patch` and `--repo` are required, `--title`/`--why`/`--verify` are optional
+(`--title` also seeds the ticket id slug; omitted, the PR title falls back to the series' own
+first `Subject:` line; `--why` defaults to a line naming the patch file; `--verify`, when given,
+emits a `## Verification` block). It composes the same ticket shape documented under
+[Apply tickets](#apply-tickets) above, then falls into the same `--as-issue`/`--dry-run` routing
+as a hand-authored file ticket — combine it with either flag exactly as you would `junco submit
+<file>`.
+
 The bundled `junco-dispatch` skill teaches coding agents (Claude Code and other
-skills-capable harnesses) to scaffold well-structured tickets and submit them. Link it
-into your harness once with `junco skill install --harness <name|path>`; the daemon
-re-checks and self-heals the links at every start.
+skills-capable harnesses) to scaffold well-structured tickets and submit them — including apply
+tickets, when the agent already knows the exact bytes to land and there's nothing left to
+resolve by reasoning about the target tree. Link it into your harness once with `junco skill
+install --harness <name|path>`; the daemon re-checks and self-heals the links at every start.
 
 ## Templates
 

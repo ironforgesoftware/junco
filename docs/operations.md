@@ -145,6 +145,11 @@ By default (`worker.startupWait = true`) Junco blocks startup and retries every 
 
 Set `worker.startupWait = false` to let Junco start immediately and fail individual tickets if the endpoint is down.
 
+**Apply tickets narrow this, per claim only.** A ticket whose body carries a `junco-patch` fence (see [Apply tickets](tickets.md#apply-tickets)) needs neither the inference endpoint nor a provider-gate pass to run — `git am --3way` is the whole job. `claimNextTask` checks readiness (endpoint reachability + [provider gate](#provider-gate)) only after the dependency filter, and when that check fails it doesn't leave the whole inbox untouched: it still claims whichever eligible tickets are apply tickets, and only defers the rest. Two caveats worth stating plainly:
+
+- This narrowing is **per-claim only** — it does not touch the daemon's **startup** endpoint wait above. With `worker.startupWait = true` (the default), a downed endpoint still blocks the daemon from reaching its first poll at all, apply tickets included; the per-claim narrowing only helps once the daemon is already polling.
+- If an endpoint-independent apply ticket's patch then **fails to apply**, the Stage-2 escalation ladder (`worker.applyFallbackToAgent`, on by default — see [Apply tickets § Escalation ladder](tickets.md#escalation-ladder-when-a-patch-does-not-apply-cleanly)) will still try to start an agent session to finish it, and that session cannot reach the endpoint either. The ticket fails — cleanly, and bounded by the same `worker.maxTransientRetries` cap as any other transient failure — but it does fail. Claiming while the endpoint is down only helps a patch that applies cleanly on the first try.
+
 ### `gh` not authenticated
 
 PR-flow tickets require the GitHub CLI to be authenticated. Run:
