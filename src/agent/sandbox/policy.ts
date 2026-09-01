@@ -15,7 +15,13 @@ export class SandboxPolicyError extends Error {
 }
 
 /** Absolute paths whose reads are always denied inside the sandbox. Not
- *  operator-removable (extra_deny_read only adds). */
+ *  operator-removable (extra_deny_read only adds).
+ *
+ *  Mixed shapes on purpose (#336): where a toolchain keeps its credential in
+ *  one FILE inside a directory the agent legitimately needs — cargo's `bin/`
+ *  and `registry/`, docker's `cli-plugins/` — only that file is named, not the
+ *  directory. `buildPolicy` splits the list by observation (`classifyDenyRead`)
+ *  because an existing file cannot be a subtree deny on bwrap. */
 export function builtinDenyReadPaths(home: string): string[] {
   return [
     join(home, ".ssh"),
@@ -23,6 +29,16 @@ export function builtinDenyReadPaths(home: string): string[] {
     join(home, ".config", "gh"),
     join(home, ".gnupg"),
     join(home, ".pi"),
+    join(home, ".npmrc"),
+    join(home, ".git-credentials"),
+    join(home, ".netrc"),
+    join(home, ".docker", "config.json"),
+    join(home, ".kube"),
+    join(home, ".config", "gcloud"),
+    join(home, ".cargo", "credentials.toml"),
+    join(home, ".pypirc"),
+    join(home, ".gem", "credentials"),
+    join(home, ".claude"),
   ];
 }
 
@@ -131,11 +147,12 @@ export function buildPolicy(opts: {
    *  `linkedWorktreeWritePaths`. Threaded in by session.ts's resolveSandbox;
    *  callers that build stand-in policies (doctor, tests) leave it empty. */
   gitWritePaths?: string[];
-  /** #311/F5: how `buildPolicy` tells an `extra_deny_read` entry that names a
-   *  FILE from one that names a directory. Defaults to a real `statSync`;
-   *  injected by tests so synthetic `/sbxroot/...` paths can state their kind.
-   *  See `classifyExtraDenyRead` for why observation (and not a syntactic
-   *  guess) is the rule, and what a path that does not exist yet resolves to. */
+  /** #311/F5: how `buildPolicy` tells a builtin or `extra_deny_read` entry
+   *  that names a FILE from one that names a directory. Defaults to a real
+   *  `statSync`; injected by tests so synthetic `/sbxroot/...` paths can state
+   *  their kind. See `classifyDenyRead` for why observation (and not a
+   *  syntactic guess) is the rule, and what a path that does not exist yet
+   *  resolves to. */
   isFile?: (p: string) => boolean;
 }): SandboxPolicy {
   const { cfg, cwd, scratchDir, home, dataDenyPaths, dataAllowPaths, network, botGhConfigDir } =
@@ -149,24 +166,25 @@ export function buildPolicy(opts: {
     ...(opts.gitWritePaths ?? []).map(canonicalize),
     ...cfg.extraAllowWrite.map(canonicalize),
   ];
-  const extraDenyRead = classifyExtraDenyRead(cfg.extraDenyRead.map(canonicalize), isFile);
+  const builtinDenyRead = classifyDenyRead(builtinDenyReadPaths(home).map(canonicalize), isFile);
+  const extraDenyRead = classifyDenyRead(cfg.extraDenyRead.map(canonicalize), isFile);
   const readDenyPaths = [
-    ...builtinDenyReadPaths(home).map(canonicalize),
+    ...builtinDenyRead.dirs,
     ...dataDenyPaths.dirs.map(canonicalize),
     ...(botGhConfigDir ? [canonicalize(botGhConfigDir)] : []),
     ...extraDenyRead.dirs,
   ];
   const dataDenyFiles = dataDenyPaths.files.map(canonicalize);
-  const readDenyFiles = [...dataDenyFiles, ...extraDenyRead.files];
+  const readDenyFiles = [...builtinDenyRead.files, ...dataDenyFiles, ...extraDenyRead.files];
   // Same canonicalization as the deny lists above — otherwise precedence
   // would compare a canonicalized deny against a raw allow and a
   // /tmp-vs-/private/tmp-style mismatch would silently flip the answer.
   const readAllowPaths = (dataAllowPaths ?? []).map(canonicalize);
   // Only the DATA-TREE deny files are guarded, not the composed list — the
   // guard's premise is that the file is absent (see assertNoAllowAboveDenyFile),
-  // which is true of every receipt here by construction and NOT true of an
-  // operator's `extra_deny_read`, which only ever reaches `readDenyFiles` by
-  // having been OBSERVED to exist (classifyExtraDenyRead). Denying an existing
+  // which is true of every receipt here by construction and NOT true of a
+  // builtin or an operator's `extra_deny_read`, which only ever reach
+  // `readDenyFiles` by having been OBSERVED to exist (classifyDenyRead). Denying an existing
   // `.env` inside the agent's own worktree is a supported, documented use case
   // and all three backends already agree on it: bwrap emits the file's
   // /dev/null mask deeper than — therefore after — the worktree's rw bind.
@@ -190,7 +208,7 @@ export function buildPolicy(opts: {
 
 /** Does this path name a regular file RIGHT NOW? `false` for a directory, a
  *  path that does not exist, and anything unstattable — see
- *  `classifyExtraDenyRead` for why every one of those is the safe answer. */
+ *  `classifyDenyRead` for why every one of those is the safe answer. */
 function defaultIsFile(p: string): boolean {
   try {
     return statSync(p).isFile();
@@ -200,9 +218,9 @@ function defaultIsFile(p: string): boolean {
 }
 
 /**
- * #311/F5: split `sandbox.extra_deny_read` into the two deny kinds the backends
- * actually have, instead of forcing every operator entry through the subtree
- * kind.
+ * #311/F5: split a deny list — `sandbox.extra_deny_read`, and since #336 the
+ * builtins too — into the two deny kinds the backends actually have, instead
+ * of forcing every entry through the subtree kind.
  *
  * How we tell: by OBSERVATION (`statSync`), never by spelling. A trailing `/`
  * is not a promise and its absence is not one either — `extra_deny_read:
@@ -229,13 +247,13 @@ function defaultIsFile(p: string): boolean {
  * while a `literal` would silently expose the contents of a directory created
  * later. On bwrap a mount at a missing target is skipped either way
  * (`bwrapArgs`' existence guard), so guessing "file" buys nothing there and
- * loosens the other two. Residual, unchanged by this split and shared with
- * `builtinDenyReadPaths` (an absent `~/.aws`): under bwrap's `--ro-bind / /` a
- * deny whose target is absent at spawn emits no mask at all, so a path created
- * mid-run by something outside the sandbox is readable on bwrap while Seatbelt
- * and the path-jail still deny it by name.
+ * loosens the other two. Residual, unchanged by this split (an absent `~/.aws`
+ * or `~/.npmrc`): under bwrap's `--ro-bind / /` a deny whose target is absent
+ * at spawn emits no mask at all, so a path created mid-run by something
+ * outside the sandbox is readable on bwrap while Seatbelt and the path-jail
+ * still deny it by name.
  */
-function classifyExtraDenyRead(
+function classifyDenyRead(
   paths: string[],
   isFile: (p: string) => boolean,
 ): { dirs: string[]; files: string[] } {

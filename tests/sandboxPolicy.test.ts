@@ -25,6 +25,28 @@ describe("builtinDenyReadPaths", () => {
     expect(p).toContain("/sbxroot/home/x/.gnupg");
     expect(p).toContain("/sbxroot/home/x/.pi");
   });
+
+  it("covers the credential files and dirs other toolchains keep under home (#336)", () => {
+    const p = builtinDenyReadPaths("/sbxroot/home/x");
+    for (const rel of [
+      ".npmrc",
+      ".git-credentials",
+      ".netrc",
+      ".docker/config.json",
+      ".kube",
+      ".config/gcloud",
+      ".cargo/credentials.toml",
+      ".pypirc",
+      ".gem/credentials",
+      ".claude",
+    ]) {
+      expect(p).toContain(`/sbxroot/home/x/${rel}`);
+    }
+    // Only the credential FILE is denied where the parent dir is a toolchain the
+    // agent legitimately needs (cargo's bin/ and registry/, docker's cli-plugins/).
+    expect(p).not.toContain("/sbxroot/home/x/.cargo");
+    expect(p).not.toContain("/sbxroot/home/x/.docker");
+  });
 });
 
 describe("linkedWorktreeWritePaths (#320)", () => {
@@ -642,6 +664,69 @@ describe("buildPolicy — extra_deny_read is classified by observation (#311/F5)
     const p = buildPolicy({ ...base, cfg: { ...base.cfg, extraDenyRead: ["/sbxroot/nope"] } });
     expect(p.readDenyPaths).toContain("/sbxroot/nope");
     expect(p.readDenyFiles).toEqual(["/sbxroot/data/watchlist.json"]);
+  });
+});
+
+// #336 widened the builtins with FILE-shaped entries (~/.npmrc, ~/.netrc, …).
+// Left as subtree denies, an existing one would render on bwrap as
+// `--tmpfs <file>` — a mount tmpfs cannot perform — and abort every spawn on
+// Linux, exactly the F5 shape above. So the builtins go through the same
+// observation-based split as `extra_deny_read`.
+describe("buildPolicy — builtin credential files are classified by observation (#336)", () => {
+  const home = "/sbxroot/home/x";
+  const cwd = "/sbxroot/work/tree";
+  const base = {
+    cfg: {
+      enabled: true,
+      backend: "auto" as const,
+      network: "deny" as const,
+      extraDenyRead: [] as string[],
+      extraAllowWrite: [] as string[],
+      bashTimeoutSeconds: 600,
+    },
+    cwd,
+    scratchDir: "/sbxroot/nowhere/scratch1",
+    home,
+    dataDenyPaths: { dirs: ["/sbxroot/data/queue"], files: ["/sbxroot/data/watchlist.json"] },
+    network: false,
+  };
+  const at = (args: string[], tokens: string[]): number =>
+    args.findIndex((_, i) => tokens.every((t, k) => args[i + k] === t));
+
+  it("routes a builtin observed to be a regular file to readDenyFiles, never readDenyPaths", () => {
+    const npmrc = `${home}/.npmrc`;
+    const p = buildPolicy({ ...base, isFile: (q) => q === npmrc });
+    expect(p.readDenyFiles).toContain(npmrc);
+    expect(p.readDenyPaths).not.toContain(npmrc);
+    // The other builtins are unaffected by one observation.
+    expect(p.readDenyPaths).toContain(`${home}/.ssh`);
+    expect(p.readDenyPaths).toContain(`${home}/.netrc`);
+    const args = bwrapArgs(p, () => true);
+    expect(at(args, ["--ro-bind", "/dev/null", npmrc])).toBeGreaterThanOrEqual(0);
+    expect(at(args, ["--tmpfs", npmrc])).toBe(-1);
+    expect(resolveRead(npmrc, readRules(p))).toBe("deny");
+  });
+
+  it("keeps an absent builtin as a SUBTREE deny, denied by name on the path-jail", () => {
+    // No `isFile` injected: the synthetic home does not exist, so nothing is
+    // reclassified and every builtin stays the name-based, stronger kind.
+    const p = buildPolicy(base);
+    expect(p.readDenyFiles).toEqual(["/sbxroot/data/watchlist.json"]);
+    for (const rel of [".npmrc", ".git-credentials", ".docker/config.json", ".kube", ".claude"]) {
+      expect(p.readDenyPaths).toContain(`${home}/${rel}`);
+    }
+    const rules = readRules(p);
+    expect(resolveRead(`${home}/.npmrc`, rules)).toBe("deny");
+    expect(resolveRead(`${home}/.kube/config`, rules)).toBe("deny");
+    expect(resolveRead(`${home}/.config/gcloud/credentials.db`, rules)).toBe("deny");
+    expect(resolveRead(`${home}/.cargo/credentials.toml`, rules)).toBe("deny");
+    // …while the toolchain dirs around the denied files stay readable.
+    expect(resolveRead(`${home}/.cargo/bin/cargo`, rules)).toBe("allow");
+    expect(resolveRead(`${home}/.docker/cli-plugins/docker-compose`, rules)).toBe("allow");
+    expect(() => assertReadAllowed(`${home}/.git-credentials`, cwd, p)).toThrow(SandboxViolation);
+    expect(() => assertReadAllowed(`${home}/.claude/settings.json`, cwd, p)).toThrow(
+      SandboxViolation,
+    );
   });
 });
 
