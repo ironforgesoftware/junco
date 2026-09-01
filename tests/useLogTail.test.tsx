@@ -11,11 +11,9 @@ import {
   type UseLogTailOpts,
 } from "../src/tui/useLogTail.js";
 import type { LogEntry, LogReaderDeps } from "../src/logReader.js";
-import { until } from "./helpers/until.js";
+import { until, wait } from "./helpers/until.js";
 
 afterEach(cleanup);
-
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const line = (o: Record<string, unknown>): string => JSON.stringify(o);
 
