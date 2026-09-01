@@ -11,7 +11,7 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 | Action    | Command                                                                                              |
 | --------- | ---------------------------------------------------------------------------------------------------- |
 | Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                        |
-| All tests | `npm test` (vitest, ~3,100 tests, ~25s)                                                              |
+| All tests | `npm test` (vitest, ~4,300 tests, ~40s)                                                              |
 | One file  | `npx vitest run tests/<name>.test.ts`                                                                |
 | Coverage  | `npx vitest run --coverage` (floor pinned by `vitest.config.ts` thresholds; CI job `coverage`)       |
 | Lint      | `npm run lint` (type-aware via `tsconfig.eslint.json`, which is what covers `tests/`)                |
@@ -66,7 +66,7 @@ a semantic merge. Details: `docs/parallel-sessions.md`.
 
 - `node dist/cli.js doctor` — preflight config, git/gh auth, endpoint, model, dirs.
 - `node dist/cli.js status` / `list` / `logs -f` — daemon, queue, and log visibility; health JSON at `http://127.0.0.1:8787/health` (default).
-- Per-ticket event transcripts (the debugging record for failed runs): `<dataDir>/data/transcripts/<ticket-id>.jsonl`, default `~/.junco/data/transcripts/` (a pre-0.10 `flat`-layout root keeps `<dataDir>/transcripts/`). `junco replay <id>` re-runs a transcript through the guards under any policy (flag > recorded > config > defaults) — a what-if report, not a live rerun. `junco transcript <id>` (or `enter` on the dashboard's queue row) renders it: runs, tool calls + results, the agent's answer.
+- Per-ticket event transcripts (the debugging record for failed runs): `<dataDir>/data/transcripts/<ticket-id>.jsonl`, default `~/.junco/data/transcripts/` (a pre-0.10 `flat`-layout root keeps `<dataDir>/transcripts/`). `junco replay <id>` re-runs a transcript through the guards under any policy (flag > recorded > config > defaults) — a what-if report, not a live rerun. `junco transcript <id>` (or `enter` on the dashboard's queue row, `t` on an issue row) renders it: runs, tool calls + results, the agent's answer.
 
 ## Git & release
 
