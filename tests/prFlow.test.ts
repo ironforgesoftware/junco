@@ -1458,7 +1458,14 @@ describe("apply-mode tickets (2026-08-31)", () => {
 
   it("an apply ticket skips the critic pass", async () => {
     // criticEnabled: true proves the skip is apply-mode's doing, not just
-    // critic being globally off.
+    // critic being globally off. This is also the Stage-2a narrowing's
+    // inverse pin: a CLEAN apply (no fallback) must still skip the critic
+    // even with criticEnabled true — appliedCleanly is true here, so
+    // skipCritic short-circuits before deps.criticSessionFactory is ever
+    // read. Contrast "a fallback session's critic pass actually dispatches
+    // when criticEnabled is true" below, which is the same setup minus a
+    // clean apply (a conflicting one that escalates instead) and proves the
+    // opposite: the critic DOES run once appliedCleanly is false.
     const cfg = makeConfig(h, { criticEnabled: true, criticMaxRetries: 1 });
     const { task, path } = makeTicket(
       h,
@@ -1564,6 +1571,53 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(body).toMatch(/did not apply/);
     expect(body).toMatch(/git am/);
     expect(body).toMatch(/agent completed/i);
+  });
+
+  it("a fallback session's critic pass actually dispatches when criticEnabled is true (proves the narrowed skip gate, not Stage 1's blanket per-ticket skip)", async () => {
+    // The previous fallback test above runs with this file's default
+    // criticEnabled: false, so it can't distinguish the narrowed gate
+    // (skipCritic = appliedCleanly) from Stage 1's old, unconditional
+    // "skip for any patch ticket" — both would pass identically with the
+    // critic off. This test turns the critic ON and proves it is actually
+    // invoked (and returns a real verdict) once a fallback has run.
+    const capture = join(h.root, "pr-body-fallback-critic-capture.md");
+    const prCreate = `prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" ${JSON.stringify(capture)}; fi
+      prev="$a"
+    done
+    echo "https://github.com/owner/repo/pull/1000"; exit 0`;
+    const cfg = makeConfig(h, {
+      criticEnabled: true,
+      criticMaxRetries: 1,
+      ghBin: ghShim(h.root, "gh-apply-fallback-critic.sh", prCreate),
+    });
+    const { task, path } = makeTicket(
+      h,
+      "apply-fallback-critic.md",
+      `---\nid: apply-fallback-critic\nrepo: ${h.work}\n---\n${conflictingApplyTicketBody(h.work)}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    let criticConstructed = false;
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      criticSessionFactory: () => {
+        criticConstructed = true;
+        return criticFactory("JUNCO_VERIFY: PASS")();
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("completed");
+    // The critic session WAS constructed and returned a real verdict.
+    expect(criticConstructed).toBe(true);
+    // "skipped" never renders a pass/missing banner (buildPrBody: the skip
+    // metadata never surfaces in the PR body) — the presence of the pass
+    // banner is itself proof this is a genuine verdict, not the apply-mode
+    // skip metadata reading as a pass by coincidence.
+    const body = readFileSync(capture, "utf8");
+    expect(body).toContain("✅ **Critic pass:**");
   });
 
   it("a successful apply never constructs a session regardless of the toggle", async () => {
