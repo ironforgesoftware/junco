@@ -149,9 +149,11 @@ the first task's TDD red.
 ### 4.4 Ticket writer
 
 `writeTicket(sb, { id, frontmatter, body })` writes
-`<queueRoot>/inbox/<id>.md`. `frontmatter` is typed against the public
-`ticketSchema` field names so a contract change breaks the e2e at compile
-time. The queue root is derived the same way junco derives it
+`<queueRoot>/inbox/<id>.md`. `frontmatter` keys are checked at write time
+against the public `ticketSchema` field names (the schema is a runtime object
+typed `Record<string, unknown>`, so there is no static key type to compile
+against); a harness that used a non-public key throws before the CLI runs.
+The queue root is derived the same way junco derives it
 (`<dataDir>/queue`) — the harness asks `junco inbox-path` once rather than
 hard-coding the layout.
 
