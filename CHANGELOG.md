@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - On the dashboard, `t` on a GitHub issue opens the transcript of the ticket the bridge built for it — live-following while the run is in flight — so a labeled issue can be watched without hunting for its row in the queue section (#330). Works from the issue list and from the open issue detail view; a toast explains when nothing is in flight for that issue (`enter` still opens the issue body).
+- Apply tickets: a ticket body carrying a `junco-patch` fence (a `git format-patch` mbox series) executes with zero model turns — `git am --3way` applies AND commits the series directly in the worktree, so the series' own commit messages become the PR's commits, in order. Verification (`## Verification`) still runs and still gates the PR; the critic pass is skipped, since the diff already is the spec. A conflict fails the ticket outright rather than requeuing it (a conflict is deterministic, not transient), with the `git am` output folded into the failure note and the worktree preserved for inspection. New `junco lint`/`submit --dry-run` rules: `patch_parses` and `patch_paths_sane` (errors — a malformed series, or one touching traversal/absolute paths or carrying a binary hunk) and `patch_has_verification` (warning); the prose rules are skipped for these tickets. See [Apply tickets](docs/tickets.md#apply-tickets).
 
 ### Changed
 

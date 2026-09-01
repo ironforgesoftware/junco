@@ -8,12 +8,13 @@ A ticket is a Markdown file with YAML frontmatter and a plan body. Run `junco sc
 
 ## Ticket flavors
 
-| Flavor                | Trigger                                             | What happens                                                                                                                                                                                                                                                                 |
-| --------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Q&A ticket**        | No `repo:` field                                    | Agent answers in-place; result written back to the ticket file. No git.                                                                                                                                                                                                      |
-| **PR-flow ticket**    | `repo: <absolute/path>`                             | Agent runs in an isolated git worktree; a draft PR is opened on success.                                                                                                                                                                                                     |
-| **Assessment ticket** | `assess:` mapping present (checked before `repo:`)  | `npm audit` + a read-only agent audit of the `repo:` target; findings are parked for review — `junco assess file` is the confirm step that actually files them as GitHub issues — instead of opening a PR. → [Vulnerability assessment guide](./assess.md)                   |
-| **Analysis ticket**   | `analyze:` mapping present (checked before `repo:`) | A read-only agent investigation of the issue named in `analyze:` against the `repo:` target; the drafted comment is parked for review — `junco analyze post` is the confirm step that actually posts it — instead of opening a PR. → [Analysis comments guide](./analyze.md) |
+| Flavor                | Trigger                                                     | What happens                                                                                                                                                                                                                                                                 |
+| --------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Q&A ticket**        | No `repo:` field                                            | Agent answers in-place; result written back to the ticket file. No git.                                                                                                                                                                                                      |
+| **PR-flow ticket**    | `repo: <absolute/path>`                                     | Agent runs in an isolated git worktree; a draft PR is opened on success.                                                                                                                                                                                                     |
+| **Assessment ticket** | `assess:` mapping present (checked before `repo:`)          | `npm audit` + a read-only agent audit of the `repo:` target; findings are parked for review — `junco assess file` is the confirm step that actually files them as GitHub issues — instead of opening a PR. → [Vulnerability assessment guide](./assess.md)                   |
+| **Analysis ticket**   | `analyze:` mapping present (checked before `repo:`)         | A read-only agent investigation of the issue named in `analyze:` against the `repo:` target; the drafted comment is parked for review — `junco analyze post` is the confirm step that actually posts it — instead of opening a PR. → [Analysis comments guide](./analyze.md) |
+| **Apply ticket**      | Body carries a `junco-patch` fence (`repo:` still required) | Same PR flow as a PR-flow ticket, but `git am --3way` applies a pre-built patch series directly instead of running an agent. → [Apply tickets](#apply-tickets)                                                                                                               |
 
 ## Key frontmatter fields
 
@@ -86,6 +87,82 @@ npx tsc --noEmit
 ## Done when
 
 - [ ] 1 commit on the branch.
+````
+
+## Apply tickets
+
+A PR-flow ticket (`repo:` present) whose **body** carries a `junco-patch` fence is an _apply ticket_. No frontmatter key selects it — detection is body-based only, the same way plan-set and Q&A-vs-PR-flow detection work elsewhere in Junco. Instead of driving an agent, Junco applies the fence's contents directly as a `git format-patch` mbox series: `git am --3way` applies AND commits the series in the provisioned worktree, so the series' own commit messages land as the PR's commits, in the same order they were generated.
+
+- **No agent session runs.** The PR flow's Phase 4 (see `ARCHITECTURE.md`) branches on the fence's presence: an apply ticket skips straight to `git am --3way` instead of driving the coding agent.
+- **Verification still gates the PR.** The ticket's own `## Verification` block runs exactly as it would for an agent-authored ticket, and a failing block still fails the PR the same way.
+- **The critic is skipped.** Comparing the landed diff against the spec is tautological when the diff _is_ the spec, so apply mode skips that pass — the outcome records the skip as `apply mode — the patch series is the spec` rather than a PASS/MISSING verdict.
+- **A conflict fails the ticket — it is never requeued.** A `git am --3way` conflict is deterministic: rerunning the identical series against the identical base fails the same way, so it is routed straight to `failed/` rather than through the transient-failure/requeue path. The `git am` output is folded into the failure note, `git am --abort` has already run, and the worktree is preserved (not pruned) so you can inspect it in a clean, un-wedged state.
+- **Leftovers are never swept.** Even with `commit_leftovers` enabled, a worktree left dirty after `git am` fails loud instead of being folded into an extra commit the series itself never authored — `git am` applies and commits in one step, so anything left uncommitted afterward means something is wrong.
+
+### Authoring rule: fence length
+
+Wrap the series in a fence strictly longer than any backtick run that appears inside it. A plain patch (no fenced content in the diff) needs only the usual three backticks; a patch that itself adds or edits a fenced code block in a markdown file — one that already uses three backticks — needs a four-backtick outer fence instead, since extraction only recognizes a `junco-patch` block whose closing fence is at least as long as its opener.
+
+### Two limitations
+
+- **Authorship.** `git am` takes the commit author from the mbox `From:` header, so applied commits are authored by whoever generated the patch series — Junco is only the _committer_. There's no way to make applied commits read as authored by Junco/the bot short of rewriting the `From:` headers before submitting.
+- **No transcript.** An apply ticket runs no agent session, so `junco transcript <id>` and the dashboard's transcript view have nothing to show for it. Auditability for an apply ticket comes from `worker.log`, the ticket's done/failed record, and the PR's diff itself — not a transcript.
+
+### Lint rules
+
+`junco lint` and `junco submit --dry-run` validate a `junco-patch` body the same way they validate any other ticket:
+
+| Rule                     | Severity | Checks                                                                                                                                 |
+| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `patch_parses`           | error    | The fence is a well-formed `git format-patch` series — an mbox `From <sha> …` header and at least one `diff --git` hunk, under 512 KB. |
+| `patch_paths_sane`       | error    | The series doesn't touch paths outside the repo (absolute paths, `..` traversal) and carries no binary hunk.                           |
+| `patch_has_verification` | warning  | The ticket still has a `## Verification` block — it's the only execution-time check apply mode has.                                    |
+
+The prose rules (`steps_have_commits`, `files_table_referenced`, `files_paths_exist`, `no_cd_in_steps`) are skipped for apply tickets — a patch series has no Steps or Files table for them to check.
+
+### Minimal apply ticket
+
+````markdown
+---
+id: apply-pagination-fix-2026-08-31
+priority: normal
+timeout_minutes: 20
+repo: /absolute/path/to/your-repo
+base_branch: main
+pr_title: Fix off-by-one in pagination
+draft: true
+---
+
+# Apply a pre-built patch series
+
+```junco-patch
+From 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b Mon Sep 17 00:00:00 2001
+From: Jane Dev <jane@example.com>
+Date: Sun, 30 Aug 2026 12:00:00 -0700
+Subject: [PATCH] fix: correct off-by-one in page offset
+
+---
+ src/paginate.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/paginate.ts b/src/paginate.ts
+index 1111111..2222222 100644
+--- a/src/paginate.ts
++++ b/src/paginate.ts
+@@ -10,7 +10,7 @@ export function paginate(items: Item[], page: number, size: number): Item[] {
+-  const offset = page * size;
++  const offset = (page - 1) * size;
+   return items.slice(offset, offset + size);
+ }
+--
+2.43.0
+```
+
+## Verification
+
+```bash
+npx tsc --noEmit
+```
 ````
 
 ## Submitting tickets
