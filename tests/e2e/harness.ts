@@ -157,6 +157,14 @@ function readIfExists(p: string): string {
   return existsSync(p) ? readFileSync(p, "utf8") : "";
 }
 
+/** The first path in `paths` that exists, or null. Shared by `transcript()` and the worker.log diagnostic — both probe v2-then-flat data layouts (src/dataTree.ts). */
+function firstExisting(paths: string[]): string | null {
+  for (const p of paths) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 function registerDiagnostics(sb: Sandbox): void {
   onTestFailed(() => {
     const out: string[] = [`--- e2e diagnostics (sandbox ${sb.home}) ---`];
@@ -173,7 +181,11 @@ function registerDiagnostics(sb: Sandbox): void {
       out.push(`stdout (tail):\n${tail(sb.lastRun.stdout)}`);
       out.push(`stderr (tail):\n${tail(sb.lastRun.stderr)}`);
     }
-    out.push(`worker.log (tail):\n${tail(readIfExists(join(sb.dataDir, "worker.log")))}`);
+    const workerLog = firstExisting([
+      join(sb.dataDir, "logs", "worker.log"),
+      join(sb.dataDir, "worker.log"),
+    ]);
+    out.push(`worker.log (tail):\n${tail(workerLog === null ? "" : readIfExists(workerLog))}`);
     out.push(
       process.env.JUNCO_E2E_KEEP
         ? `sandbox retained at ${sb.home}`
@@ -253,10 +265,15 @@ export async function createSandbox(opts: SandboxOptions = {}): Promise<Sandbox>
     },
   };
 
-  const r = await runCli(sb, ["inbox-path"], { timeoutMs: 30_000 });
-  if (r.code !== 0)
-    throw new Error(`junco inbox-path failed (exit ${String(r.code)}):\n${r.stderr}`);
-  sb.queueRoot = dirname(r.stdout.trim());
+  try {
+    const r = await runCli(sb, ["inbox-path"], { timeoutMs: 30_000 });
+    if (r.code !== 0)
+      throw new Error(`junco inbox-path failed (exit ${String(r.code)}):\n${r.stderr}`);
+    sb.queueRoot = dirname(r.stdout.trim());
+  } catch (e) {
+    await sb.close();
+    throw e;
+  }
   registerDiagnostics(sb);
   return sb;
 }
@@ -404,17 +421,15 @@ function listQueue(sb: Sandbox): Record<QueueDir, string[]> {
 
 /** Parsed transcript lines. Checks both data layouts (nested `data/transcripts`, legacy flat `transcripts`). */
 export function transcript(sb: Sandbox, id: string): ParsedLine[] {
-  for (const p of [
+  const p = firstExisting([
     join(sb.dataDir, "data", "transcripts", `${id}.jsonl`),
     join(sb.dataDir, "transcripts", `${id}.jsonl`),
-  ]) {
-    if (!existsSync(p)) continue;
-    return readFileSync(p, "utf8")
-      .split("\n")
-      .filter((l) => l.trim() !== "")
-      .map(parseTranscriptLine);
-  }
-  return [];
+  ]);
+  if (p === null) return [];
+  return readFileSync(p, "utf8")
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map(parseTranscriptLine);
 }
 
 export function ghLog(sb: Sandbox): string[] {
