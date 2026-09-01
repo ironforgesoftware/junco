@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, join as joinPath } from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   lifecycleLabels,
   isEligible,
@@ -11,6 +12,7 @@ import {
   newBridgeState,
   extractPlanBody,
   extractPlanSetBody,
+  extractPatchBody,
   ticketMarkers,
   buildPlanComment,
   buildExecutionTicket,
@@ -27,6 +29,10 @@ import type { Config, GithubRepoMapping } from "../src/types.js";
 import type { CmdResult } from "../src/git.js";
 import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import { OUTBOX_MARKER_PREFIX } from "../src/githubOutbox.js";
+import { submitAsIssue, wrapInFence } from "../src/submitAsIssue.js";
+import { parsePatchSeries } from "../src/patchTicket.js";
+import { makeConfig } from "./helpers/config.js";
+import { cloneHarness, run } from "./helpers/gitHarness.js";
 
 // ticketInFlight (every dispatch path) calls queuePaths(cfg); point bridge
 // configs at a vault dir that does not exist so readdirSync ENOENTs → "absent".
@@ -1375,6 +1381,121 @@ tasks:
       expect(list).toContain("acme/api");
     });
   });
+
+  describe("apply-ticket bridge round trip (2026-08-31)", () => {
+    it("a parked issue carrying a junco-patch fence queues an apply ticket byte-exact", async () => {
+      // 1. Build a REAL git format-patch series (same technique as
+      // tests/applyPatch.test.ts) — never a hand-approximated mbox.
+      const gitRoot = mkdtempSync(joinPath(tmpdir(), "junco-patch-bridge-"));
+      const { work } = cloneHarness(gitRoot);
+      writeFileSync(join(work, "game.js"), "console.log('hi');\n", "utf8");
+      run(["git", "-C", work, "add", "-A"]);
+      run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+      const scratch = mkdtempSync(joinPath(tmpdir(), "junco-patch-bridge-src-"));
+      run(["git", "clone", "-q", work, scratch]);
+      writeFileSync(
+        join(scratch, "game.js"),
+        "console.log('hi');\nconsole.log('level 2');\n",
+        "utf8",
+      );
+      run(["git", "-C", scratch, "add", "-A"]);
+      run(["git", "-C", scratch, "commit", "-q", "-m", "feat: add level 2"]);
+      const raw = execFileSync("git", ["-C", scratch, "format-patch", "-1", "--stdout"], {
+        encoding: "utf8",
+      });
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(gitRoot, { recursive: true, force: true });
+
+      // 2. A local, pre-bridge ticket body carrying the series in a
+      // junco-patch fence — parsed directly with Task 1's real parser as the
+      // reference the round-tripped copy must match byte-for-byte.
+      const ticketBody = "# Apply patch\n\n" + wrapInFence("junco-patch", raw) + "\n";
+      const localSeries = parsePatchSeries(ticketBody);
+      expect(localSeries).not.toBeNull();
+      const ticketMd =
+        `---\nid: apply-x\nrepo: "/sbxroot/repos/acme-api"\npr_title: "Apply patch"\n---\n\n` +
+        ticketBody;
+
+      // 3. Compose the parked issue body through submitAsIssue's REAL writer
+      // path — not hand-assembled — so this test breaks if that writer drifts.
+      const cfgSubmit = makeConfig(
+        {
+          dataDir: "/sbxroot/data",
+          queueRoot: "/sbxroot/queue",
+          worktreeRoot: "/sbxroot/wts",
+          tools: [],
+          criticEnabled: false,
+          planLintEnabled: false,
+          verifyEnabled: false,
+          supervisorEnabled: false,
+          healthEnabled: false,
+          removeWorktreeOnSuccess: false,
+        },
+        {
+          github: {
+            enabled: true,
+            triggerLabel: "junco",
+            askLabel: "junco:ask",
+            pollIntervalSeconds: 60,
+            repos: [{ nwo: "acme/api", path: "/sbxroot/repos/acme-api" }],
+            requireApproval: true,
+            plannerModelId: null,
+            externalReposRoot: "/sbxroot/external",
+          },
+          botAccount: { enabled: true, configDir: "/sbxroot/junco-gh" },
+        },
+      );
+      let capturedBody = "";
+      const submitGhFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
+        if (args[0] === "issue" && args[1] === "create") {
+          const idx = args.indexOf("--body-file");
+          capturedBody = readFileSync(args[idx + 1], "utf8");
+          return { code: 0, stdout: "https://github.com/acme/api/issues/9\n", stderr: "" };
+        }
+        throw new Error(`unhandled: ${args.join(" ")}`);
+      };
+      const code = await submitAsIssue(
+        cfgSubmit,
+        "apply.md",
+        ticketMd,
+        { plan: false },
+        {
+          ghFn: submitGhFn as never,
+          printFn: () => {},
+          errFn: () => {},
+          withBotAuthFn: async (c) => ({
+            ...c,
+            ghAuth: {
+              configDir: "/sbxroot/junco-gh",
+              login: "junco-bot",
+              email: "1+junco-bot@users.noreply.github.com",
+              credentialHelper: "",
+            },
+          }),
+        },
+      );
+      expect(code).toBe(0);
+
+      // 4. Run the labeled-issue sweep with a fake ghFn serving that body and
+      // a submitFn that captures the queued ticket content.
+      const f = makeFakes({
+        issues: [{ ...rawIssue, body: capturedBody }],
+        events: labeledEvent,
+        permission: "write",
+        lastEditedAt: "null",
+      });
+      const n = await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
+      expect(n).toBe(1);
+      expect(f.submitted).toHaveLength(1);
+
+      // 5. Byte-exact round trip: mbox `---` separators and interior fences
+      // included — the bridge needed no changes to carry the series.
+      const queuedSeries = parsePatchSeries(f.submitted[0].content);
+      expect(queuedSeries).not.toBeNull();
+      expect(queuedSeries!.raw).toBe(localSeries!.raw);
+      expect(queuedSeries!.raw).toContain("\n---\n");
+    });
+  });
 });
 
 describe("parseTimeoutMarker / timeoutMarker", () => {
@@ -1449,6 +1570,11 @@ describe("extractPlanBody", () => {
     const out = extractPlanBody(text);
     expect(out).toBe("# Title\n\n## Steps\n- do it");
     expect(out).not.toContain("\r");
+  });
+
+  it("extractPlanBody still strips a smuggled frontmatter block (unchanged)", () => {
+    const body = "```junco-ticket\n---\nrepo: /evil\n---\n# P\n```\n";
+    expect(extractPlanBody(body)).toBe("# P");
   });
 });
 
@@ -1588,6 +1714,15 @@ describe("junco-plan fence (spec 2026-08-20 layer 2)", () => {
     });
     expect(c).not.toBeNull();
     expect(extractPlanSetBody(c as string)).toBe("version: 1\ntasks: []");
+  });
+});
+
+describe("junco-patch fence (apply tickets, spec 2026-08-31)", () => {
+  it("extractPatchBody reads a junco-patch fence and leaves the mbox intact", () => {
+    const body = "pre\n\n````junco-patch\nFrom abc Mon Sep 17 00:00:00 2001\n---\n diff\n````\n";
+    const got = extractPatchBody(body);
+    expect(got).toContain("From abc");
+    expect(got).toContain("\n---\n");
   });
 });
 

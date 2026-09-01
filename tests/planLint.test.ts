@@ -810,6 +810,166 @@ describe("github_request_scope", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Apply tickets (junco-patch fence): prose rules skipped, patch_* rules run
+// ---------------------------------------------------------------------------
+
+describe("apply tickets", () => {
+  // Mirrors tests/patchTicket.test.ts's ONE/fence fixtures: a minimal
+  // one-patch git format-patch series wrapped in a junco-patch fence.
+  const ONE_PATCH = `From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001
+From: Dispatcher <d@example.com>
+Date: Sun, 31 Aug 2026 12:00:00 -0700
+Subject: [PATCH 1/1] feat: add a level
+
+---
+ game.js | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/game.js b/game.js
+index 1111111..2222222 100644
+--- a/game.js
++++ b/game.js
+@@ -1,2 +1,3 @@
+ const LEVELS = [
++  "new",
+ ];
+`;
+
+  const fence = (body: string, tag = "junco-patch"): string =>
+    `## Why\n\nbecause\n\n\`\`\`\`${tag}\n${body}\`\`\`\`\n\n## Verification\n\n\`\`\`bash\nnode --check game.js\n\`\`\`\n`;
+
+  const patchBody = fence(ONE_PATCH);
+
+  it("skips the prose rules for a patch ticket", () => {
+    const r = lintTicket(patchBody, {}, { checkLabels: false });
+    const rules = r.violations.map((v) => v.rule);
+    expect(rules).not.toContain("steps_have_commits");
+    expect(rules).not.toContain("files_table_referenced");
+    expect(r.ok).toBe(true);
+  });
+
+  it("errors on a junco-patch fence that is not a well-formed series", () => {
+    // Prose-shaped ON PURPOSE: a Files table and a commit-less Step would both
+    // trip the prose rules if the mode gate keyed on "the series PARSES"
+    // instead of "a patch fence is PRESENT". A malformed series must report
+    // exactly one thing — patch_parses — not a pile of irrelevant prose
+    // errors, so this fixture is what makes the gate's condition observable.
+    const bad = [
+      "## Why",
+      "",
+      "x",
+      "",
+      "## Files",
+      "",
+      "| `src/a.ts` | modify |",
+      "| --- | --- |",
+      "",
+      "### Step 1: do a thing",
+      "",
+      "no commit here",
+      "",
+      "```junco-patch",
+      "not a patch",
+      "```",
+      "",
+    ].join("\n");
+    const r = lintTicket(bad, {}, { checkLabels: false });
+    const rules = r.violations.map((v) => v.rule);
+    expect(rules).toContain("patch_parses");
+    expect(rules).not.toContain("steps_have_commits");
+    expect(rules).not.toContain("files_table_referenced");
+    expect(r.ok).toBe(false);
+  });
+
+  it("errors on traversal paths and on a binary hunk", () => {
+    // Case 1: a diff --git line naming a path outside the repo.
+    const traversal = `From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001
+From: Dispatcher <d@example.com>
+Date: Sun, 31 Aug 2026 12:00:00 -0700
+Subject: [PATCH 1/1] evil
+
+---
+ ../../etc/passwd | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/../../etc/passwd b/../../etc/passwd
+index 1111111..2222222 100644
+--- a/../../etc/passwd
++++ b/../../etc/passwd
+@@ -1,2 +1,3 @@
+ root:x:0:0
++evil
+`;
+    const rTraversal = lintTicket(fence(traversal), {}, { checkLabels: false });
+    expect(rTraversal.violations.map((v) => v.rule)).toContain("patch_paths_sane");
+    expect(rTraversal.ok).toBe(false);
+
+    // Case 2: a diff --git hunk that's binary — bytes no reviewer can read.
+    const binary = `From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001
+From: Dispatcher <d@example.com>
+Date: Sun, 31 Aug 2026 12:00:00 -0700
+Subject: [PATCH 1/1] add binary
+
+---
+ image.png | Bin 0 -> 100 bytes
+ 1 file changed, 0 insertions(+), 0 deletions(-)
+
+diff --git a/image.png b/image.png
+new file mode 100644
+index 0000000..1111111
+GIT binary patch
+literal 100
+zcmZQzWMZQ
+`;
+    const rBinary = lintTicket(fence(binary), {}, { checkLabels: false });
+    expect(rBinary.violations.map((v) => v.rule)).toContain("patch_paths_sane");
+    expect(rBinary.ok).toBe(false);
+  });
+
+  it("warns when an apply ticket has no Verification block", () => {
+    const noVerify = `## Why\n\nbecause\n\n\`\`\`\`junco-patch\n${ONE_PATCH}\`\`\`\`\n`;
+    const r = lintTicket(noVerify, {}, { checkLabels: false });
+    const v = r.violations.find((x) => x.rule === "patch_has_verification");
+    expect(v?.severity).toBe("warning");
+    expect(r.ok).toBe(true);
+  });
+
+  it("still applies no_forbidden_phrases to a patch ticket's own PROSE", () => {
+    const tbd = `## Why\n\nTBD\n\n\`\`\`\`junco-patch\n${ONE_PATCH}\`\`\`\`\n\n## Verification\n\n\`\`\`bash\nnode --check game.js\n\`\`\`\n`;
+    expect(lintTicket(tbd, {}, { checkLabels: false }).violations.map((v) => v.rule)).toContain(
+      "no_forbidden_phrases",
+    );
+  });
+
+  it("does not mis-fire no_forbidden_phrases on a diff hunk that merely ADDS a forbidden-looking word", () => {
+    // Reproduces the reviewer's finding: a patch adding `+TBD: finish the
+    // docs later` to a README used to fail the ticket even though there is
+    // no agent, no looping, and no unfilled prose placeholder — the bytes
+    // are byte-exact by construction.
+    const tbdInDiff = `From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001
+From: Dispatcher <d@example.com>
+Date: Sun, 31 Aug 2026 12:00:00 -0700
+Subject: [PATCH 1/1] docs: add TODO marker
+
+---
+ README.md | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,3 @@
+ # Title
++TBD: finish the docs later
+`;
+    const r = lintTicket(fence(tbdInDiff), {}, { checkLabels: false });
+    expect(r.violations.map((v) => v.rule)).not.toContain("no_forbidden_phrases");
+    expect(r.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Full valid ticket integration test
 // ---------------------------------------------------------------------------
 

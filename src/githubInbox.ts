@@ -209,23 +209,19 @@ function longestBacktickRun(text: string): number {
   return max;
 }
 
-/** Pull the LAST complete ```<fenceTag> block out of `text` (planner finalText
- * or a plan comment — same format both places). Fence-length-aware CommonMark
- * matching: an opening fence of N backticks is closed by the first later line
- * that is a run of >= N backticks with no info text, so a plan that itself
- * contains a ```bash block (the template mandates one) does not truncate at
- * the inner fence. Any frontmatter block inside the fence is stripped:
- * frontmatter is machine-owned, model output and issue text can never set
- * repo:/workdir:/tools:. Null = no usable (complete) block. Shared by the
- * single-ticket (junco-ticket) and plan-set (junco-plan) extractors. */
-function extractFencedBlock(text: string, fenceTag: string): string | null {
-  // Normalize CRLF (and lone CR) to LF first: editing the plan comment in
-  // GitHub's web UI yields CRLF, and the fence match survives only via
-  // incidental `\s*` tolerance while interior `\r` would otherwise leak
-  // verbatim into the execution ticket and PR body (#134).
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+/** Line-range [openFenceIdx, closeFenceIdx] (inclusive, into `lines`) of the
+ * LAST complete ```<fenceTag> block, fence-length-aware CommonMark matching:
+ * an opening fence of N backticks is closed by the first later line that is a
+ * run of >= N backticks with no info text, so a plan that itself contains a
+ * ```bash block (the template mandates one) does not truncate at the inner
+ * fence. Null = no complete block of that tag. Shared range-finder behind
+ * both extractFencedBlock (content) and replaceFencedBlock (splice). */
+function lastFencedBlockRange(
+  lines: string[],
+  fenceTag: string,
+): { open: number; close: number } | null {
   const openRe = new RegExp("^(`{3,})" + fenceTag + "\\s*$");
-  let last: string | null = null;
+  let last: { open: number; close: number } | null = null;
   for (let i = 0; i < lines.length; i++) {
     const m = openRe.exec(lines[i]);
     if (!m) continue;
@@ -239,12 +235,51 @@ function extractFencedBlock(text: string, fenceTag: string): string | null {
       }
     }
     if (close === -1) continue; // no closer → not a complete block; ignore
-    last = lines.slice(i + 1, close).join("\n");
+    last = { open: i, close };
     i = close; // resume scanning after this block's closer
   }
-  if (last === null) return null;
-  const stripped = last.replace(SMUGGLED_FRONTMATTER_RE, "").trim();
+  return last;
+}
+
+/** Pull the LAST complete ```<fenceTag> block out of `text` (planner finalText
+ * or a plan comment — same format both places). Any frontmatter block inside
+ * the fence is stripped: frontmatter is machine-owned, model output and issue
+ * text can never set repo:/workdir:/tools:. Null = no usable (complete)
+ * block. Shared by the single-ticket (junco-ticket), plan-set (junco-plan),
+ * and patch-series (junco-patch) extractors — the last opts out of the
+ * frontmatter strip via `opts.stripFrontmatter: false` (see
+ * extractPatchBody). Defaults preserve today's behavior byte-for-byte for the
+ * two existing callers. */
+function extractFencedBlock(
+  text: string,
+  fenceTag: string,
+  opts: { stripFrontmatter?: boolean } = {},
+): string | null {
+  const { stripFrontmatter = true } = opts;
+  // Normalize CRLF (and lone CR) to LF first: editing the plan comment in
+  // GitHub's web UI yields CRLF, and the fence match survives only via
+  // incidental `\s*` tolerance while interior `\r` would otherwise leak
+  // verbatim into the execution ticket and PR body (#134).
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const range = lastFencedBlockRange(lines, fenceTag);
+  if (range === null) return null;
+  const last = lines.slice(range.open + 1, range.close).join("\n");
+  const stripped = (stripFrontmatter ? last.replace(SMUGGLED_FRONTMATTER_RE, "") : last).trim();
   return stripped === "" ? null : stripped;
+}
+
+/** Replace the LAST complete ```<fenceTag> fenced block (both delimiter lines
+ * plus everything between) with a single `replacement` line, leaving the rest
+ * of `text` — including any prose before or after the fence — untouched.
+ * Returns `text` unchanged when no complete block of that tag exists. Used to
+ * keep an apply ticket's mbox series out of a PR body / prose scan without
+ * dropping the ticket's own Why/Verification sections (buildPrBody,
+ * derivePrTitle, no_forbidden_phrases — see patchTicket.ts). */
+export function replaceFencedBlock(text: string, fenceTag: string, replacement: string): string {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const range = lastFencedBlockRange(lines, fenceTag);
+  if (range === null) return text;
+  return [...lines.slice(0, range.open), replacement, ...lines.slice(range.close + 1)].join("\n");
 }
 
 /** Invisible delimiters for a parked `--as-issue` ticket body (#329). The
@@ -345,6 +380,16 @@ export function extractPlanBody(text: string): string | null {
  * plan set. */
 export function extractPlanSetBody(text: string): string | null {
   return extractFencedBlock(text, PLAN_SET_FENCE);
+}
+
+/** Fence tag for an apply ticket's `git format-patch` mbox series. */
+export const PATCH_FENCE = "junco-patch";
+
+/** Pull the mbox series out of the LAST ```junco-patch fence. Unlike the plan
+ * extractors this does NOT strip a leading frontmatter block: an mbox contains
+ * `---` diffstat separators, and the series must reach `git am` byte-exact. */
+export function extractPatchBody(text: string): string | null {
+  return extractFencedBlock(text, PATCH_FENCE, { stripFrontmatter: false });
 }
 
 /** Render the ONE plan comment: marker (machine-recoverable) + instructions +

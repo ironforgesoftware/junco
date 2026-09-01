@@ -8,11 +8,12 @@
  *   - commitLeftovers    — git add -A + git commit (gpgsign off, allow-empty-message)
  *   - pushBranch         — git push --set-upstream <remote> <branch> (remote defaults to origin)
  *   - openPullRequest    — gh pr create + URL extraction (--head <fork-owner>:<branch> for forks)
- *   - derivePrTitle      — ctx.prTitle → first H1 → task.id
+ *   - derivePrTitle      — ctx.prTitle → (apply tickets: mbox Subject) → first H1 → task.id
  */
 
 import { git, gh, GitOpError } from "./git.js";
 import type { RepoContext } from "./repoContext.js";
+import { parsePatchSeries, stripPatchFence, firstPatchSubject } from "./patchTicket.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -221,14 +222,34 @@ export async function openPullRequest(
 // derivePrTitle
 // ---------------------------------------------------------------------------
 
+/** First line starting with "# " (trimmed) in `body`, or `id` when the
+ * heading text is empty after trimming or no such line exists. */
+function firstH1OrId(body: string, id: string): string {
+  for (const line of body.split("\n")) {
+    const s = line.trim();
+    if (s.startsWith("# ")) {
+      return s.slice(2).trim() || id;
+    }
+  }
+  return id;
+}
+
 /**
- * Port of worker.py `derive_pr_title` (lines 2073-2081).
+ * Port of worker.py `derive_pr_title` (lines 2073-2081), extended for apply
+ * tickets (spec 2026-08-31-apply-tickets-design.md): a body carrying a
+ * `junco-patch` fence must never have its title scraped from arbitrary diff
+ * content — a unified-diff CONTEXT line (` # Heading`) trims to `# Heading`
+ * and would otherwise be mistaken for a real H1.
  *
  * Priority:
  *   1. ctx.prTitle if set (non-null)
- *   2. Text after "# " from the first line in task.body that starts with "# "
- *      (trimmed); if that text is empty → task.id
- *   3. task.id
+ *   2. Apply tickets only: the series' first mbox `Subject:` line (any
+ *      `[PATCH n/m]` prefix stripped) — the natural title, since it's what
+ *      `git am` will actually commit.
+ *   3. Text after "# " from the first line that starts with "# " (trimmed) —
+ *      scanned OUTSIDE the patch fence for apply tickets, anywhere in the
+ *      body otherwise; if that text is empty → task.id
+ *   4. task.id
  */
 export function derivePrTitle(
   ctx: Pick<RepoContext, "prTitle">,
@@ -238,12 +259,10 @@ export function derivePrTitle(
     return ctx.prTitle;
   }
 
-  for (const line of task.body.split("\n")) {
-    const s = line.trim();
-    if (s.startsWith("# ")) {
-      return s.slice(2).trim() || task.id;
-    }
+  const series = parsePatchSeries(task.body);
+  if (series !== null) {
+    return firstPatchSubject(series) ?? firstH1OrId(stripPatchFence(task.body), task.id);
   }
 
-  return task.id;
+  return firstH1OrId(task.body, task.id);
 }

@@ -8,20 +8,44 @@
  * with a `phase_error` like `plan-lint: no_cd_in_verification: ...` — they
  * never reach the agent. Warnings are logged but do not block.
  *
+ * Mode gate: a body carrying a `junco-patch` fence (`extractPatchBody(body)
+ * !== null`) is an apply ticket — it has no Steps/Files sections to check, so
+ * the prose rules below (steps_have_commits, files_table_referenced,
+ * files_paths_exist, no_cd_in_steps) are skipped and the patch_* rules run
+ * instead. Every other rule (shared rules) still runs for both modes, but
+ * no_forbidden_phrases scans the fenced mbox OUT for an apply ticket (see its
+ * own note below) — the diff/commit-message bytes are not agent instructions.
+ *
  * Rules enforced:
- * - no_cd_in_verification: no `cd ` lines inside ## Verification fenced bash
- * - steps_have_commits:    every ### Step N block has at least one `git commit`
- * - files_table_referenced: every path in the Files table appears in a Step body
- * - files_paths_exist:     filesystem-aware Files-table path validation
- * - no_forbidden_phrases:  no TBD / "Similar to Step N" / "think carefully" / etc.
- * - no_cd_in_steps (warn): no absolute `cd /Users/...` in Step bodies
- * - github_request_scope (warn): github_request rides a ticket the worker will actually fulfill
- * - labels_exist:          frontmatter `labels:` exist on the GitHub repo
+ * - no_cd_in_verification: no `cd ` lines inside ## Verification fenced bash [shared]
+ * - steps_have_commits:    every ### Step N block has at least one `git commit` [prose only]
+ * - files_table_referenced: every path in the Files table appears in a Step body [prose only]
+ * - files_paths_exist:     filesystem-aware Files-table path validation [prose only]
+ * - patch_parses:          `junco-patch` fence must be a well-formed `git format-patch`
+ *                          series (mbox header + `diff --git` hunk, under MAX_PATCH_BYTES)
+ *                          [apply only]
+ * - patch_paths_sane:      patch series must not touch traversal/absolute paths or carry
+ *                          a binary hunk [apply only]
+ * - patch_has_verification (warn): apply ticket should still carry a ## Verification block
+ *                          [apply only]
+ * - no_forbidden_phrases:  no TBD / "Similar to Step N" / "think carefully" / etc. [shared;
+ *                          apply tickets scan PROSE only — the fenced mbox is excluded]
+ * - no_cd_in_steps (warn): no absolute `cd /Users/...` in Step bodies [prose only]
+ * - github_request_scope (warn): github_request rides a ticket the worker will actually fulfill [shared]
+ * - labels_exist:          frontmatter `labels:` exist on the GitHub repo [shared]
  */
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { extractPatchBody } from "./githubInbox.js";
+import {
+  parsePatchSeries,
+  unsafePatchPaths,
+  hasBinaryHunk,
+  MAX_PATCH_BYTES,
+  stripPatchFence,
+} from "./patchTicket.js";
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -314,6 +338,10 @@ function checkNoForbiddenPhrases(body: string): LintViolation[] {
    *
    * Skips matches inside the body of the strict "Notes for the agent" block,
    * where words like "carefully" may legitimately appear in copy-verbatim text.
+   *
+   * `body` is already the fence-stripped prose for an apply ticket (the
+   * caller, lintTicket, does the stripping) — this function itself has no
+   * notion of apply mode and just scans whatever text it is handed.
    */
   const notesIdx = body.indexOf("## Notes for the agent");
   const scanTarget = notesIdx < 0 ? body : body.slice(0, notesIdx);
@@ -356,6 +384,60 @@ function checkNoCdInSteps(body: string): LintViolation[] {
           "This habit often bleeds into the Verification block.",
       });
     }
+  }
+  return violations;
+}
+
+/**
+ * Apply-ticket checks: run only when the body carries a `junco-patch` fence.
+ *
+ * Mode detection uses `extractPatchBody(body) !== null` (fence PRESENT), not
+ * `parsePatchSeries(body) !== null` (fence present AND well-formed) — a
+ * malformed fence must still be routed here so `patch_parses` can ERROR on
+ * it. Gating on parsePatchSeries would let a broken series silently fall
+ * back to the prose rules and report confusing, unrelated errors instead.
+ */
+function checkPatchSeries(body: string): LintViolation[] {
+  const raw = extractPatchBody(body);
+  if (raw === null) return []; // not an apply ticket
+
+  const violations: LintViolation[] = [];
+  const series = parsePatchSeries(body);
+  if (series === null) {
+    violations.push({
+      rule: "patch_parses",
+      severity: "error",
+      message:
+        "the `junco-patch` fence is not a well-formed `git format-patch` series (needs an mbox " +
+        "`From <sha> …` header and at least one `diff --git` hunk, under " +
+        `${Math.round(MAX_PATCH_BYTES / 1024)} KB)`,
+    });
+    return violations;
+  }
+
+  const unsafe = unsafePatchPaths(series.files);
+  if (unsafe.length > 0) {
+    violations.push({
+      rule: "patch_paths_sane",
+      severity: "error",
+      message: `patch touches paths outside the repo: ${JSON.stringify(unsafe)}`,
+    });
+  }
+  if (hasBinaryHunk(series.raw)) {
+    violations.push({
+      rule: "patch_paths_sane",
+      severity: "error",
+      message: "patch contains a binary hunk — bytes no reviewer can read in the issue",
+    });
+  }
+  if (_section(body, "Verification") === null) {
+    violations.push({
+      rule: "patch_has_verification",
+      severity: "warning",
+      message:
+        "apply ticket has no `## Verification` block — the series will land unverified " +
+        "(verification is the only execution-time check in apply mode)",
+    });
   }
   return violations;
 }
@@ -614,13 +696,22 @@ export function lintTicket(
    */
   const { repoNwo, repoPath, checkLabels = true, labelCache, fetchLabels, ghBin, ghEnv } = opts;
 
+  const isApply = extractPatchBody(body) !== null;
   const violations: LintViolation[] = [];
   violations.push(...checkNoCdInVerification(body));
-  violations.push(...checkStepsHaveCommits(body));
-  violations.push(...checkFilesTableReferenced(body));
-  violations.push(...checkFilesPathsExist(body, repoPath));
-  violations.push(...checkNoForbiddenPhrases(body));
-  violations.push(...checkNoCdInSteps(body));
+  if (!isApply) {
+    violations.push(...checkStepsHaveCommits(body));
+    violations.push(...checkFilesTableReferenced(body));
+    violations.push(...checkFilesPathsExist(body, repoPath));
+    violations.push(...checkNoCdInSteps(body));
+  }
+  violations.push(...checkPatchSeries(body));
+  // Apply tickets: scan PROSE only — the fenced mbox is the diff/commit
+  // messages a dispatcher generated, not instructions to an agent, and its
+  // content is byte-exact by construction. Scanning it whole means a patch
+  // that merely ADDS a word like "TBD" (a TODO comment, doc prose) fails a
+  // ticket with no agent and no looping risk at all.
+  violations.push(...checkNoForbiddenPhrases(isApply ? stripPatchFence(body) : body));
   violations.push(...checkGithubRequestScope(frontmatter));
   if (checkLabels) {
     violations.push(
