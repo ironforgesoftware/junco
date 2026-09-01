@@ -626,6 +626,65 @@ describe("flushOutbox", () => {
     expect(r.sent).toBe(1);
   });
 
+  it.each([
+    ["empty", ""],
+    ["literal null", "null\n"],
+  ])(
+    "pr create 'already exists' with %s pr view output fails the op retryably instead of persisting it (#348)",
+    async (_label, viewStdout) => {
+      const root = mkdtempSync(join(tmpdir(), "junco-obx-f6-nourl-"));
+      const cfg = {
+        dataDir: root,
+        queueRoot: root,
+        github: { triggerLabel: "junco" },
+      } as unknown as Config;
+      const doneDir = join(root, "done");
+      mkdirSync(doneDir, { recursive: true });
+      const donePath = join(doneDir, "t3.md");
+      const doneBefore =
+        "---\nid: t3\n---\nBody\n\n---\n<!-- junco-result\nstatus: completed\npushed: true\npr_queued: true\n-->\n";
+      writeFileSync(donePath, doneBefore);
+      enqueueOp(cfg, "prflow", {
+        kind: "pr",
+        repoPath: "/repo",
+        branch: "junco/t3",
+        nwo: "a/b",
+        issue: 9,
+        base: "main",
+        title: "t",
+        bodyText: "b",
+        draft: false,
+        labels: [],
+        reviewers: [],
+        finalize: { ticketId: "gh-a-b-9", status: "completed", finalText: "did the thing" },
+        ticketId: "t3",
+        pushed: true,
+        prUrl: null,
+      });
+      // `gh pr view … --jq .url` exits 0 with nothing useful on stdout: the
+      // create path already rejects this shape; the recovery path must too.
+      const f = fakes((_tool, args) => {
+        if (args[0] === "pr" && args[1] === "create")
+          throw new GitOpError("gh failed", "a pull request for branch already exists", 1);
+        if (args[0] === "pr" && args[1] === "view") return { stdout: viewStdout };
+        if (args[0] === "api" && args[1] === "user") return { stdout: "junco-bot\n" };
+        return undefined;
+      });
+      const r = await flushOutbox(cfg, { ghFn: f.ghFn, gitFn: f.gitFn });
+      expect(r).toMatchObject({ sent: 0, dead: 0, remaining: 1, offline: false });
+      // Nothing durable was written from the bogus value …
+      expect(readFileSync(donePath, "utf8")).toBe(doneBefore);
+      expect(f.calls.some((c) => c.args[0] === "issue" && c.args[1] === "comment")).toBe(false);
+      expect(f.calls.some((c) => c.args[0] === "issue" && c.args[1] === "edit")).toBe(false);
+      // … and the op is still queued with prUrl unset, so the next flush retries
+      // the create/view from scratch rather than resuming from "".
+      const [stored] = listOps(cfg);
+      expect(stored.attempts).toBe(1);
+      expect(stored.lastError).toMatch(/gh pr view returned no URL/);
+      expect(stored.op).toMatchObject({ kind: "pr", prUrl: null });
+    },
+  );
+
   it("replays a push op against its remote", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-obx-remote1-"));
     const cfg = cfgAt(root);
