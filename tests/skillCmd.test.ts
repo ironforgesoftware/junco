@@ -129,6 +129,31 @@ describe("runSkillInstallCommand", () => {
     ]);
   });
 
+  // #349: this was the one config writer that skipped validateConfigObject —
+  // `--harness` on a config already schema-invalid in some unrelated field
+  // persisted it anyway (and only loadConfig, AFTER the write, blew up).
+  // Every writer now goes through updateConfigFile: invalid → one-line
+  // message, exit 1, nothing written, nothing ensured.
+  it("refuses to persist a config that is schema-invalid in an unrelated field (validation runs before the write)", async () => {
+    let ensured = 0;
+    const h = harness({ worker: { maxConcurrent: 0 } }); // JSON-valid, schema-invalid
+    h.deps.ensureFn = () => {
+      ensured++;
+      return { entries: [] };
+    };
+    const code = await runSkillInstallCommand(
+      "/sbxroot/config.json",
+      { harness: ["claude"] },
+      h.deps,
+    );
+    expect(code).toBe(1);
+    expect(Object.keys(h.writes)).toEqual([]);
+    expect(h.renamedRef()).toBeNull();
+    expect(ensured).toBe(0);
+    expect(h.out.join("")).toContain("junco skill install: config invalid — not modified");
+    expect(h.out.join("")).not.toMatch(/configured:/);
+  });
+
   it("unknown name: usage error, nothing written or ensured", async () => {
     let ensured = 0;
     const h = harness({});
