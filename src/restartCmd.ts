@@ -13,6 +13,14 @@
  * is NOT respawned after a graceful SIGTERM, so plain kill leaves the daemon
  * down. `launchctl kickstart -k` (and `systemctl --user restart`) relaunch
  * unconditionally while still giving the daemon its TERM-first drain window.
+ *
+ * Checkout preflight (#384): a checkout-backed install (the global binstub
+ * symlinked into a git checkout instead of an npm artifact) relaunches whatever
+ * `dist/` was last built there — a build from a feature branch or a dirty tree
+ * changes live daemon behaviour with no version bump and no CI in between. So
+ * when the running dist resolves inside a git checkout, the restart is refused
+ * unless the tree is clean and HEAD is origin/main; `--force` overrides. An npm
+ * install (no `.git` beside `dist/`) is untouched.
  */
 
 import { execFile } from "node:child_process";
@@ -20,6 +28,7 @@ import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { readLockHolder, workerLockPath } from "./lock.js";
+import { PACKAGE_ROOT } from "./packageRoot.js";
 
 export interface ServiceRef {
   platform: "launchd" | "systemd";
@@ -39,6 +48,72 @@ export interface RestartDeps {
   sleepFn?: (ms: number) => Promise<void>;
   printFn?: (s: string) => void;
   timeoutMs?: number;
+  /** The dir the running dist lives under (default PACKAGE_ROOT) — the
+   * checkout preflight inspects its git state. */
+  packageRoot?: string;
+}
+
+export interface RestartOptions {
+  /** Restart even when the checkout preflight would refuse (warns instead). */
+  force?: boolean;
+}
+
+/** The git state of the checkout the running dist resolves inside. */
+export interface CheckoutState {
+  root: string;
+  /** `git status --porcelain` lines; empty when clean. */
+  dirty: string[];
+  head: string;
+  /** `rev-parse --abbrev-ref HEAD` — "HEAD" when detached. */
+  branch: string;
+  /** null when the ref does not exist — the guard treats that as a mismatch,
+   * since the code cannot be shown to have gone through main's gate. */
+  originMain: string | null;
+}
+
+/**
+ * Null when the dist is not checkout-backed: no `.git` entry beside it (an npm
+ * artifact — also a package nested under some other repo's node_modules), or
+ * git itself cannot answer (missing binary, unreadable repo). A checkout that
+ * cannot be inspected is never refused; the preflight is a backstop.
+ */
+export async function inspectCheckout(deps: RestartDeps = {}): Promise<CheckoutState | null> {
+  const root = deps.packageRoot ?? PACKAGE_ROOT;
+  if (!(deps.readdirFn ?? defaultReaddir)(root).includes(".git")) return null;
+  const execFn = deps.execFn ?? defaultExec;
+  const git = (...args: string[]) => execFn("git", ["-C", root, ...args]);
+  const status = await git("status", "--porcelain");
+  if (status.code !== 0) return null;
+  const head = await git("rev-parse", "HEAD");
+  if (head.code !== 0) return null;
+  const branch = await git("rev-parse", "--abbrev-ref", "HEAD");
+  const originMain = await git("rev-parse", "origin/main");
+  return {
+    root,
+    dirty: status.stdout.split("\n").filter((l) => l.length > 0),
+    head: head.stdout.trim(),
+    branch: branch.code === 0 ? branch.stdout.trim() : "HEAD",
+    originMain: originMain.code === 0 ? originMain.stdout.trim() : null,
+  };
+}
+
+const DIRTY_LINES_SHOWN = 10;
+
+/** What differs from a clean origin/main — empty when nothing does. */
+function checkoutDifferences(state: CheckoutState): string[] {
+  const lines: string[] = [];
+  if (state.originMain === null) {
+    lines.push(`  HEAD:  ${state.branch} @ ${state.head} (origin/main: no such ref)`);
+  } else if (state.head !== state.originMain) {
+    lines.push(`  HEAD:  ${state.branch} @ ${state.head} (origin/main @ ${state.originMain})`);
+  }
+  if (state.dirty.length > 0) {
+    lines.push(`  dirty: ${state.dirty.length} path${state.dirty.length === 1 ? "" : "s"}`);
+    for (const l of state.dirty.slice(0, DIRTY_LINES_SHOWN)) lines.push(`    ${l}`);
+    const rest = state.dirty.length - DIRTY_LINES_SHOWN;
+    if (rest > 0) lines.push(`    … and ${rest} more`);
+  }
+  return lines;
 }
 
 function defaultExec(
@@ -165,12 +240,37 @@ export function kickstartService(
 export async function runRestartCommand(
   configPath: string,
   deps: RestartDeps = {},
+  opts: RestartOptions = {},
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const lockHolderFn = deps.lockHolderFn ?? readLockHolder;
   const sleepFn = deps.sleepFn ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const timeoutMs = deps.timeoutMs ?? 15_000;
   const lockPath = workerLockPath(configPath);
+
+  // Checkout preflight first: a refusal must touch nothing (no unit scan, no
+  // kick) — the daemon keeps running the code it already has.
+  const checkout = await inspectCheckout(deps);
+  const differences = checkout ? checkoutDifferences(checkout) : [];
+  if (checkout && differences.length > 0) {
+    if (!opts.force) {
+      print(
+        "not restarting: the running dist is built from a git checkout that is not a clean origin/main —\n" +
+          "the daemon would relaunch on code that has not been through main's quality gate.\n" +
+          `  checkout: ${checkout.root}\n` +
+          differences.join("\n") +
+          "\n" +
+          "Park the checkout on origin/main (feature work belongs in a worktree) and rebuild,\n" +
+          "or pass --force to restart on it anyway.\n",
+      );
+      return 1;
+    }
+    print(
+      "warning: restarting from a checkout that is not a clean origin/main (--force):\n" +
+        differences.join("\n") +
+        "\n",
+    );
+  }
 
   // Thread the DEFAULTED print fn down — discoverService's multi-match warn
   // must reach stdout even when the caller (the CLI) injects no printFn.

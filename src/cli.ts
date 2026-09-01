@@ -173,8 +173,9 @@ export interface CliDeps {
    * the dashboard hosts the setup walkthrough). */
   runDashboardFn?: (cfg: Config | null, configPath: string) => Promise<number>;
   /** The restart command (takes the RESOLVED config path — it matches service
-   * units and the worker.lock by path, not by parsed config). */
-  runRestartFn?: (configPath: string) => Promise<number>;
+   * units and the worker.lock by path, not by parsed config). `force` skips
+   * the checkout preflight (restartCmd.ts, #384). */
+  runRestartFn?: (configPath: string, opts: { force: boolean }) => Promise<number>;
   /** Injected by tests: the dispatch core (default lazily used from externalDispatch.js). */
   dispatchIssueFn?: typeof import("./externalDispatch.js").dispatchIssue;
   /** Injected by tests: the outbox list/flush core (default lazily from outboxCmd.js).
@@ -294,7 +295,8 @@ Subcommands:
   auth login | auth grant <owner/repo>   Bot-account login / grant the bot write access to a repo
   logs [-f] [-n N] [--json|--human]  Show (or follow) the worker log
   dashboard    Interactive dashboard — first run opens the guided setup walkthrough
-  restart      Restart the supervised daemon (picks up config + code changes)
+  restart [--force]  Restart the supervised daemon (picks up config + code changes);
+                  a checkout-backed install must be clean origin/main unless --force
   update       Update junco to the latest npm release (drains, then restarts the daemon)
   worktree prune <path>  Prune a stale/backup worktree (lock-guarded; refuses live)
   submit <file|-> Submit a ticket to the inbox (use - to read from stdin)
@@ -1341,8 +1343,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     }
     const runRestartFn =
       deps.runRestartFn ??
-      (async (p: string) => (await import("./restartCmd.js")).runRestartCommand(p));
-    return runRestartFn(configPath);
+      (async (p: string, o: { force: boolean }) =>
+        (await import("./restartCmd.js")).runRestartCommand(p, {}, o));
+    return runRestartFn(configPath, { force: values.force as boolean });
   }
 
   // ------------------------------------------------------------

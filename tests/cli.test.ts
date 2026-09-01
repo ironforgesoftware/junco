@@ -2993,6 +2993,22 @@ describe("run(['restart']) — routing", () => {
     expect(gotPath).toBe(join("/x", ".junco", "config.json"));
   });
 
+  it("`--force` reaches runRestartFn as {force: true}; a plain restart as {force: false} (#384)", async () => {
+    const { cfg } = freshDispatchVault();
+    const seen: boolean[] = [];
+    const deps = {
+      env: { HOME: "/x" },
+      loadConfigFn: () => cfg,
+      runRestartFn: async (_p: string, opts: { force: boolean }) => {
+        seen.push(opts.force);
+        return 0;
+      },
+    };
+    expect(await run(["restart", "--force"], deps)).toBe(0);
+    expect(await run(["restart"], deps)).toBe(0);
+    expect(seen).toEqual([true, false]);
+  });
+
   it("a broken config aborts before the restart fn runs", async () => {
     let ran = false;
     const code = await run(["restart"], {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   discoverService,
+  inspectCheckout,
   kickstartService,
   runRestartCommand,
   type RestartDeps,
@@ -10,9 +11,22 @@ import { join, isAbsolute } from "node:path";
 import { workerLockPath } from "../src/lock.js";
 
 const CONFIG = "/Users/u/junco/config.json";
+/** Where the running dist "lives" — a git checkout when `checkout` is scripted,
+ * a plain npm package dir otherwise. */
+const PKG = "/sbx/pkg";
 
 type Exec = { code: number; stdout: string; stderr: string };
 const ok = (stdout: string): Exec => ({ code: 0, stdout, stderr: "" });
+
+/** The git state of the checkout the dist resolves inside; `originMain: null`
+ * models a checkout with no `origin/main` ref, `gitMissing` a host without git. */
+interface FakeCheckout {
+  dirty?: string[]; // `git status --porcelain` lines
+  head?: string;
+  branch?: string;
+  originMain?: string | null;
+  gitMissing?: boolean;
+}
 
 /** Fake launchd host: a LaunchAgents dir with named plists whose plutil-JSON
  * we script per filename; launchctl/systemctl calls are recorded. */
@@ -23,17 +37,41 @@ function makeFakes(opts: {
   platform?: NodeJS.Platform;
   kickFails?: boolean;
   restartBlocks?: boolean; // model a BLOCKING `systemctl restart` (no --no-block)
+  checkout?: FakeCheckout; // absent → the dist is an npm install (no `.git` beside it)
 }) {
   const calls: string[][] = [];
   const prints: string[] = [];
   const lockSeq = [...(opts.lockPids ?? [])];
+  const co = opts.checkout;
   const deps: RestartDeps = {
     platform: opts.platform ?? "darwin",
     uid: 501,
     homedirFn: () => "/Users/u",
-    readdirFn: () => Object.keys(opts.plists ?? {}),
+    packageRoot: PKG,
+    readdirFn: (dir) =>
+      dir === PKG
+        ? co
+          ? [".git", "dist", "package.json"]
+          : ["dist", "package.json"]
+        : Object.keys(opts.plists ?? {}),
     execFn: async (cmd, args) => {
       calls.push([cmd, ...args]);
+      if (cmd === "git") {
+        if (co?.gitMissing) return { code: 127, stdout: "", stderr: "" };
+        expect(args.slice(0, 2)).toEqual(["-C", PKG]);
+        const sub = args.slice(2).join(" ");
+        if (sub === "status --porcelain")
+          return ok((co?.dirty ?? []).map((l) => `${l}\n`).join(""));
+        if (sub === "rev-parse --abbrev-ref HEAD") return ok(`${co?.branch ?? "main"}\n`);
+        if (sub === "rev-parse HEAD") return ok(`${co?.head ?? "aaaaaaa"}\n`);
+        if (sub === "rev-parse origin/main") {
+          const om = co?.originMain === undefined ? "aaaaaaa" : co.originMain;
+          return om === null
+            ? { code: 128, stdout: "", stderr: "fatal: bad revision" }
+            : ok(`${om}\n`);
+        }
+        throw new Error(`unhandled git: ${sub}`);
+      }
       if (cmd === "plutil") {
         const file = args[args.length - 1];
         const name = file.split("/").pop()!;
@@ -238,6 +276,133 @@ describe("runRestartCommand", () => {
       "junco.service",
     ]);
     expect(f.prints.join("")).toContain("restarted: pid 100 → 400");
+  });
+});
+
+describe("inspectCheckout", () => {
+  it("an npm install (no `.git` beside dist/) is not a checkout — no git is run", async () => {
+    const f = makeFakes({});
+    expect(await inspectCheckout(f.deps)).toBeNull();
+    expect(f.calls.find((c) => c[0] === "git")).toBeUndefined();
+  });
+
+  it("a host without git cannot be inspected → null, never a refusal", async () => {
+    const f = makeFakes({ checkout: { gitMissing: true } });
+    expect(await inspectCheckout(f.deps)).toBeNull();
+  });
+
+  it("reports the checkout root, dirty paths, branch, HEAD and origin/main", async () => {
+    const f = makeFakes({
+      checkout: {
+        dirty: [" M src/restartCmd.ts", "?? tests/new.test.ts"],
+        head: "bbbbbbb",
+        branch: "feat/x",
+        originMain: "aaaaaaa",
+      },
+    });
+    expect(await inspectCheckout(f.deps)).toEqual({
+      root: PKG,
+      dirty: [" M src/restartCmd.ts", "?? tests/new.test.ts"],
+      head: "bbbbbbb",
+      branch: "feat/x",
+      originMain: "aaaaaaa",
+    });
+  });
+
+  it("a missing origin/main ref reads as null (the guard treats it as a mismatch)", async () => {
+    const f = makeFakes({ checkout: { originMain: null } });
+    expect((await inspectCheckout(f.deps))?.originMain).toBeNull();
+  });
+});
+
+describe("runRestartCommand — checkout preflight (#384)", () => {
+  const plists = { "junco.plist": juncoPlist };
+  const noKick = (f: ReturnType<typeof makeFakes>) =>
+    expect(f.calls.find((c) => c[0] === "launchctl")).toBeUndefined();
+
+  it("a clean checkout parked on origin/main restarts as usual", async () => {
+    const f = makeFakes({ plists, lockPids: [100, 200], checkout: {} });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(0);
+    expect(f.prints.join("")).toContain("restarted: pid 100 → 200");
+    expect(f.prints.join("")).not.toContain("not restarting");
+  });
+
+  it("an npm install skips the preflight entirely", async () => {
+    const f = makeFakes({ plists, lockPids: [100, 200] });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(0);
+    expect(f.calls.find((c) => c[0] === "git")).toBeUndefined();
+  });
+
+  it("a dirty checkout refuses: exit 1, no kick, the dirty paths and --force are printed", async () => {
+    const f = makeFakes({
+      plists,
+      lockPids: [100],
+      checkout: { dirty: [" M src/restartCmd.ts", "?? tests/new.test.ts"] },
+    });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
+    noKick(f);
+    const out = f.prints.join("");
+    expect(out).toContain("not restarting");
+    expect(out).toContain(PKG);
+    expect(out).toContain(" M src/restartCmd.ts");
+    expect(out).toContain("?? tests/new.test.ts");
+    expect(out).toContain("--force");
+  });
+
+  it("HEAD off origin/main refuses and names the branch and both commits", async () => {
+    const f = makeFakes({
+      plists,
+      lockPids: [100],
+      checkout: { head: "bbbbbbb", branch: "feat/x", originMain: "aaaaaaa" },
+    });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
+    noKick(f);
+    const out = f.prints.join("");
+    expect(out).toContain("feat/x");
+    expect(out).toContain("bbbbbbb");
+    expect(out).toContain("aaaaaaa");
+  });
+
+  it("a checkout with no origin/main ref refuses (the code cannot be shown to be on main)", async () => {
+    const f = makeFakes({ plists, lockPids: [100], checkout: { originMain: null } });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
+    noKick(f);
+    expect(f.prints.join("")).toContain("origin/main");
+  });
+
+  it("the dirty listing is capped at 10 paths with a count of the rest", async () => {
+    const dirty = Array.from({ length: 14 }, (_, i) => ` M src/file${i}.ts`);
+    const f = makeFakes({ plists, lockPids: [100], checkout: { dirty } });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
+    const out = f.prints.join("");
+    expect(out).toContain(" M src/file9.ts");
+    expect(out).not.toContain(" M src/file10.ts");
+    expect(out).toContain("4 more");
+  });
+
+  it("--force restarts a dirty, off-main checkout anyway, with a warning", async () => {
+    const f = makeFakes({
+      plists,
+      lockPids: [100, 200],
+      checkout: { dirty: [" M src/x.ts"], head: "bbbbbbb", branch: "feat/x" },
+    });
+    expect(await runRestartCommand(CONFIG, f.deps, { force: true })).toBe(0);
+    expect(f.calls.find((c) => c[0] === "launchctl")).toBeDefined();
+    const out = f.prints.join("");
+    expect(out).toContain("--force");
+    expect(out).toContain("restarted: pid 100 → 200");
+  });
+
+  it("--force on a clean checkout prints no warning", async () => {
+    const f = makeFakes({ plists, lockPids: [100, 200], checkout: {} });
+    expect(await runRestartCommand(CONFIG, f.deps, { force: true })).toBe(0);
+    expect(f.prints.join("")).not.toContain("--force");
+  });
+
+  it("the preflight runs before service discovery — a refusal never scans units", async () => {
+    const f = makeFakes({ plists, lockPids: [100], checkout: { dirty: ["?? x"] } });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
+    expect(f.calls.find((c) => c[0] === "plutil")).toBeUndefined();
   });
 });
 
