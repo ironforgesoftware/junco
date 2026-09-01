@@ -128,11 +128,11 @@ Apply runs write a transcript exactly like an agent run. `junco transcript <id>`
 
 `junco lint` and `junco submit --dry-run` validate a `junco-patch` body the same way they validate any other ticket:
 
-| Rule                     | Severity | Checks                                                                                                                                 |
-| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `patch_parses`           | error    | The fence is a well-formed `git format-patch` series — an mbox `From <sha> …` header and at least one `diff --git` hunk, under 512 KB. |
-| `patch_paths_sane`       | error    | The series doesn't touch paths outside the repo (absolute paths, `..` traversal) and carries no binary hunk.                           |
-| `patch_has_verification` | warning  | The ticket still has a `## Verification` block — it's the only execution-time check apply mode has.                                    |
+| Rule                     | Severity | Checks                                                                                                                                                                                                                                                         |
+| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `patch_parses`           | error    | The fence is a well-formed `git format-patch` series — an mbox `From <sha> …` header and at least one `diff --git a/… b/…` hunk, under 512 KB. A path git had to C-quote (`"a/…"`: quotes, backslashes, tabs, non-ASCII bytes) is refused rather than skipped. |
+| `patch_paths_sane`       | error    | The series doesn't touch paths outside the repo (absolute paths, `..` traversal) and carries no binary hunk.                                                                                                                                                   |
+| `patch_has_verification` | warning  | The ticket still has a `## Verification` block — it's the only execution-time check apply mode has.                                                                                                                                                            |
 
 The prose rules (`steps_have_commits`, `files_table_referenced`, `files_paths_exist`, `no_cd_in_steps`) are skipped for apply tickets — a patch series has no Steps or Files table for them to check.
 
