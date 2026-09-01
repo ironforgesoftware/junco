@@ -69,4 +69,28 @@ describe("resolveChatCwd (spec 2026-09-01 §2.2)", () => {
     });
     expect(notGit).toEqual({ ok: false, error: "not_a_repo" });
   });
+  it("local key inside a SYMLINKED data dir is still not_a_repo (both sides realpath'd)", async () => {
+    const linked = { ...cfg, dataDir: "/sbxroot/link" };
+    const map: Record<string, string> = {
+      "/sbxroot/link": "/sbxroot/real",
+      "/sbxroot/real/chats/x": "/sbxroot/real/chats/x",
+    };
+    const r = await resolveChatCwd(linked, "/sbxroot/real/chats/x", {
+      existsFn: () => true,
+      realpathFn: (p) => map[p] ?? p,
+      gitFn: async () => ok("/sbxroot/real/chats/x\n"),
+    });
+    expect(r).toEqual({ ok: false, error: "not_a_repo" });
+  });
+  it("realpathFn throws for dataDir only → fallback to resolve(), local key outside → ok", async () => {
+    const r = await resolveChatCwd(cfg, "/home/me/api", {
+      existsFn: () => true,
+      realpathFn: (p) => {
+        if (p === "/sbxroot/data") throw new Error("ENOENT");
+        return p;
+      },
+      gitFn: async () => ok("/home/me/api\n"),
+    });
+    expect(r).toEqual({ ok: true, cwd: "/home/me/api", kind: "local", nwo: null });
+  });
 });

@@ -54,7 +54,13 @@ export async function resolveChatCwd(
   } catch {
     return { ok: false, error: "not_a_repo" };
   }
-  if (isUnder(real, resolve(cfg.dataDir))) return { ok: false, error: "not_a_repo" };
+  let dataRoot = resolve(cfg.dataDir);
+  try {
+    dataRoot = realpathFn(dataRoot);
+  } catch {
+    /* data dir absent: compare against the resolved path */
+  }
+  if (isUnder(real, dataRoot)) return { ok: false, error: "not_a_repo" };
   // check:false — git() throws GitOpError on a non-zero exit by default
   // (src/git.ts RunOpts.check); a non-repo is an answer here, not an error.
   const top = await (deps.gitFn ?? git)(cfg, ["rev-parse", "--show-toplevel"], {
