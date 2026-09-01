@@ -87,12 +87,14 @@ export type TranscriptSinkFactory = (path: string) => TranscriptSink | null;
  * The default fs-backed transcript sink. Creates the parent dir and appends to
  * the file; open/write failures degrade to a warning and drop the transcript
  * (subsequent writes become no-ops) rather than crashing the ticket.
+ * Dir 0700 / file 0600 (#343): a transcript carries every `read` tool result,
+ * i.e. verbatim contents of private-repo files.
  */
 export const defaultTranscriptSink: TranscriptSinkFactory = (path) => {
   let stream: WriteStream | null;
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    stream = createWriteStream(path, { flags: "a" });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    stream = createWriteStream(path, { flags: "a", mode: 0o600 });
   } catch (e) {
     log.warn("transcript disabled (path not writable)", {
       path,

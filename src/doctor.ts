@@ -4,7 +4,7 @@
  * ✓ pass · ⚠ warning (degraded but workable) · ✗ failure (exit 1).
  */
 
-import { existsSync, readdirSync, lstatSync } from "node:fs";
+import { existsSync, readdirSync, lstatSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
@@ -89,6 +89,10 @@ export interface DoctorDeps {
    * to self-heal). Throws ENOENT when absent, same contract as
    * `fs.lstatSync`; defaults to it. */
   lstatFn?: (p: string) => { isSymbolicLink(): boolean };
+  /** stat (follows links) — used only by the data-tree-modes check (#343),
+   * which reads `mode`. Throws ENOENT when absent (an absent path is skipped,
+   * never warned about), same contract as `fs.statSync`; defaults to it. */
+  statFn?: (p: string) => { mode: number };
   /** Best-effort npm update check (spec 2026-07-16). Defaults to the real
    * `checkForUpdate`; injectable so tests never hit the network or a real
    * fs cache. */
@@ -187,6 +191,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   const existsFn = deps.existsFn ?? existsSync;
   const readdirFn = deps.readdirFn ?? readdirSync;
   const lstatFn = deps.lstatFn ?? lstatSync;
+  const statFn = deps.statFn ?? statSync;
 
   const results: Array<{ v: Verdict; label: string }> = [];
   const report = (v: Verdict, label: string, detail = ""): void => {
@@ -639,6 +644,42 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
       ["data dir", cfg.dataDir],
     ] as const) {
       report(accessOkFn(dir) ? "ok" : "fail", label, dir);
+    }
+
+    // 7-ter. data tree modes (#343). Fresh trees are created owner-only
+    // (ensureDataTree/configCmd/wizard mkdir 0700, config + transcript writes
+    // 0600), but mkdir never re-modes a dir that already exists, so a tree
+    // from before #343 — or one an operator loosened — stays readable by every
+    // local user on a shared host: the config may hold a literal apiKey and
+    // transcripts hold verbatim private-repo file contents. Warn, never fail
+    // (a loose mode is not a broken install), and print the exact chmod. An
+    // absent path is skipped: a fresh tree has no transcripts dir yet. Unix
+    // permission bits are meaningless on win32, so the check is skipped there.
+    if (process.platform !== "win32") {
+      const loose: string[] = [];
+      for (const [p, want] of [
+        [configPath, "600"],
+        [cfg.dataDir, "700"],
+        [dataTreePaths(cfg).transcripts, "700"],
+      ] as const) {
+        let mode: number;
+        try {
+          mode = statFn(p).mode;
+        } catch {
+          continue;
+        }
+        if ((mode & 0o077) !== 0) loose.push(`chmod ${want} ${p}`);
+      }
+      if (loose.length > 0) {
+        report(
+          "warn",
+          "data tree modes",
+          `readable by other local users (config may hold model.apiKey; transcripts hold ` +
+            `repo file contents) — run: ${loose.join(" && ")}`,
+        );
+      } else {
+        report("ok", "data tree modes", "owner-only");
+      }
     }
 
     // 7-bis. split queue (#274) — the interactive twin of the daemon startup

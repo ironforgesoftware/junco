@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildWizardIO } from "../src/wizard.js";
@@ -248,6 +248,46 @@ describe("buildWizardIO", () => {
     expect(readFileSync(cp, "utf8")).toBe(before);
     expect(existsSync(join(dir, "vault", "inbox"))).toBe(true); // dirs still ensured
   });
+
+  // #343: config.json may hold a literal model.apiKey and the data root holds
+  // the transcripts — both must be owner-only from the moment the wizard
+  // creates them (the daemon's ensureDataTree never re-modes an existing dir).
+  it.skipIf(process.platform === "win32")(
+    "fresh write: the config is 0600 and the data dirs are 0700 (#343)",
+    () => {
+      const dir = tmp();
+      const cp = join(dir, "config.json");
+      const r = buildWizardIO(cp, {
+        existsFn: () => false,
+        ensureSkillLinksFn: noopEnsureSkillLinksFn,
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) throw new Error("expected ok:true");
+      r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+      expect(statSync(cp).mode & 0o777).toBe(0o600);
+      expect(statSync(join(dir, "vault")).mode & 0o777).toBe(0o700);
+      expect(statSync(join(dir, "vault", "queue", "inbox")).mode & 0o777).toBe(0o700);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rerun write: a group/other-readable config becomes 0600 (#343)",
+    () => {
+      const dir = tmp();
+      const cp = join(dir, "config.json");
+      writeFileSync(
+        cp,
+        JSON.stringify({ vaultRoot: join(dir, "vault"), juncoSubdir: "", model: { id: "p/m" } }),
+        "utf8",
+      );
+      chmodSync(cp, 0o644);
+      const r = buildWizardIO(cp, { ensureSkillLinksFn: noopEnsureSkillLinksFn });
+      expect(r.ok).toBe(true);
+      if (!r.ok) throw new Error("expected ok:true");
+      expect(r.io.write({ ...r.io.initialAnswers, modelId: "p/m2" }).written).toBe(true);
+      expect(statSync(cp).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("rename failure cleans up the PID-suffixed temp file and rethrows", () => {
     const dir = tmp();
