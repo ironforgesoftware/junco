@@ -1460,7 +1460,7 @@ Spec §1.1, §2.3, §5.2 (the bus), §11 (corrupt reset, crash stamp, degraded s
     degraded: boolean;
     get streaming(): boolean;
     ensureMeta(): Promise<void>; // meta.json + junco_meta + crash stamp; no SDK
-    ensureSession(): Promise<ChatSessionLike>; // + SDK session (lazy; corrupt → reset)
+    ensureSession(): Promise<ChatSessionLike>; // + SDK session (lazy; missing-after-a-turn → reset{missing}; corrupt → archive + reset{corrupt}) — Ruling R5
     writeRecord(rec: Omit<ChatRecord, "ts"> | Omit<MetaRecord, "ts" | "version">): void; // stamps ts, persists, publishes
     readLines(since: number): Array<{ offset: number; line: string }>; // complete lines from `since`
     subscribe(sub: ChatSubscriber): () => void;
@@ -1502,15 +1502,18 @@ const cfg = makeConfig({
   removeWorktreeOnSuccess: true,
 });
 
-/** A fake SessionManager seam: "create" mints a file under dir; "open" throws
- * unless the file exists (the SDK's contract we rely on). */
+/** A fake SessionManager seam mirroring SDK 0.84.2 (Ruling R5): "create"
+ * mints a file under dir; "open" never throws — a missing path simply yields
+ * a session at that path. */
 const fakeSm = async (mode: SessionManagerMode): Promise<{ manager: unknown; file: string }> => {
   if ("create" in mode) {
-    const file = join(mode.create.dir, "sdk-session.jsonl");
+    const file = join(
+      mode.create.dir,
+      `sdk-session-${Date.now()}-${Math.random().toString(16).slice(2, 6)}.jsonl`,
+    );
     writeFileSync(file, "");
     return { manager: { tag: "sm" }, file };
   }
-  if (!existsSync(mode.open.file)) throw new Error("ENOENT");
   return { manager: { tag: "sm" }, file: mode.open.file };
 };
 
@@ -1639,20 +1642,65 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
     expect(JSON.parse(last).reason).toBe("crash");
   });
 
-  it("a missing SDK session file on open resets: archived under corrupt-*, fresh file, reset record", async () => {
+  it("a missing SDK session file is a reset only when a turn was already completed (Ruling R5)", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    // No turn yet: the SDK never flushed, so a missing file loses nothing — no reset record.
     const { session } = makeSession(root);
     await session.ensureSession();
     const meta = JSON.parse(readFileSync(session.metaPath, "utf8"));
-    // simulate loss
     const { rmSync } = await import("node:fs");
     rmSync(meta.sdkSessionFile);
     const again = makeSession(root).session;
     await again.ensureSession();
+    expect(records(again.transcriptPath)).not.toContain("junco_chat_session_reset");
+    expect(JSON.parse(readFileSync(again.metaPath, "utf8")).sdkSessionFile).toBe(
+      meta.sdkSessionFile,
+    );
+    // A completed turn, then the file goes missing: that is a reset the operator must see.
+    await again.prompt("hello", { source: "operator", timeoutMs: 5_000 });
+    rmSync(meta.sdkSessionFile, { force: true });
+    const third = makeSession(root).session;
+    await third.ensureSession();
+    const types = records(third.transcriptPath);
+    expect(types[types.length - 1]).toBe("junco_chat_session_reset");
+    const last = JSON.parse(readFileSync(third.transcriptPath, "utf8").trim().split("\n").pop()!);
+    expect(last.reason).toBe("missing");
+  });
+
+  it("a corrupt SDK session file (open or build throws) is archived under corrupt-* and replaced", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root);
+    await session.ensureSession();
+    const meta = JSON.parse(readFileSync(session.metaPath, "utf8"));
+    writeFileSync(meta.sdkSessionFile, "{not json");
+    let calls = 0;
+    const throwingOnce = async (mode: SessionManagerMode) => {
+      if ("open" in mode && calls++ === 0) throw new Error("bad header");
+      return fakeSm(mode);
+    };
+    const again = new ChatSession(
+      {
+        cfg,
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        dir: join(root, "acme__api"),
+      },
+      {
+        makeSessionManager: throwingOnce,
+        sessionFactoryFor: () => fakeChatSession([chatScriptText("hi")]),
+      },
+    );
+    await again.ensureSession();
     const types = records(again.transcriptPath);
     expect(types).toContain("junco_chat_session_reset");
+    const last = JSON.parse(readFileSync(again.transcriptPath, "utf8").trim().split("\n").pop()!);
+    expect(last.reason).toBe("corrupt");
     const meta2 = JSON.parse(readFileSync(again.metaPath, "utf8"));
-    expect(existsSync(meta2.sdkSessionFile)).toBe(true);
+    expect(meta2.sdkSessionFile).not.toBe(meta.sdkSessionFile);
+    const { readdirSync } = await import("node:fs");
+    expect(readdirSync(join(root, "acme__api")).some((n) => n.startsWith("corrupt-"))).toBe(true);
   });
 
   it("abort() soft-aborts an in-flight turn; drain() writes daemon_stopped and ends subscribers", async () => {
@@ -2018,45 +2066,68 @@ export class ChatSession {
       this.writeRecord({ type: "junco_chat_turn_aborted", reason: "crash" });
   }
 
-  /** Lazily build the SDK session; a missing/corrupt session file is
-   * archived to corrupt-<ts>/ and replaced (spec §11). */
+  /** True once the transcript holds a completed turn — the line between
+   * "nothing to lose" and "a reset the operator must see" (Ruling R5). */
+  private hasCompletedTurn(): boolean {
+    for (const { line } of this.readLines(0)) {
+      const p = parseTranscriptLine(line);
+      if (p.kind === "junco" && p.record.type === "junco_chat_turn_end") return true;
+    }
+    return false;
+  }
+
+  /** Lazily build the SDK session (spec §11, Ruling R5). SDK 0.84.2 facts
+   * (verified in Task 3): `SessionManager.open()` on a MISSING path never
+   * throws — it yields a fresh empty session at that path — and `create()`
+   * writes nothing until the first assistant message. So "missing" is not an
+   * error: it is a reset only when the transcript proves turns were lost.
+   * "Corrupt" is the file existing and `open` OR the session build throwing
+   * (createAgentSession calls `sessionManager.buildSessionContext()`,
+   * sdk.js:80) → archive to corrupt-<ts>/, create fresh, record the reset. */
   async ensureSession(): Promise<ChatSessionLike> {
     if (this.sdk) return this.sdk;
     if (this.sdkPending) return this.sdkPending;
     this.sdkPending = (async () => {
       await this.ensureMeta();
       const meta = this.readMeta()!;
-      let manager: unknown;
-      try {
-        ({ manager } = await this.makeSm({
+      const chatCfg = chatCfgFor(this.cfg);
+      const build = async (manager: unknown): Promise<ChatSessionLike> =>
+        this.factoryFor(chatCfg, this.cwd, {
+          tools: chatCfg.tools,
+          thinkingLevel: this.cfg.chat.thinkingLevel ?? this.cfg.model.thinkingLevel,
+          sessionManager: manager,
+        })();
+      if (!this.fs.existsSync(meta.sdkSessionFile)) {
+        if (this.hasCompletedTurn()) {
+          log.warn("chat SDK session file missing; starting fresh", { slug: this.slug });
+          this.writeRecord({ type: "junco_chat_session_reset", reason: "missing" });
+        }
+        const { manager } = await this.makeSm({
           open: { file: meta.sdkSessionFile, dir: this.dir, cwd: this.cwd },
-        }));
+        });
+        this.sdk = await build(manager);
+        return this.sdk;
+      }
+      try {
+        const { manager } = await this.makeSm({
+          open: { file: meta.sdkSessionFile, dir: this.dir, cwd: this.cwd },
+        });
+        this.sdk = await build(manager);
+        return this.sdk;
       } catch (e) {
-        const reason = this.fs.existsSync(meta.sdkSessionFile) ? "corrupt" : "missing";
-        log.warn("chat SDK session file unusable; starting fresh", {
+        log.warn("chat SDK session file corrupt; starting fresh", {
           slug: this.slug,
-          reason,
           error: e instanceof Error ? e.message : String(e),
         });
-        if (reason === "corrupt") {
-          const corruptDir = join(this.dir, `corrupt-${this.now()}`);
-          this.fs.mkdirSync(corruptDir);
-          this.fs.renameSync(meta.sdkSessionFile, join(corruptDir, "session.jsonl"));
-        }
+        const corruptDir = join(this.dir, `corrupt-${this.now()}`);
+        this.fs.mkdirSync(corruptDir);
+        this.fs.renameSync(meta.sdkSessionFile, join(corruptDir, "session.jsonl"));
         const created = await this.makeSm({ create: { cwd: this.cwd, dir: this.dir } });
-        manager = created.manager;
         this.writeMeta({ ...meta, sdkSessionFile: created.file, cwd: this.cwd });
-        this.writeRecord({ type: "junco_chat_session_reset", reason });
+        this.writeRecord({ type: "junco_chat_session_reset", reason: "corrupt" });
+        this.sdk = await build(created.manager);
+        return this.sdk;
       }
-      const chatCfg = chatCfgFor(this.cfg);
-      const factory = this.factoryFor(chatCfg, this.cwd, {
-        tools: chatCfg.tools,
-        thinkingLevel: this.cfg.chat.thinkingLevel ?? this.cfg.model.thinkingLevel,
-        sessionManager: manager,
-      });
-      const sdk = await factory();
-      this.sdk = sdk;
-      return sdk;
     })();
     try {
       return await this.sdkPending;

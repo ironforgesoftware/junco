@@ -307,8 +307,14 @@ One object per slug, created lazily by `ChatManager.get(key)` on the first attac
 after daemon start:
 
 - `meta.json` absent → `SessionManager.create(cwd, dir)`, write meta, write `junco_meta`.
-- present → `SessionManager.open(meta.sdkSessionFile, dir, cwd)`; on any throw, move the file to
-  `corrupt-<ts>/`, create fresh, append `junco_chat_session_reset{reason}`.
+- present → `SessionManager.open(meta.sdkSessionFile, dir, cwd)`. SDK 0.84.2 facts (verified during
+  implementation): `open()` on a **missing** path never throws — it yields a fresh empty session at
+  that path — and `create()` writes nothing until the first assistant message. So a missing file is
+  a reset (`junco_chat_session_reset{reason:"missing"}`) only when the transcript already holds a
+  `junco_chat_turn_end`; otherwise nothing was lost and the open proceeds silently. A **corrupt**
+  file (present, and `open` or the session build throws — `createAgentSession` calls
+  `sessionManager.buildSessionContext()`) is moved to `corrupt-<ts>/`, a fresh session is created,
+  and `junco_chat_session_reset{reason:"corrupt"}` is appended.
 - Then the crash stamp (§11): if the transcript's last turn record is `junco_chat_turn_start`
   with no `_end`/`_aborted` after it, append `junco_chat_turn_aborted{reason:"crash"}`.
 - The `AgentSession` itself is built through `makePiSessionFactory(chatCfg, cwd, {tools,
@@ -728,8 +734,10 @@ Every failure is a transcript record the pane renders; nothing is a silent state
   first three soft-abort in place; `crash` is stamped on the next open. Caveat recorded here:
   the SDK persists a message only on `message_end`, so an aborted turn's partial text exists in
   junco's transcript but not in the model's history for the next turn.
-- **SDK session file missing/corrupt on open:** moved to `corrupt-<ts>/`, fresh session,
-  `junco_chat_session_reset{reason}`. Transcript preserved. Never blocks the dashboard.
+- **SDK session file missing on open:** not an error by itself (§2.3) — a reset record only when
+  turns were completed before. **Corrupt on open or build:** moved to `corrupt-<ts>/`, fresh
+  session, `junco_chat_session_reset{reason:"corrupt"}`. Transcript preserved either way. Never
+  blocks the dashboard.
 - **Transcript sink dead:** live SSE continues from the bus; `junco_chat_transcript_degraded`
   emitted once; header shows it.
 - **HTTP:** per §5.1. Two subscribers per key are fine; a second `POST /chat/prompt` while a
