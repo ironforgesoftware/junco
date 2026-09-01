@@ -114,6 +114,23 @@ describe("seatbeltProfile", () => {
     expect(p).not.toContain(`(deny file-read* (subpath "${dataDir}"))`);
   });
 
+  // #340: `(deny default)` was only nominal while Mach lookup stayed blanket —
+  // every service on the host (securityd/the keychain, fseventsd, the
+  // TCC-mediated daemons) was one bootstrap_look_up away. Only enumerated
+  // global names are allowed now; the platform-gated integration suite proves a
+  // real keychain lookup fails while user lookup still works.
+  it("allows Mach lookup only for enumerated global names, never blanket (#340)", () => {
+    const p = seatbeltProfile(denyNet);
+    expect(p).not.toContain("(allow mach-lookup)");
+    const machRules = p.split("\n").filter((l) => l.startsWith("(allow mach-lookup"));
+    expect(machRules).toHaveLength(1);
+    expect(machRules[0]).toContain('(global-name "com.apple.system.opendirectoryd.libinfo")');
+    // Every filter is a literal global name — no bare allow, no regex/prefix.
+    expect(machRules[0]).toMatch(/^\(allow mach-lookup( \(global-name "[^"]+"\))+\)$/);
+    // The exec grant is deliberately untouched by #340.
+    expect(p).toContain("(allow process-exec)");
+  });
+
   // Every prior assertion in this describe block is `toContain` — order-blind
   // by construction. SBPL is last-match-wins, so *meaning* depends entirely on
   // line order; only an indexOf-based assertion can catch a reordering bug.

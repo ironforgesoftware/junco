@@ -119,7 +119,24 @@ export function seatbeltProfile(policy: SandboxPolicy): string {
     "(allow process-exec)",
     "(allow process-fork)",
     "(allow sysctl-read)",
-    "(allow mach-lookup)",
+    // #340: `(deny default)` is only a boundary if Mach lookup is filtered too;
+    // a blanket allow reached every service on the host — securityd (the login
+    // keychain, which `git credential-osxkeychain` reads), fseventsd, cfprefsd,
+    // the TCC-mediated daemons. Discovered empirically (macOS 26.6, 2026-09-01)
+    // by running node, git (init/add/commit/status/diff, ls-remote + clone over
+    // https), npm/npx, python3, go, ruby, perl, bun, swiftc, cc and make with
+    // NO mach-lookup at all and adding names until they passed: exactly one was
+    // needed. libinfo is getpwuid()/getgrgid() for a Directory Services user;
+    // without it `whoami` and `ls -l` print raw ids, `os.userInfo()` throws
+    // ENOENT and `git commit` with no configured identity dies with "Author
+    // identity unknown". DNS and TLS need nothing here (mDNSResponder is a unix
+    // socket, covered by `network*`). Verified absent on purpose, each the sole
+    // cause of the loss it names: `com.apple.FSEvents` (node's `fs.watch` on a
+    // directory fails EMFILE — watch-mode tooling has no place in a one-shot
+    // bash tool), `com.apple.system.notification_center` and `com.apple.logd`
+    // (silent no-ops for the toolchain), `com.apple.SecurityServer` (the
+    // keychain — the integration suite pins that it stays unreachable).
+    '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
     "(allow signal (target self))",
     "(allow file-read*)",
   ];
