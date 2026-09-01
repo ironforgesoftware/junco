@@ -353,7 +353,7 @@ unit tests in the regular suite (precedent: `tests/helpersGhScript.test.ts`):
 | `git.ghBin`, `git.branchPrefix` (`junco/`), `git.defaultBaseBranch` (`main`)                             | `src/config.ts:414-417`                                                         |
 | `sandbox.enabled` defaults true, fails closed without a backend                                          | `src/config.ts:438-443`                                                         |
 | `worker.commitLeftovers` defaults false → the scripted agent must commit itself                          | `src/config.ts:392`                                                             |
-| Q&A tickets get `cfg.tools ∩ {read,grep,find,ls}`; answer appended as `## Result`                        | `src/runOnce.ts:427`, `src/finalize.ts:33`                                      |
+| Q&A tickets get `cfg.tools ∩ {read,grep,find,ls}`; answer appended as `## Result`                        | `src/runOnce.ts:431`, `src/finalize.ts:33`                                      |
 | `gh pr create --repo <nwo> --base <base> --head <branch>` must print a URL                               | `src/pr.ts:146-213`                                                             |
 | `write` tool args are `{ path, content }`                                                                | `pi-coding-agent/dist/core/tools/write.js:12-14`                                |
 | Transcripts on by default at `<dataDir>/data/transcripts/<id>.jsonl`                                     | `src/config.ts:483`, `CLAUDE.md` § Debugging                                    |
