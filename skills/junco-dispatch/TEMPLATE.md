@@ -192,7 +192,7 @@ the agent minutes of confused exploration:
   - **30** — trivial: single file, 1 commit, no tests (e.g. "add HELLO.md").
   - **60** — small: 2–4 files, multiple commits, verification runs a build or tests.
   - **90–120** — moderate: feature work, multi-file refactor, possibly new tests.
-  - **180** — large: architectural or cross-module. If you'd write >180, decompose into multiple tickets instead.
+  - **180** — large: architectural or cross-module — the top of the range for one ticket. This is sizing, not the decomposition call: whether to split into a ticket set is decided by the seams in the work (independent reviewability, an ordering dependency, separate verification, mixed certainty), not by the clock — see SKILL.md's "Ticket sets" section.
 - `draft`: always `true` unless the user explicitly asks for a non-draft PR.
 - `labels`: empty list by default. Only include labels that exist on the repo. When the user names labels, dry-run/lint's labels_exist check validates them — no separate gh call. Nonexistent labels fail `gh pr create`.
 - `branch_name`: omit unless the user overrides. The worker derives `junco/<id>` by default.

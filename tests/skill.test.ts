@@ -7,18 +7,95 @@ import { readFileSync } from "node:fs";
 const SKILL = readFileSync(new URL("../skills/junco-dispatch/SKILL.md", import.meta.url), "utf8");
 
 describe("junco-dispatch SKILL.md", () => {
-  it("exposes the assess trigger so a harness can route audit requests", () => {
+  it("exposes the audit trigger so a harness can route audit requests", () => {
     // The frontmatter `description` is what the harness matches on for skill
-    // selection; the body must carry the mode and its trigger phrases.
-    expect(SKILL).toContain("## Assess mode");
-    expect(SKILL).toContain("junco assess");
+    // selection; the body must carry the mode and its trigger phrases. The
+    // natural-language phrase "assess this repo" survives on purpose (Task
+    // 4: people still ask for this with the old word) but the command run
+    // is the renamed verb.
+    expect(SKILL).toContain("## Audit mode");
+    expect(SKILL).toContain("junco audit");
     expect(SKILL).toContain("assess this repo");
+    expect(SKILL).toContain("audit this repo");
     expect(SKILL).toContain("have junco audit this repo");
+    // The old verb is retired with no alias (Task 2) — the skill must never
+    // tell an agent to run it.
+    expect(SKILL).not.toContain("junco assess");
+  });
+
+  it("exposes the investigate trigger so a harness can route investigate requests", () => {
+    expect(SKILL).toContain("## Investigate mode");
+    expect(SKILL).toContain("junco investigate");
+    expect(SKILL).toContain("analyze issue #N");
+    expect(SKILL).toContain("investigate issue #N");
+    expect(SKILL).not.toContain("junco analyze");
+  });
+
+  it("states the audit/investigate trigger-vs-command mismatch explicitly, so it reads as deliberate", () => {
+    expect(SKILL).toMatch(
+      /trigger phrases keep the old words on purpose[^\n]*commands this skill actually runs are the renamed CLI verbs/,
+    );
+  });
+
+  it("distinguishes audit (repo sweep -> issues) from investigate (one issue -> comment)", () => {
+    // Introduced where both modes are first named together, not buried in
+    // either mode's own section.
+    expect(SKILL).toMatch(/audit sweeps a \*\*repo\*\* and produces findings that become issues/);
+    expect(SKILL).toMatch(/investigate reads \*\*one\*\* issue and produces a comment/);
+    expect(SKILL).toMatch(/Audit generates backlog; investigate deepens one item/);
+  });
+
+  it("distinguishes the skill's own dispatch act from the CLI's separate `junco import` verb", () => {
+    // The skill's name and "dispatch to junco"/"send to junco" triggers do
+    // NOT change — they name authoring+sending new work, distinct from
+    // `junco import` pulling an existing issue into the queue.
+    expect(SKILL).toMatch(
+      /distinct from `junco import <owner\/repo#N>`, the CLI's separate verb for pulling an \*\*existing\*\* GitHub issue/,
+    );
+  });
+
+  it("decomposes ticket sets on seams in the work, not on a clock", () => {
+    // The four seam triggers from the plan replace the old "180 min ->
+    // decompose" clock rule.
+    expect(SKILL).toMatch(
+      /\*\*Independent reviewability\*\* — a reviewer could accept one part and reject another/,
+    );
+    expect(SKILL).toMatch(
+      /\*\*Ordering dependency\*\* — one part must land before another can be written against it/,
+    );
+    expect(SKILL).toMatch(
+      /\*\*Separate verification\*\* — the parts prove themselves with different commands/,
+    );
+    expect(SKILL).toMatch(
+      /\*\*Mixed certainty\*\* — you know the exact bytes for one part but not another/,
+    );
+    // Mixed certainty cross-references Apply mode so a reader sees the
+    // zero-model-turn payoff of splitting off the known-bytes half.
+    expect(SKILL).toMatch(
+      /ships as a patch ticket \(zero model turns — see "Apply mode \(patch tickets\)" below\)/,
+    );
+    // Exactly one clock-based smell test remains in the whole skill — it is
+    // a smell, not the decomposition rule.
+    const smellHits = SKILL.match(/genuinely needs ~3 hours/g) ?? [];
+    expect(smellHits).toHaveLength(1);
+    expect(SKILL).toMatch(
+      /single ticket that genuinely needs ~3 hours usually means one of the seams above was missed/,
+    );
+    // The inverse warning: decomposing seamless work is pure overhead.
+    expect(SKILL).toMatch(/decomposing work that has none of these seams only multiplies overhead/);
+    // timeout_minutes survives as sizing for an already-scoped ticket, not
+    // as the decomposition trigger.
+    expect(SKILL).toMatch(/`timeout_minutes` \*\*sizes\*\* a ticket that's already scoped/);
+    expect(SKILL).toMatch(/This is sizing, not the decomposition trigger/);
+    // The old clock-only rule is gone.
+    expect(SKILL).not.toMatch(/decompose into a ticket set\*\* instead/);
   });
 
   it("stays self-contained: no delegation to docs/ (not in the npm package)", () => {
     // `docs/` is excluded from the `files` allowlist, so an installed package
-    // has no docs/assess.md — the skill must inline what it needs.
+    // has no docs/audit.md or docs/assess.md — the skill must inline what it
+    // needs.
+    expect(SKILL).not.toContain("docs/audit");
     expect(SKILL).not.toContain("docs/assess");
   });
 
