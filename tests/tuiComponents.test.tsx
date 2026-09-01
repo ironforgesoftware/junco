@@ -22,6 +22,30 @@ describe("cursor + spinner polish", () => {
     r.unmount();
   });
 
+  it("two Spinners advance on the same shared tick", async () => {
+    const { Spinner, SPINNER_FRAMES } = await import("../src/tui/components/Spinner.js");
+    const { Text } = await import("ink");
+    const r = render(
+      <Text>
+        <Spinner />|<Spinner />
+      </Text>,
+    );
+    const glyphs = (f: string): string[] => f.split("|").map((s) => s.trim());
+    const first = r.lastFrame()!;
+    await until(() => r.lastFrame() !== first);
+    // Sample several frames: the two glyphs are always identical because
+    // useAnimation drives every spinner from ONE timer (ink 7.1), so N mounted
+    // spinners cost one commit per tick, not N.
+    for (let i = 0; i < 5; i++) {
+      const [a, b] = glyphs(r.lastFrame()!);
+      expect(SPINNER_FRAMES).toContain(a);
+      expect(a).toBe(b);
+      const cur = r.lastFrame();
+      await until(() => r.lastFrame() !== cur);
+    }
+    r.unmount();
+  });
+
   it("TextField shows a block cursor on the focused field — even when empty", async () => {
     const { TextField } = await import("../src/tui/components/TextField.js");
     const focusedEmpty = render(
