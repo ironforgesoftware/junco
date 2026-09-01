@@ -1,7 +1,10 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, configDefaults } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    // tests/e2e/ is its own project (vitest.e2e.config.ts): it spawns the
+    // built CLI and must never ride along with the unit run.
+    exclude: [...configDefaults.exclude, "tests/e2e/**"],
     coverage: {
       provider: "v8",
       include: ["src/**"],

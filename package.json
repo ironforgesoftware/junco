@@ -47,6 +47,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts",
+    "test:e2e:live": "JUNCO_E2E_LIVE=1 vitest run -c vitest.e2e.config.ts tests/e2e/live.e2e.ts",
     "lint": "eslint src tests",
     "typecheck": "tsc -p tsconfig.eslint.json --noEmit",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"tests/**/*.{ts,tsx}\"",
