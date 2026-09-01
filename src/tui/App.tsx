@@ -74,6 +74,7 @@ import { useConfirm } from "./hooks/useConfirm.js";
 import { useHealth } from "./hooks/useHealth.js";
 import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
 import { useClock } from "./hooks/useClock.js";
+import { keepIfEqual, keepIfEqualBy, wholeMinutes } from "./hooks/keepIfEqual.js";
 import { useAssessHistory } from "./hooks/useAssessHistory.js";
 import { useUpdateCheck } from "./hooks/useUpdateCheck.js";
 import { useBotLogin } from "./hooks/useBotLogin.js";
@@ -242,6 +243,14 @@ function optimisticLabels(action: DashAction, labels: string[], trigger: string)
   }
   return [...set];
 }
+
+/** Equality key for the cheap local snapshot: the daemon section renders
+ * uptime in whole minutes (sections' fmtDur), so a poll that only advanced
+ * the seconds must not repaint. Everything else compares as-is. */
+const localCheapKey = (c: LocalCheap | null): unknown =>
+  c === null
+    ? null
+    : { ...c, daemon: { ...c.daemon, uptimeSeconds: wholeMinutes(c.daemon.uptimeSeconds) } };
 
 export function App(props: AppProps): React.JSX.Element {
   const {
@@ -906,10 +915,10 @@ export function App(props: AppProps): React.JSX.Element {
   const forceLocalRefresh = useCallback(async (): Promise<void> => {
     const c = await localCheapFn({ section: sysSection ?? undefined });
     if (!aliveRef.current) return;
-    setLocalCheap(c);
+    setLocalCheap((prev) => keepIfEqualBy(prev, c, localCheapKey));
     if (heavyOnScreen) {
       const h = await localHeavyFn();
-      if (aliveRef.current) setLocalHeavy(h);
+      if (aliveRef.current) setLocalHeavy((prev) => keepIfEqual(prev, h));
     }
   }, [localCheapFn, localHeavyFn, sysSection, heavyOnScreen]);
 
@@ -922,7 +931,7 @@ export function App(props: AppProps): React.JSX.Element {
     const run = async (): Promise<void> => {
       const c = await localCheapFn({ section: sysSection ?? undefined });
       if (!alive || !aliveRef.current) return;
-      setLocalCheap(c);
+      setLocalCheap((prev) => keepIfEqualBy(prev, c, localCheapKey));
     };
     void run();
     const id = setInterval(() => void run(), localCheapPollMs);
@@ -942,7 +951,7 @@ export function App(props: AppProps): React.JSX.Element {
     const run = async (): Promise<void> => {
       const h = await localHeavyFn(ctrl.signal);
       if (!alive || !aliveRef.current) return; // aliveRef drops late results on unmount
-      setLocalHeavy(h);
+      setLocalHeavy((prev) => keepIfEqual(prev, h));
     };
     void run();
     const id = setInterval(() => void run(), localHeavyPollMs);
@@ -1018,7 +1027,7 @@ export function App(props: AppProps): React.JSX.Element {
         // Immediate re-poll (cheap fn is cheap; section-gated counts refresh too).
         void localCheapFn({ section: sysSection ?? undefined }).then((c) => {
           if (aliveRef.current) {
-            setLocalCheap(c);
+            setLocalCheap((prev) => keepIfEqualBy(prev, c, localCheapKey));
           }
         });
       });

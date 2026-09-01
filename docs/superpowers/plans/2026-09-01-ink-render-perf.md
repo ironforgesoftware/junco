@@ -862,6 +862,8 @@ Then:
 
 (`LocalCheap` is already imported as a type in App.tsx — check with `grep -n "LocalCheap" src/tui/App.tsx | head -3`; add it to the existing type import from `./localSnapshot.js` if missing.)
 
+**Found during execution:** App has a FOURTH local-cheap sink the file map missed — the section-switch refresh (`void localCheapFn({ section: … }).then((c) => { if (aliveRef.current) setLocalCheap(c); })`, App.tsx ~line 1019). Gate it the same way; `grep -n "setLocalCheap(c)\|setLocalHeavy(h)" src/tui/App.tsx` must print nothing afterwards.
+
 - [ ] **Step 4: Gate the GitHub refresh sinks**
 
 In `src/tui/hooks/useGithubData.ts` add `import { keepIfEqual } from "./keepIfEqual.js";` and:

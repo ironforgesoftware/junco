@@ -2,17 +2,19 @@
 // 2026-09-01-ink-render-perf-design.md, tier 0). Counts the frames Ink
 // COMMITS (via onRender) while every poller returns unchanged data.
 //
-// BASELINE (tasks 1–4): every constant-data poll tick still commits a frame
-// while any poll sink stores a fresh object without an equality gate (the
-// real pollers build a new snapshot per call, so the fixtures return a fresh
-// structuredClone per call too). The idle assertion below is written against
-// that measured defect and is flipped to `toBe(0)` by task 5 once every sink
-// is change-gated. Numbers per scenario go to JUNCO_PERF_OUT when set (same
-// convention as renderPerf.test.tsx) so before/after tables are reproducible.
+// MEASURED: before tier 1 every constant-data poll tick committed a frame —
+// each sink stored a fresh object and useQueueSnapshot bumped queueNow, so
+// React never bailed out (10 frames per 20 ticks at the 30 fps throttle, see
+// the task-1 commit body). After gating every sink the same window commits
+// 0. The real pollers build a new snapshot per call, so the fixtures return a
+// fresh structuredClone per call too — a same-reference fixture would pass
+// on Object.is alone and prove nothing. The positive-control case guards the
+// gate from ever hiding a real change. Numbers per scenario go to
+// JUNCO_PERF_OUT when set (same convention as renderPerf.test.tsx).
 import { describe, it, expect, afterEach, afterAll } from "vitest";
 import { writeFileSync } from "node:fs";
 import { mountForFrames, type FrameMount } from "./helpers/inkFrames.js";
-import { EMPTY_QUEUE, CHEAP, HEAVY } from "./helpers/localFixtures.js";
+import { EMPTY_QUEUE, CHEAP, HEAVY, stubClient } from "./helpers/localFixtures.js";
 import { until } from "./helpers/until.js";
 import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 
@@ -62,7 +64,7 @@ function constantPollers(): {
 }
 
 describe("frame perf — constant-data polls", () => {
-  it("idle: unchanged poll data commits frames (BASELINE — flipped to 0 by task 5)", async () => {
+  it("idle: unchanged poll data commits NO frames", async () => {
     const p = constantPollers();
     mounted = mountForFrames({
       queuePollMs: POLL_MS,
@@ -79,7 +81,7 @@ describe("frame perf — constant-data polls", () => {
     const t0 = p.ticks();
     await until(() => p.ticks() >= t0 + TICKS, 200);
     record("idle-constant-polls", mounted);
-    expect(mounted.frames.length).toBeGreaterThan(0);
+    expect(mounted.frames.length).toBe(0);
   });
 
   it("a changed poll still paints (positive control for the gate)", async () => {
@@ -101,5 +103,32 @@ describe("frame perf — constant-data polls", () => {
     await until(() => (mounted?.frames.length ?? 0) >= 2, 100);
     record("clock-only", mounted);
     expect(mounted.frames.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a constant GitHub refresh commits at most one frame per refresh cycle", async () => {
+    // The refresh path stores a fresh `refreshedAt` timestamp every cycle — a
+    // real, rendered change ("↻ Ns ago") — so this is bounded, not zero.
+    let cycles = 0;
+    const p = constantPollers();
+    mounted = mountForFrames({
+      refreshPollMs: POLL_MS,
+      queueFn: p.queueFn,
+      localCheapFn: p.localCheapFn,
+      localHeavyFn: p.localHeavyFn,
+      assessHistoryFn: p.assessHistoryFn,
+      client: {
+        ...stubClient,
+        listIssues: async (nwo) => {
+          cycles++;
+          return stubClient.listIssues(nwo);
+        },
+      },
+    });
+    await settle();
+    mounted.reset();
+    const c0 = cycles;
+    await until(() => cycles >= c0 + TICKS, 200);
+    record("github-refresh-constant", mounted);
+    expect(mounted.frames.length).toBeLessThanOrEqual(cycles - c0);
   });
 });

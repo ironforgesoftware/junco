@@ -127,8 +127,11 @@ Applied as `setX((prev) => keepIfEqual(prev, next))` at every poll sink:
 (`stats.lastPollAt` inside the queue snapshot, sourced from the health body)
 legitimately change and will still paint — at most one frame per worker poll
 interval (`worker.pollIntervalSeconds`, default 15 s), down from one per
-dashboard poll tick. The harness's constant fixtures hold them fixed, so the
-acceptance test measures the dashboard's own churn only.
+dashboard poll tick. The GitHub refresh cycle likewise stores a fresh
+`refreshedAt` timestamp (rendered as "↻ Ns ago"), so a refresh commits at most
+one frame per `refreshPollMs` (default 30 s) even when the issue and PR lists
+are unchanged. The harness's constant fixtures hold the daemon fields fixed,
+so the acceptance test measures the dashboard's own churn only.
 
 **`src/tui/hooks/useClock.ts`** — `useClock(intervalMs): Date`; initial value
 `new Date()` at mount, then a `setInterval` tick; cleared on unmount.
