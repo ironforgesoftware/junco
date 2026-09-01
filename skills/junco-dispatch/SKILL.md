@@ -9,7 +9,7 @@ Package a unit of work into a plan-shaped markdown file with junco frontmatter, 
 
 **Why this skill exists:** plan quality is the single biggest lever on the agent's performance. In testing, a well-structured plan ran several times faster and used far fewer tokens than a loose prompt doing the same work. This skill bakes the earned-in-blood anti-loop conventions into every ticket you author.
 
-**Two families of work.** Most of this skill is about _authoring_ a plan-shaped ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR. Two modes are different, and author nothing: _assess_ triggers `junco assess`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an assess run never opens a PR. See "Assess mode" below. _analyze_ triggers `junco analyze`, a read-only investigation of a single issue that parks a drafted comment for review; posting it is a separate, human-confirmed step, and an analyze run never opens a PR either. See "Analyze mode" below.
+**Two families of work.** Most of this skill is about _authoring_ a ticket and submitting it — fresh dispatch, wrapping an existing plan, amending an open PR, or (when you already know the exact bytes) emitting a pre-built patch series instead of prose Steps — see "Apply mode" below. Two modes are different, and author nothing: _assess_ triggers `junco assess`, a read-only repo audit — on any watched repo, owned or not — that parks its findings for review; filing them as GitHub issues is a separate, human-confirmed step, and an assess run never opens a PR. See "Assess mode" below. _analyze_ triggers `junco analyze`, a read-only investigation of a single issue that parks a drafted comment for review; posting it is a separate, human-confirmed step, and an analyze run never opens a PR either. See "Analyze mode" below.
 
 ## When to trigger
 
@@ -92,6 +92,8 @@ Each task becomes its own ticket and pull request, executed in dependency order.
 The compiler refuses (never strips) a plan whose free-text fields — `title`, `description`, `acceptance`, `prohibitions`, `verification`, `shared_context` — contain a frontmatter delimiter (`---`), a code fence (` ``` `), or a `## `-prefixed markdown heading. Those all collide with structure the compiler itself builds into the child ticket's body, so write plain prose in these fields — no fenced code, no `##` headings, no `---` lines. Need a subheading inside one of these fields anyway? Use `###` or deeper — only a two-`#` heading is refused.
 
 ## Drafting procedure
+
+**First, the mode question:** did I resolve every unknown — do I know the exact bytes? Yes → skip the numbered steps below and build a patch ticket instead (see "Apply mode (patch tickets)"). No → continue with today's plan ticket, steps 1–6 below. Forcing certainty you do not have is the failure mode to avoid — an unresolved unknown belongs in a plan ticket's Steps, not smoothed over by a patch built on a guess.
 
 1. **Read the template.** Use Read tool on `~/.claude/skills/junco-dispatch/TEMPLATE.md` to load the canonical shape. Do not paraphrase from memory.
 2. **Choose an example as anchor — conditionally.** Read `EXAMPLE.md` only when the plan shape is unfamiliar to you or your last ticket failed plan-lint structurally; otherwise skip the read.
@@ -280,6 +282,35 @@ Use this when the user wants to fix / extend an open PR that junco originally op
 - PR is merged / closed — suggest a fresh ticket instead
 - Changes require rewriting history (squash/rebase) — tell the user the worker won't force-push; offer to do it manually or start fresh
 - The requested change is fundamentally different direction — recommend closing the PR and dispatching a fresh ticket
+
+## Apply mode (patch tickets)
+
+Mining junco's own transcripts showed why this mode exists: executor bash calls outnumbered edits roughly 3:1, and about 60% of them were spent re-locating and re-verifying content the ticket already contained — `cat -A`/`sed -n l` hunting for whitespace byte-by-byte, `awk` measuring column widths to reproduce an alignment the plan only described in prose. Ticket bodies ran 61–95% scaffolding around a 5–39% verbatim payload, and structurally identical work varied 8× in wall-clock. Prose cannot carry bytes; a patch can — when you already know the exact bytes a change needs, emit them instead of describing them for an agent to retype.
+
+**The question:** did I resolve every unknown — do I know the exact bytes? Yes → apply mode. No → today's plan ticket (Steps 1–6 above). Forcing certainty you do not have is the failure mode to avoid.
+
+### How to produce the series
+
+1. Make the edit in a scratch worktree of the target repo — a disposable clone or `git worktree add`, not the operator's live checkout.
+2. Commit it in logical steps: one commit per reviewable unit. Each commit becomes one commit on the eventual PR, in the same order and with the same message — `git am` takes both straight from the series.
+3. Generate the series: `git format-patch <base>..HEAD --stdout`.
+4. Wrap it in a `junco-patch` fence LONGER than any backtick run that appears inside the series. A commit message or an added file that itself contains a fenced code block would otherwise close your fence early and silently truncate the series — the same reason `wrapInFence` picks a fence length mechanically for `junco submit --plan`/`--as-issue`.
+5. Keep a short `## Why` above the fence and a `## Verification` block below it. Verification is the only execution-time check apply mode has: it still runs and still gates the PR, and the critic is skipped only when the patch applied cleanly with no fallback.
+
+The ergonomic door: `junco submit --patch <file> --repo <path> [--title T] [--why W] [--verify CMD]` composes the ticket from an already-generated `git format-patch` file — fence, wrapping, and frontmatter are all handled for you. Authoring the fence directly in a ticket body (as above) is the same mechanism without the CLI's help; reach for it when the ticket needs frontmatter the `--patch` door doesn't expose (labels, a linked issue, a non-default `base_branch`).
+
+### When NOT to use apply mode
+
+- The work needs a test-fix loop or judgment calls at execute time — apply mode has no agent turn to make those calls; use a plan ticket instead.
+- The change depends on files you have not read. A patch you cannot vouch for byte-for-byte is exactly the "forcing certainty" failure mode above.
+- The issue may sit parked long enough for the tree to move — a long-parked issue risks the target moving before a human applies the trigger label, so the patch's clean application is no longer guaranteed by the time it runs.
+- Amend tickets (`amends_pr`), plan-set children, and Q&A tickets (no `repo:`) are unsupported combinations with a `junco-patch` fence — don't compose one into any of these.
+
+**The fallback, and why it changes the guarantee.** If the patch fails to apply — or applies but the ticket's own `## Verification` then fails — junco escalates to ONE agent session that treats the patch as a specification rather than bytes to replay (`worker.applyFallbackToAgent`, on by default), and the PR body discloses that a fallback ran. Once that happens the PR is no longer byte-identical to the patch that was reviewed — apply mode is for a change you're confident applies cleanly, not a "worth a shot" patch.
+
+### What the reviewer sees
+
+The parked issue or ticket shows the exact diff before anything runs — that is the point of the label gate in apply mode. Keep `## Why` short and above the fence, so the reviewer reads the rationale first and then the literal bytes that would land, instead of a prose description standing in for them.
 
 ## Assess mode (audit a repo → review → file)
 

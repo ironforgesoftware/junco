@@ -252,6 +252,71 @@ amends_pr: 42
 - The PR is from a **fork** (`isCrossRepository: true`) → the worker refuses; push access is a permissions question.
 - You want a **different approach entirely** → close the original PR and dispatch a fresh ticket. Amend mode layers new commits on top; it can't rewind bad direction.
 
+## Apply mode (patch tickets)
+
+Use this instead of the Steps/Files shape above when you already know the
+exact bytes the change needs. An apply ticket carries a `git format-patch`
+series in a `junco-patch` fence instead of prose Steps; junco applies and
+commits it directly with `git am --3way` — no agent session, and the
+series' own commit messages become the PR's commits.
+
+### Minimal apply ticket
+
+````markdown
+---
+id: apply-<slug>-<YYYY-MM-DD>
+priority: normal
+timeout_minutes: 20
+repo: <absolute path>
+base_branch: main
+pr_title: "<verb-first title, ≤70 chars>"
+draft: true
+---
+
+# <Verb-first action title>
+
+## Why
+
+<1–2 sentences, short and above the fence — this is what the reviewer reads
+before the literal bytes that would land.>
+
+```junco-patch
+<the `git format-patch <base>..HEAD --stdout` output, pasted verbatim —
+one or more mbox-formatted commits, each starting with a `From <sha> ...`
+header line>
+```
+
+## Verification
+
+```bash
+<command>
+```
+````
+
+### Metadata rules for apply tickets
+
+- Frontmatter is the same PR-flow shape as an ordinary ticket — `repo:`,
+  `base_branch:`, `pr_title:`, `draft:`, `labels:` all apply the same way.
+  No frontmatter key selects apply mode; the `junco-patch` fence in the body
+  is the only signal.
+- **Fence length**: wrap the series in a fence strictly longer than any
+  backtick run inside it — a patch that itself adds or edits a fenced code
+  block needs a four-backtick (or longer) outer fence, since the fence is
+  only recognized when its closing delimiter is at least as long as its
+  opener.
+- `## Verification` is the only execution-time check apply mode has — do
+  not omit it.
+- Do not combine with `amends_pr`, plan-set membership (`plan:`), or a Q&A
+  ticket (no `repo:`) — unsupported combinations.
+
+### When NOT to use apply mode
+
+- The work needs a test-fix loop or judgment calls at execute time.
+- The change depends on files you have not read.
+- The issue may sit parked long enough for the tree to move before a human
+  applies the trigger label.
+- The ticket is an amend ticket, a plan-set child, or a Q&A ticket.
+
 ## Things you must NOT put in a plan
 
 - **"Think carefully"**, **"consider all edge cases"**, **"be thorough"** — these feed xhigh thinking's self-doubt and trigger loops.

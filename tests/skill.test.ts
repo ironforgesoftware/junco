@@ -59,6 +59,49 @@ describe("junco-dispatch SKILL.md", () => {
     expect(SKILL).not.toContain("Otherwise stay on the inbox default without asking");
   });
 
+  it("teaches apply mode: emit a patch when the exact bytes are already known", () => {
+    // The mode question — pinned in both the drafting-procedure callout and
+    // the Apply mode section itself (Task 6).
+    expect(SKILL).toContain("## Apply mode (patch tickets)");
+    expect(SKILL).toMatch(/did I resolve every unknown — do I know the exact bytes\?/);
+    expect(SKILL).toMatch(/Forcing certainty you do not have is the failure mode to avoid/);
+    // How to produce the series: the exact command, and the fence-length rule
+    // with its reason (not just the word "fence").
+    expect(SKILL).toContain("git format-patch <base>..HEAD --stdout");
+    expect(SKILL).toContain("junco-patch");
+    expect(SKILL).toMatch(
+      /fence LONGER than any backtick run[^\n]*close your fence early and silently truncate the series/,
+    );
+    // The ergonomic door from Task 5, described as an alternative to
+    // hand-authoring the fence — not the only way in.
+    expect(SKILL).toContain(
+      "junco submit --patch <file> --repo <path> [--title T] [--why W] [--verify CMD]",
+    );
+    // When NOT to use apply mode — the specific exclusions, not just the
+    // heading (guards meaning: a rewrite that drops one of these still fails).
+    expect(SKILL).toMatch(/test-fix loop or judgment calls at execute time/);
+    expect(SKILL).toMatch(/change depends on files you have not read/);
+    expect(SKILL).toMatch(/issue may sit parked long enough for the tree to move/);
+    expect(SKILL).toMatch(
+      /Amend tickets \(`amends_pr`\), plan-set children, and Q&A tickets \(no `repo:`\) are unsupported combinations/,
+    );
+    // The fallback changes the byte-identical guarantee — this is the reason
+    // apply mode isn't a free lunch.
+    expect(SKILL).toContain("worker.applyFallbackToAgent");
+    expect(SKILL).toMatch(/no longer byte-identical to the patch/);
+    // What the reviewer sees.
+    expect(SKILL).toMatch(/parked issue or ticket shows the exact diff before anything runs/);
+
+    // TEMPLATE.md gains the matching minimal apply-ticket shape.
+    const TEMPLATE = readFileSync(
+      new URL("../skills/junco-dispatch/TEMPLATE.md", import.meta.url),
+      "utf8",
+    );
+    expect(TEMPLATE).toContain("## Apply mode (patch tickets)");
+    expect(TEMPLATE).toContain("```junco-patch");
+    expect(TEMPLATE).toMatch(/Do not combine with `amends_pr`, plan-set membership/);
+  });
+
   it("drops the authored boilerplate the CLI and worker now own (Task 3 dispatch-slimming)", () => {
     // No more per-ticket timestamp ritual — nothing reads `created:`.
     expect(SKILL).not.toContain("created:");
