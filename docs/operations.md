@@ -142,7 +142,7 @@ So `junco start` never exits non-zero for a lock or claim conflict. A non-zero e
 
 ### Restarting after config or code changes
 
-The daemon reads its config and code once at startup. `junco restart` bounces the supervised daemon correctly: it finds the junco launchd/systemd user unit (legacy units are matched by the config path they reference, 0.10+ units are flagless), kicks it with the platform-correct verb (`launchctl kickstart -k` / `systemctl --user restart` — the verbs that relaunch unconditionally), and verifies the pid changed. (A plain SIGTERM is _not_ a restart: with launchd's `SuccessfulExit=false` keep-alive, a graceful exit stays down.) It validates the config first — refusing to bounce the daemon onto a config it can't parse — and confirms the new pid before reporting success.
+The daemon reads its config and code once at startup. `junco restart` bounces the supervised daemon correctly: it finds the junco launchd/systemd user unit (legacy units are matched by the config path they reference, 0.10+ units are flagless), kicks it with the platform-correct verb (`launchctl kickstart -k` / `systemctl --user restart` — the verbs that relaunch unconditionally), and verifies the pid changed. (A plain SIGTERM is _not_ a restart: with launchd's `SuccessfulExit=false` keep-alive, a graceful exit stays down.) It validates the config first — refusing to bounce the daemon onto a config it can't parse — and confirms the new pid before reporting success. A checkout-backed install additionally gets a **checkout preflight**: when the running `dist/` resolves inside a git checkout, `junco restart` refuses if `git status --porcelain` is non-empty or `HEAD` is not `origin/main`, printing what differs — `junco restart --force` restarts anyway (with a warning); see [Releasing](#releasing-maintainers).
 
 ## Security model
 
@@ -225,3 +225,10 @@ cd <worktreeRoot>/<ticket-id>
 ```
 
 Fix and resubmit the ticket, or set `verify.blockOnFail = false` if you want Junco to open the PR regardless.
+
+## Releasing (maintainers)
+
+Two mechanical guards back the release conventions in `CLAUDE.md` (#384):
+
+- **Reviewer-gated publish.** `.github/workflows/publish.yml` (triggered by a published GitHub Release, authenticated by npm trusted publishing over OIDC) runs its `publish` job in the `npm-publish` GitHub environment, which has required-reviewer protection. After `gh release create vX.Y.Z` the run parks at _Review deployments_ in the Actions UI until a designated reviewer approves it — the per-release approval is a click, not a norm. The environment lives in repo Settings → Environments; it was created with `gh api -X PUT repos/<owner>/<repo>/environments/npm-publish --input -` and a `{"reviewers":[{"type":"User","id":<id>}],"prevent_self_review":false}` body, and `gh api repos/<owner>/<repo>/environments/npm-publish` shows its rules.
+- **Restart preflight for a checkout-backed install.** When the global CLI is symlinked into a git checkout rather than an npm artifact, the daemon runs whatever `dist/` was last built there — a build from a feature branch or a dirty tree changes live behaviour with no version bump and no CI in between. `junco restart` therefore inspects the checkout the running `dist/` resolves inside and refuses when the tree is dirty or `HEAD` is not `origin/main` (a missing `origin/main` ref counts as a mismatch), listing the dirty paths and both commits. `junco restart --force` overrides with a warning. An npm install (no `.git` beside `dist/`) skips the check entirely, as does a host where git cannot answer.
