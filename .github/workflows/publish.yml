@@ -6,6 +6,9 @@ name: Publish to npm
 #   1. Bump "version" in package.json (+ update CHANGELOG.md) via a PR to main.
 #   2. After merge + quality gate green: git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
 #   3. Create a GitHub Release for that tag (gh release create vX.Y.Z ...).
+#   4. Approve the run: the publish job deploys to the `npm-publish` environment,
+#      whose required reviewers hold it at "Review deployments" in the Actions UI
+#      until a reviewer approves — the Release HOLD as a click, not a convention.
 #
 # Auth is npm "trusted publishing" (GitHub OIDC) — no NPM_TOKEN secret. The
 # package's Trusted Publisher on npmjs.com must point at this repo + this
@@ -27,6 +30,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Required-reviewer protection lives on the environment (repo Settings →
+    # Environments → npm-publish); the OIDC token carries its name as a claim.
+    environment: npm-publish
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
