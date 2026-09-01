@@ -189,6 +189,10 @@ export interface Config {
   verifyEnabled: boolean;
   verifyCommandTimeout: number;
   verifyBlockOnFail: boolean;
+  // #335: run `## Verification` blocks under the ticket's sandbox backend +
+  // policy (the blocks execute whatever the agent left in the worktree).
+  // false = the direct, unconfined spawn.
+  verifySandboxed: boolean;
   // Plan-lint gate (parity with the Python [plan_lint] section).
   planLintEnabled: boolean;
   planLintBlockOnError: boolean;

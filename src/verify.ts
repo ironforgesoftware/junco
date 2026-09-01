@@ -1,5 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn as realSpawn } from "node:child_process";
 import type { Config, Ticket } from "./types.js";
+import type { SandboxBackend } from "./agent/sandbox/backend.js";
+import type { SandboxPolicy } from "./agent/sandbox/policy.js";
 import { scrubEnv } from "./scrubEnv.js";
 
 // ---------------------------------------------------------------------------
@@ -16,6 +18,16 @@ import { scrubEnv } from "./scrubEnv.js";
 //    (command_timeout × executed blocks, capped at VERIFICATION_MAX_TOTAL_MS),
 //  - blocks receive a minimal env allowlist, never the worker's full
 //    process.env (which holds GH_TOKEN / inference-endpoint API keys).
+//  - (#335) blocks run under the ticket's sandbox backend + policy — the same
+//    `backend.spawnArgv` the agent's own bash goes through (agent/sandbox/
+//    bashOps.ts). The env scrub keeps tokens out of the block's environment,
+//    but a block executes whatever the agent left in the worktree (a
+//    `package.json` script, a Makefile target, a `conftest.py`), and the
+//    bot's credential lives on DISK — confinement is what keeps that, `~/.ssh`
+//    and the rest of the host out of reach. The sandboxed runner is threaded
+//    in by prFlow through `VerifyDeps.runBlockFn` (`makeLazySandboxedRunBlock`)
+//    so this module stays free of agent/session.ts; `verify.sandboxed=false`
+//    leaves the direct spawn in place.
 // ---------------------------------------------------------------------------
 
 export interface VerificationResult {
@@ -25,14 +37,34 @@ export interface VerificationResult {
   skippedReason: string | null;
 }
 
+/** Runs one bash block in `wtPath`; `{ exitCode: -1 }` on timeout. */
+export type RunBlockFn = (
+  block: string,
+  wtPath: string,
+  timeoutMs: number,
+) => Promise<{ exitCode: number; output: string }>;
+
+/** The sandbox a block runs under — the shape `resolveSandbox`
+ *  (agent/session.ts) returns for the agent's own session. */
+export interface VerifySandbox {
+  backend: SandboxBackend;
+  policy: SandboxPolicy;
+}
+
 /** Injectable seams for runSpecVerification (tests fake the block runner + clock). */
 export interface VerifyDeps {
-  runBlockFn?: (
-    block: string,
-    wtPath: string,
-    timeoutMs: number,
-  ) => Promise<{ exitCode: number; output: string }>;
+  /** The block runner; default is the direct `/bin/bash -c` spawn. prFlow
+   *  threads `makeLazySandboxedRunBlock` through here when `verify.sandboxed`
+   *  is on (#335). */
+  runBlockFn?: RunBlockFn;
   nowFn?: () => number;
+}
+
+/** Side-effect seams for the sandboxed runners (mirrors bashOps.ts's BashOpsDeps). */
+export interface SandboxedRunBlockDeps {
+  spawnFn?: typeof realSpawn;
+  /** Source env before scrubbing; defaults to process.env. */
+  env?: () => Record<string, string | undefined>;
 }
 
 /** Cap on executed verification blocks per ticket; blocks beyond it are
@@ -86,29 +118,31 @@ export function extractVerificationBlocks(body: string): string[] {
 }
 
 /**
- * Run a single bash block in wtPath, capturing combined stdout+stderr.
+ * Spawn `argv` in `cwd`, capturing combined stdout+stderr.
  * Returns `{ exitCode, output }`. On timeout exitCode = -1.
  */
-function runBlock(
-  block: string,
-  wtPath: string,
+function spawnBlock(
+  argv: string[],
+  cwd: string,
+  env: Record<string, string>,
   timeoutMs: number,
+  spawnFn: typeof realSpawn,
 ): Promise<{ exitCode: number; output: string }> {
   return new Promise((resolve) => {
-    const proc = spawn("/bin/bash", ["-c", block], {
-      cwd: wtPath,
+    const [bin, ...args] = argv;
+    const proc = spawnFn(bin, args, {
+      cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      // Never the worker's full process.env — see verificationEnv (#35).
-      env: verificationEnv(),
+      env,
     });
 
     let stdout = "";
     let stderr = "";
 
-    proc.stdout.on("data", (chunk: Buffer) => {
+    proc.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
-    proc.stderr.on("data", (chunk: Buffer) => {
+    proc.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
@@ -135,6 +169,59 @@ function runBlock(
       resolve({ exitCode: -2, output: `verification harness error: ${err}` });
     });
   });
+}
+
+/** The direct, unconfined runner: `/bin/bash -c <block>` with the scrubbed env.
+ *  What every block ran through before #335; now the `verify.sandboxed=false`
+ *  / sandbox-disabled path. */
+const runBlockDirect: RunBlockFn = (block, wtPath, timeoutMs) =>
+  // Never the worker's full process.env — see verificationEnv (#35).
+  spawnBlock(["/bin/bash", "-c", block], wtPath, verificationEnv(), timeoutMs, realSpawn);
+
+/**
+ * #335: a block runner that spawns each block through `backend.spawnArgv`
+ * under `policy` — the exact seam the agent's sandboxed bash tool uses
+ * (agent/sandbox/bashOps.ts) — with the same scrubbed env and TMPDIR
+ * redirected to the policy's scratch dir. With the `none` backend the argv is
+ * `/bin/bash -c <block>`, i.e. exactly the direct runner.
+ */
+export function makeSandboxedRunBlock(
+  backend: SandboxBackend,
+  policy: SandboxPolicy,
+  deps: SandboxedRunBlockDeps = {},
+): RunBlockFn {
+  const spawnFn = deps.spawnFn ?? realSpawn;
+  const envSource = deps.env ?? (() => process.env);
+  return (block, wtPath, timeoutMs) =>
+    spawnBlock(
+      backend.spawnArgv(block, policy),
+      wtPath,
+      { ...verificationEnv(envSource()), TMPDIR: policy.scratchDir },
+      timeoutMs,
+      spawnFn,
+    );
+}
+
+/**
+ * #335: the runner prFlow threads through `VerifyDeps.runBlockFn`. The
+ * sandbox is resolved LAZILY — on the first block, so a block-less ticket or
+ * `verify.enabled=false` never pays for the backend probe and scratch dir —
+ * and ONCE: Phase 9 may re-verify after an escalation rung, and the answer
+ * does not change. `null` from the resolver means the sandbox is disabled →
+ * the direct runner. A rejection (an explicit backend that is unavailable —
+ * the same refusal the agent session itself would have hit) is memoized too
+ * and fails every block closed: runSpecVerification reports each as a harness
+ * error and nothing ever spawns unconfined.
+ */
+export function makeLazySandboxedRunBlock(
+  resolve: () => Promise<VerifySandbox | null>,
+  deps: SandboxedRunBlockDeps = {},
+): RunBlockFn {
+  let runner: Promise<RunBlockFn> | undefined;
+  return (block, wtPath, timeoutMs) =>
+    (runner ??= resolve().then((sandbox) =>
+      sandbox ? makeSandboxedRunBlock(sandbox.backend, sandbox.policy, deps) : runBlockDirect,
+    )).then((run) => run(block, wtPath, timeoutMs));
 }
 
 /**
@@ -170,7 +257,7 @@ export async function runSpecVerification(
     };
   }
 
-  const runBlockFn = deps.runBlockFn ?? runBlock;
+  const runBlockFn = deps.runBlockFn ?? runBlockDirect;
   const now = deps.nowFn ?? Date.now;
 
   let passed = 0;

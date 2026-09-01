@@ -37,10 +37,22 @@ import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./re
 import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import type { SpendLedger } from "./spendLedger.js";
-import { runSpecVerification, type VerificationResult } from "./verify.js";
+import {
+  runSpecVerification,
+  makeLazySandboxedRunBlock,
+  type VerificationResult,
+  type VerifyDeps,
+} from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
-import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
+import {
+  runAgent,
+  makePiSessionFactory,
+  resolveSandbox,
+  type AgentSessionLike,
+  type ResolvedSandbox,
+  type SessionOverrides,
+} from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalizePr, computePrStatus, type TerminalDirs } from "./finalize.js";
 import { enqueueOp, isOffline } from "./githubOutbox.js";
@@ -432,6 +444,14 @@ export interface PrFlowDeps {
   ) => () => Promise<AgentSessionLike>;
   /** Inject the critic session factory (tests control the PASS/MISSING verdict). */
   criticSessionFactory?: () => Promise<AgentSessionLike>;
+  /** Inject the sandbox resolver the `## Verification` blocks run under (#335;
+   * tests pass a fake backend that records the argv/policy it received).
+   * Defaults to agent/session.ts's resolveSandbox — the agent's own. */
+  resolveSandbox?: (
+    cfg: Config,
+    cwd: string,
+    overrides: SessionOverrides,
+  ) => Promise<ResolvedSandbox | null>;
   /** Terminal dirs override (tests). Defaults to queuePaths(cfg). */
   dirs?: TerminalDirs;
   /** Operator force-stop signal — soft-aborts the worker + corrective sessions
@@ -578,6 +598,22 @@ export async function runPrFlow(
     (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
       network: task.network ?? undefined,
     });
+  // #335: the ticket's `## Verification` blocks execute whatever the session
+  // left in the worktree, so they run under the SAME backend + policy as the
+  // agent's own bash — resolved for this worktree (the session's policy never
+  // leaves the session factory) with the same per-ticket network opt-in. The
+  // runner resolves lazily and once (makeLazySandboxedRunBlock): Phase 9 may
+  // re-verify after an escalation rung, and the answer does not change. Lever
+  // off → verify.ts's direct spawn, exactly as before.
+  const verifyDeps: VerifyDeps = cfg.verifySandboxed
+    ? {
+        runBlockFn: makeLazySandboxedRunBlock(() =>
+          (deps.resolveSandbox ?? resolveSandbox)(cfg, wtPath, {
+            network: task.network ?? undefined,
+          }),
+        ),
+      }
+    : {};
   const patchSeries = parsePatchSeries(task.body);
   // final-review B1: an apply ticket can never amend an existing PR. Amend
   // mode's Phase 12 branch (below) only refreshes the PR URL — it never calls
@@ -1022,7 +1058,7 @@ export async function runPrFlow(
       };
     }
     if (!skipPostSessionReview) {
-      prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+      prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
       if (prOutcome.verification.skippedReason) {
         log.info(`spec verification: skipped (${prOutcome.verification.skippedReason})`);
       } else {
@@ -1104,7 +1140,7 @@ export async function runPrFlow(
         // re-evaluation below) and re-run verification exactly once.
         newCommits = await countNewCommits(cfg, wtPath, sinceRef);
         prOutcome.commits = await listNewCommits(cfg, wtPath, sinceRef);
-        prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+        prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
         log.info(
           `spec verification (post-fallback): ${prOutcome.verification.blocksPassed}/${prOutcome.verification.blocksRun} checks passed`,
         );
@@ -1167,7 +1203,7 @@ export async function runPrFlow(
           log.info(
             `critic (post-retry): ${criticAfter.status}${criticAfter.findings ? ` (${criticAfter.findings.slice(0, 120)})` : ""}`,
           );
-          prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+          prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
         }
       }
     }

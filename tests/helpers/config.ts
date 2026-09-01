@@ -106,6 +106,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     defaultLabels: [],
     verifyCommandTimeout: 60,
     verifyBlockOnFail: false,
+    verifySandboxed: true,
     criticMaxRetries: 1,
     criticThinking: "minimal",
     planLintBlockOnError: false,

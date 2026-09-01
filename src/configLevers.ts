@@ -501,6 +501,15 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description: "Block PR creation when verify fails (vs. warn and continue).",
   },
+  {
+    path: "verify.sandboxed",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "live",
+    description:
+      "Run ## Verification blocks under the ticket's sandbox (false = your repo's code runs unconfined).",
+  },
 
   // --- sandbox.* ---
   {

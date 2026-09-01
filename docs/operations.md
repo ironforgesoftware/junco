@@ -146,7 +146,7 @@ The daemon reads its config and code once at startup. `junco restart` bounces th
 
 ## Security model
 
-The inbox is a **code-execution boundary**. Junco runs a coding agent with bash/file tools against whatever ticket lands in `inbox/`, and `## Verification` blocks run as your user — anyone who can write to the inbox can act as you. Keep the inbox on a local disk you own, don't point it at a synced/shared folder others can write to, and set `git.allowedRepoRoots` to confine PR-flow tickets to approved checkout locations:
+The inbox is a **code-execution boundary**. Junco runs a coding agent with bash/file tools against whatever ticket lands in `inbox/`, and `## Verification` blocks run as your user (confined by the execution sandbox by default — `verify.sandboxed`, see [configuration.md](configuration.md#verification-sandbox) — but still as you) — anyone who can write to the inbox can act as you. Keep the inbox on a local disk you own, don't point it at a synced/shared folder others can write to, and set `git.allowedRepoRoots` to confine PR-flow tickets to approved checkout locations:
 
 ```json
 {

@@ -431,6 +431,10 @@ export const ConfigSchema = z.object({
       enabled: z.boolean().default(true),
       commandTimeout: z.number().min(1).default(60),
       blockOnFail: z.boolean().default(false),
+      // #335: verification bash runs the agent's own artifacts, so it is
+      // confined like the agent's bash. Opt out only for a suite that must
+      // leave the sandbox (verification then runs the repo's code unconfined).
+      sandboxed: z.boolean().default(true),
     })
     .default({}),
   sandbox: z
@@ -738,6 +742,7 @@ export function assembleConfig(
     verifyEnabled: d.verify.enabled,
     verifyCommandTimeout: d.verify.commandTimeout,
     verifyBlockOnFail: d.verify.blockOnFail,
+    verifySandboxed: d.verify.sandboxed,
     criticEnabled: d.critic.enabled,
     criticMaxRetries: d.critic.maxRetries,
     criticThinking: d.critic.thinking,
