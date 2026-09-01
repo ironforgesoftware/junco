@@ -1362,7 +1362,7 @@ describe("header breadcrumbs", () => {
     await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
   });
 
-  it("y (retry) on a RUNNING queue row toasts instead of spawning retry", async () => {
+  it("t on a RUNNING queue row toasts instead of spawning retry", async () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const spawned: string[] = [];
     const r = renderApp(client, wlc(), 999999, async (name) => {
@@ -1377,9 +1377,7 @@ describe("header breadcrumbs", () => {
       const line = (r.lastFrame() ?? "").split("\n").find((l) => l.includes("#46 exec"));
       return line !== undefined && line.includes("▌");
     });
-    // "retry" now derives to y, not t — t is structurally excluded (#330),
-    // reserved for the issue-transcript binding.
-    r.stdin.write("y");
+    r.stdin.write("t");
     await until(() => (r.lastFrame() ?? "").includes("enter opens its transcript"));
     expect(spawned).toEqual([]);
   });

@@ -57,7 +57,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => selOn(r, "sub-fix-typos"));
     r.stdin.write("j");
     await until(() => selOn(r, "#9"));
-    r.stdin.write("y"); // re[t]ry mnemonic now derives to y (t is excluded, #330)
+    r.stdin.write("t"); // re[t]ry mnemonic
     await until(() => calls.length === 1);
     expect(calls[0]).toEqual(["retry", ["gh-acme-api-9"]]);
   });
@@ -122,7 +122,7 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await until(() => frame(r).includes("back"));
     r.stdin.write("g"); // top selectable row — now the RUNNING row (running ⧺ waiting ⧺ recent)
     await until(() => selOn(r, "#1 exec"));
-    r.stdin.write("y"); // re[t]ry mnemonic now derives to y (t is excluded, #330) — guarded no-op on a running row
+    r.stdin.write("t"); // re[t]ry mnemonic — guarded no-op on a running row
     await until(() => frame(r).toLowerCase().includes("enter opens its transcript"));
     expect(calls).toHaveLength(0);
   });
@@ -273,7 +273,7 @@ describe("section cursor highlight is aligned with the x/R action target", () =>
     expect(selOn(r, "#8")).toBe(false); // the failed row is NOT highlighted yet
     // retry while the DONE row is highlighted is a guarded no-op: a toast, and
     // NO spawn — it must NOT retry the (non-highlighted) failed row.
-    r.stdin.write("y"); // re[t]ry mnemonic now derives to y (t is excluded, #330)
+    r.stdin.write("t"); // re[t]ry mnemonic
     await until(() => frame(r).toLowerCase().includes("can't be requeued"));
     expect(calls).toHaveLength(0);
     // Move down onto the FAILED row: highlight follows, and now it IS reachable.
@@ -281,7 +281,7 @@ describe("section cursor highlight is aligned with the x/R action target", () =>
     await until(() => selOn(r, "#8"));
     expect(selOn(r, "#7")).toBe(false);
     // R now retries exactly the highlighted row (#8), never the done row.
-    r.stdin.write("y"); // re[t]ry mnemonic now derives to y (t is excluded, #330)
+    r.stdin.write("t"); // re[t]ry mnemonic
     await until(() => calls.length === 1);
     expect(calls[0]).toEqual(["retry", ["gh-acme-api-8"]]);
   });

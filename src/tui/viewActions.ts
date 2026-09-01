@@ -60,10 +60,8 @@ const MAIN_RESERVED: ReadonlyMap<string, string> = new Map([
   ["quit", "q"],
   ["help", "?"],
 ]);
-/** Structural letters in main contexts: vim movement + the pane-2 alias, plus
- * `t` — claimed structurally by the issue-transcript binding (App.tsx, #330)
- * so a future auto-derived verb can never silently shadow it. */
-const MAIN_EXCLUDED: ReadonlySet<string> = new Set(["j", "k", "h", "l", "g", "G", "i", "t"]);
+/** Structural letters in main contexts: vim movement + the pane-2 alias. */
+const MAIN_EXCLUDED: ReadonlySet<string> = new Set(["j", "k", "h", "l", "g", "G", "i"]);
 
 /** Canonical global order — identical prefix in EVERY main context, so the
  * shared verbs derive the same key regardless of body (spec §2). */

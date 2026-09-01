@@ -30,10 +30,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
     });
   });
   it("main:queue", () => {
-    // "retry"'s natural candidates are r/e/t/y; r and e are claimed by the
-    // globals (refresh/review) and t is now structurally excluded (#330 —
-    // reserved for the issue-transcript binding), so retry derives to y.
-    expect(km({ kind: "main", body: "queue" })).toEqual({ ...GLOBALS, y: "retry", D: "delete" });
+    expect(km({ kind: "main", body: "queue" })).toEqual({ ...GLOBALS, t: "retry", D: "delete" });
   });
   it("main:outbox", () => {
     expect(km({ kind: "main", body: "outbox" })).toEqual({ ...GLOBALS, f: "flush" });

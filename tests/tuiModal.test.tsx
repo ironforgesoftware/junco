@@ -96,9 +96,7 @@ describe("HelpModal — derived mnemonics (#shortcut overhaul)", () => {
       />,
     ).lastFrame()!;
     const rows = f.split("\n").map((l) => l.replace(/║/g, "").trim());
-    // "retry" derives to y, not t: t is now structurally excluded (#330 —
-    // reserved for the issue-transcript binding).
-    expect(rows.some((l) => l.startsWith("y") && l.includes("retry"))).toBe(true);
+    expect(rows.some((l) => l.startsWith("t") && l.includes("retry"))).toBe(true);
     expect(rows.some((l) => l.startsWith("D") && l.includes("delete"))).toBe(true);
   });
 });
