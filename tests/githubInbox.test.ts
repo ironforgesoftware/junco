@@ -32,7 +32,7 @@ import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import { OUTBOX_MARKER_PREFIX } from "../src/githubOutbox.js";
 import { submitAsIssue, wrapInFence } from "../src/submitAsIssue.js";
 import { parsePatchSeries } from "../src/patchTicket.js";
-import { makeConfig } from "./helpers/config.js";
+import { makeConfig, type ConfigSeams } from "./helpers/config.js";
 import { cloneHarness, run } from "./helpers/gitHarness.js";
 
 // ticketInFlight (every dispatch path) calls queuePaths(cfg); point bridge
@@ -40,9 +40,23 @@ import { cloneHarness, run } from "./helpers/gitHarness.js";
 const NX_VAULT = join(tmpdir(), `junco-nx-${Math.random().toString(36).slice(2)}`);
 const NX_STATE_DIR = join(tmpdir(), `junco-state-${Math.random().toString(36).slice(2)}`);
 
-// Minimal Config for conversion tests — only the fields issueToTicket and
-// buildPlanningTicket read.
-const cfg = {
+const seams: ConfigSeams = {
+  dataDir: NX_STATE_DIR,
+  queueRoot: join(NX_VAULT, "tickets"),
+  worktreeRoot: "/sbxroot/wts",
+  tools: [],
+  criticEnabled: false,
+  planLintEnabled: false,
+  verifyEnabled: false,
+  supervisorEnabled: false,
+  healthEnabled: false,
+  removeWorktreeOnSuccess: false,
+};
+
+// A full Config, not an `as Config` partial (#366): pollGithubInbox is a real
+// entry point, so every field it might read carries makeConfig's real default
+// (and the poison ghBin) instead of reading as undefined.
+const cfg = makeConfig(seams, {
   github: {
     enabled: true,
     triggerLabel: "junco",
@@ -53,8 +67,7 @@ const cfg = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
-  planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
-} as unknown as Config;
+});
 const repo = { nwo: "acme/api", path: "/home/u/code/api" };
 const issue = (labels: string[], over: Partial<GhIssue> = {}): GhIssue => ({
   number: 42,
@@ -95,7 +108,7 @@ describe("labelSwapArgs", () => {
   ];
 
   it("every plan-ready exit also removes approved iff requireApproval is on", () => {
-    const off = { ...cfg, github: { ...cfg.github, requireApproval: false } } as Config;
+    const off = { ...cfg, github: { ...cfg.github, requireApproval: false } };
     for (const swap of planReadyExits) {
       const on = labelSwapArgs(cfg, "acme/api", 42, swap);
       expect(on.slice(0, 5)).toEqual(["issue", "edit", "42", "--repo", "acme/api"]);
@@ -312,15 +325,12 @@ describe("pollGithubInbox", () => {
     return { ghFn, gitFn, submitFn, calls, submitted };
   }
 
-  const bridgeCfg = {
-    ...cfg,
-    dataDir: NX_STATE_DIR,
-    queueRoot: join(NX_VAULT, "tickets"),
+  const bridgeCfg = makeConfig(seams, {
     github: {
       ...cfg.github,
       repos: [{ nwo: "acme/api", path: "/home/u/code/api" }],
     },
-  } as Config;
+  });
   const rawIssue = {
     number: 42,
     title: "Add rate limiting",
@@ -328,6 +338,12 @@ describe("pollGithubInbox", () => {
     labels: [{ name: "junco" }],
   };
   const labeledEvent = `{"actor":"alice","label":"junco","created_at":"2026-07-06T00:00:00Z"}`;
+
+  it("runs against a full Config: the poison ghBin is set, not undefined (#366)", () => {
+    // A partial `as Config` fixture reads every unset field as undefined, so a
+    // new behavior-changing default would pass here on a path no operator runs.
+    expect(bridgeCfg.ghBin).toBe("/nonexistent/gh");
+  });
 
   it("bridges an eligible PR issue into a PLANNING ticket + planning label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
@@ -541,13 +557,12 @@ tasks:
   - {id: b, title: T B, depends_on: [a], description: Build B., acceptance: [works]}
 `;
     const fenceSetBody = "Parked ticket.\n\n```junco-plan\n" + FENCE_SET + "```\n";
-    const withPlanSets = (root: string): Config =>
-      ({
-        ...bridgeCfg,
-        dataDir: join(root, "data"),
-        queueRoot: join(root, "tickets"),
-        planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
-      }) as Config;
+    const withPlanSets = (root: string): Config => ({
+      ...bridgeCfg,
+      dataDir: join(root, "data"),
+      queueRoot: join(root, "tickets"),
+      planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+    });
 
     it("compiles a junco-plan fence from the issue body when plan sets are enabled", async () => {
       const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
@@ -625,7 +640,7 @@ tasks:
       const localCfg = {
         ...bridgeCfg,
         planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
-      } as Config;
+      };
       const f = makeFakes({
         issues: [{ ...rawIssue, body: fenceSetBody }],
         events: labeledEvent,
@@ -732,7 +747,7 @@ tasks:
       ...bridgeCfg,
       dataDir: dir,
       github: { ...bridgeCfg.github, repos: [] },
-    } as Config;
+    };
     const wlFile = watchlistPath(wlCfg);
     const calls: string[][] = [];
     const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
@@ -1086,7 +1101,7 @@ tasks:
       const autoCfg = {
         ...bridgeCfg,
         github: { ...bridgeCfg.github, requireApproval: false },
-      } as Config;
+      };
       const noApproval = {
         ...readyIssue,
         labels: [{ name: "junco" }, { name: "junco:plan-ready" }],
@@ -1162,7 +1177,7 @@ tasks:
         const done = join(root, "tickets", "done");
         mkdirSync(done, { recursive: true });
         writeFileSync(join(done, `1710000000000__${EXEC_ID}.md`), "old run", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const f = makeFakes({
           issues: [readyIssue],
           events: approvedAfter,
@@ -1194,7 +1209,7 @@ tasks:
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the exec-ticket id (gh-acme-api-<hash>-42).
         writeFileSync(join(processing, `1720000000000__${EXEC_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const f = makeFakes({
           issues: [readyIssue],
           events: approvedAfter,
@@ -1244,7 +1259,7 @@ tasks:
             dataDir: join(root, "data"),
             queueRoot: join(root, "tickets"),
             planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
-          } as Config;
+          };
           const f = makeFakes({
             issues: [readyIssue],
             events: approvedAfter,
@@ -1285,7 +1300,7 @@ tasks:
             dataDir: join(root, "data"),
             queueRoot: join(root, "tickets"),
             planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
-          } as Config;
+          };
           const f = makeFakes({
             issues: [readyIssue],
             events: approvedAfter,
@@ -1323,7 +1338,7 @@ tasks:
             dataDir: join(root, "data"),
             queueRoot: join(root, "tickets"),
             planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
-          } as Config;
+          };
           // Duplicate task id "a" — a compile error caught by parsePlanSet.
           const badFence = `version: 1
 tasks:
@@ -1405,7 +1420,7 @@ tasks:
             dataDir: join(root, "data"),
             queueRoot: join(root, "tickets"),
             planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
-          } as Config;
+          };
           const f = makeFakes({
             issues: [readyIssue],
             events: approvedAfter,
@@ -1465,7 +1480,7 @@ tasks:
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the planning-ticket id (gh-acme-api-<hash>-42-plan).
         writeFileSync(join(processing, `1720000000000__${PLAN_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
         expect(n).toBe(1);
@@ -1484,7 +1499,7 @@ tasks:
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the ask-ticket id (gh-acme-api-<hash>-42).
         writeFileSync(join(processing, `1720000000000__${EXEC_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const askIssue = { ...rawIssue, labels: [{ name: "junco" }, { name: "junco:ask" }] };
         const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
@@ -1503,7 +1518,7 @@ tasks:
         const inbox = join(root, "tickets", "inbox");
         mkdirSync(inbox, { recursive: true });
         writeFileSync(join(inbox, `${PLAN_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
         expect(n).toBe(1);
@@ -1523,7 +1538,7 @@ tasks:
         ...bridgeCfg,
         dataDir: stateDir,
         github: { ...bridgeCfg.github, repos: [] }, // nothing in config
-      } as Config;
+      };
       const f = makeFakes({ issues: [] });
       const state = newBridgeState();
 
