@@ -57,6 +57,26 @@ export function ghShim(dir: string, name: string, prCreateBody: string): string 
 }
 
 /**
+ * A `git` wrapper that appends every invocation's argv (space-joined, one line
+ * per call) to `logFile` and then execs the real git — so a test can assert the
+ * exact argv the code under test built while the operation still really runs.
+ */
+export function gitLogShim(dir: string, name: string, logFile: string): string {
+  const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  const p = join(dir, name);
+  writeFileSync(
+    p,
+    `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(logFile)}
+exec ${JSON.stringify(realGit)} "$@"
+`,
+    "utf8",
+  );
+  chmodSync(p, 0o755);
+  return p;
+}
+
+/**
  * A `git` wrapper that fails the named subcommand with a scripted stderr line
  * and execs the real git for everything else. `subcommand` is matched as a
  * standalone argv token (none of the flow's other git calls carry it).
