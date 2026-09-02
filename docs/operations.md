@@ -61,11 +61,11 @@ The table below mirrors `junco --help` in the same order; when they disagree, `-
 
 When `observability.healthEnabled = true`, Junco serves HTTP on `healthHost:healthPort` (default `127.0.0.1:8787`).
 
-| Endpoint      | Success                                         | Use                                                                                                                                                                                                                                                                     |
-| ------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /live`   | `200 {status:"alive", pid, uptimeSeconds}`      | Liveness — is the process up?                                                                                                                                                                                                                                           |
-| `GET /ready`  | `200 {status:"ready"}` or `503`                 | Readiness — can the endpoint be reached? A latched or backed-off provider gate forces the 503 (with the gate's reason) regardless of the probe result.                                                                                                                  |
-| `GET /health` | `200 {status:"ok", ready, metrics:{...}, gate}` | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals, plus `gate` (see below). |
+| Endpoint      | Success                                         | Use                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /live`   | `200 {status:"alive", pid, uptimeSeconds}`      | Liveness — is the process up?                                                                                                                                                                                                                                                                                                                                                                                           |
+| `GET /ready`  | `200 {status:"ready"}` or `503`                 | Readiness — can the endpoint be reached? A latched or backed-off provider gate forces the 503 (with the gate's reason) regardless of the probe result.                                                                                                                                                                                                                                                                  |
+| `GET /health` | `200 {status:"ok", ready, metrics:{...}, gate}` | Full metrics: uptime, poll count, in-flight tickets (`currentTickets`), live per-ticket progress (`currentProgress`: turns, last tool, output tokens), tasks processed/succeeded/failed, task counts by status, token totals, duration totals, plus `gate` (see below) and, when the dashboard chat is enabled, `chats` (per-repo session status, turns, and cost — see [Configuration § Chat](configuration.md#chat)). |
 
 ```bash
 # Quick checks:
@@ -105,6 +105,8 @@ The interactive dashboard (`junco dashboard`) shows the gate as a colored dot on
 **Concurrency:** `worker.maxConcurrent` (default 1) runs that many tickets in parallel. Tickets targeting the same `repo:` always serialize, and a graceful stop drains in-flight work.
 
 > The health server binds to loopback (`127.0.0.1`) by default. To expose it on a network interface, change `observability.healthHost`. Do so with care — there is no authentication.
+
+**Chat:** the dashboard's `/chat/*` routes (SSE out, POST in) live on this same health server but are **loopback-only regardless of `observability.healthHost`**, and reject any request carrying an `Origin` header — widening `healthHost` never widens chat's reach. See [Configuration § Chat](configuration.md#chat).
 
 ## Running as a service
 

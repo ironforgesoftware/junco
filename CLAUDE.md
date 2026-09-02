@@ -8,17 +8,17 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 
 ## Commands
 
-| Action    | Command                                                                                              |
-| --------- | ---------------------------------------------------------------------------------------------------- |
-| Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                        |
-| All tests | `npm test` (vitest, ~4,600 tests, ~40s)                                                              |
-| One file  | `npx vitest run tests/<name>.test.ts`                                                                |
+| Action    | Command                                                                                                                            |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                                                      |
+| All tests | `npm test` (vitest, ~4,600 tests, ~40s)                                                                                            |
+| One file  | `npx vitest run tests/<name>.test.ts`                                                                                              |
 | E2E       | `npm run test:e2e` (needs `dist/`; spawns the built CLI in a sandboxed HOME against a scripted model stub; not part of `npm test`) |
-| Coverage  | `npx vitest run --coverage` (global + per-glob floors in `vitest.config.ts`; CI job `coverage`)      |
-| Lint      | `npm run lint` (type-aware via `tsconfig.eslint.json`, which is what covers `tests/`)                |
-| Typecheck | `npm run typecheck` (tsc over src/ + tests/ via `tsconfig.eslint.json` — vitest does not type-check) |
-| Format    | `npm run format` / `npm run format:check` (prettier, 100 cols)                                       |
-| Full gate | `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run test:e2e` |
+| Coverage  | `npx vitest run --coverage` (global + per-glob floors in `vitest.config.ts`; CI job `coverage`)                                    |
+| Lint      | `npm run lint` (type-aware via `tsconfig.eslint.json`, which is what covers `tests/`)                                              |
+| Typecheck | `npm run typecheck` (tsc over src/ + tests/ via `tsconfig.eslint.json` — vitest does not type-check)                               |
+| Format    | `npm run format` / `npm run format:check` (prettier, 100 cols)                                                                     |
+| Full gate | `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run test:e2e`                       |
 
 Run the full gate before claiming work done; CI (`.github/workflows/quality-gate.yml`) runs it on PRs and pushes to main across ubuntu/macos × node 22.19/24, plus a packaged-CLI smoke test; the aggregate `quality-gate` check is required to merge.
 
@@ -35,6 +35,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 - **Every side effect goes behind an injectable `deps` seam** (see any module's `*Deps` interface). Tests never touch the network or a real model: fake `gh` is an inline-generated shell script, fake sessions implement `AgentSessionLike`.
 - Dependencies are **exact-pinned** (no `^`): add with `npm install --save-exact <pkg>`.
 - Many comments cite `worker.py` line numbers (Python-port provenance) or SDK `.d.ts` locations — they are verification evidence, not noise. Keep them true or delete them with the code they describe; never let them drift.
+- `/chat/*` on the health server is loopback-only by construction (`chatRoutes.ts` checks the socket address and rejects any `Origin` header) — `healthHost` never widens it. The chat session's tools are the Q&A read-only subset; drafts pass a frontmatter allowlist (`fenceExtract.ts`) — never let model output set `repo:`/`tools:`/`network:`/`workdir:`.
 
 ## Testing gotchas (each of these has burned a session)
 
@@ -68,7 +69,7 @@ a semantic merge. Details: `docs/parallel-sessions.md`.
 
 - `node dist/cli.js doctor` — preflight config, git/gh auth, endpoint, model, dirs.
 - `node dist/cli.js status` / `list` / `logs -f` — daemon, queue, and log visibility; health JSON at `http://127.0.0.1:8787/health` (default).
-- Per-ticket event transcripts (the debugging record for failed runs): `<dataDir>/data/transcripts/<ticket-id>.jsonl`, default `~/.junco/data/transcripts/` (a pre-0.10 `flat`-layout root keeps `<dataDir>/transcripts/`). `junco replay <id>` re-runs a transcript through the guards under any policy (flag > recorded > config > defaults) — a what-if report, not a live rerun. `junco transcript <id>` (or `enter` on the dashboard's queue row, `t` on an issue row) renders it: runs, tool calls + results, the agent's answer.
+- Per-ticket event transcripts (the debugging record for failed runs): `<dataDir>/data/transcripts/<ticket-id>.jsonl`, default `~/.junco/data/transcripts/` (a pre-0.10 `flat`-layout root keeps `<dataDir>/transcripts/`). `junco replay <id>` re-runs a transcript through the guards under any policy (flag > recorded > config > defaults) — a what-if report, not a live rerun. `junco transcript <id>` (or `enter` on the dashboard's queue row, `t` on an issue row) renders it: runs, tool calls + results, the agent's answer. `junco transcript --chat <owner/repo>` renders a repo's dashboard chat transcript the same way.
 
 ## Git & release
 

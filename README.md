@@ -155,6 +155,24 @@ it). It works identically on owned and unowned repos — an unwatched repo is
 auto-forked and provisioned the same way `junco import` does.
 → [Issue investigation guide](docs/investigate.md)
 
+## Chat with the agent
+
+Press `t` on a repo row in the dashboard to open an ongoing, read-only chat with the
+coding agent about that repository — ask anything ("what does this module do?", "is
+there a cheaper way to do #42?"), and when you want work done, ask for a ticket: the
+agent drafts it inline and junco parks it for you to review, the same confirm gate
+`audit`/`investigate` above use. `s` submits the draft, `e` opens it in `$EDITOR`,
+`r` cycles its route (auto → inbox → issue), `D` discards it — nothing is ever
+submitted, filed, or dispatched without that confirm. Every dispatch branch is
+reachable from the conversation: a plain ticket, a ticket set, a plan set, an amend
+on an open PR, an apply-ticket patch, or a request to `audit`/`investigate`. `/pr N`
+and `/issue N` pull that PR or issue's context into the conversation. The session
+lives in the daemon, not the dashboard, so it survives a dashboard quit or a daemon
+restart; `junco transcript --chat owner/repo` prints one outside the TUI. The
+chat's tools are the same read-only subset a Q&A ticket gets, and `/chat/*` never
+leaves loopback.
+→ [ARCHITECTURE.md § The chat path](ARCHITECTURE.md#the-chat-path-dashboard-chat)
+
 ## Sixty seconds to a running worker
 
 Requires **Node ≥ 22.19**, plus `git` and an authenticated `gh` for PR flows. The execution sandbox is on by default: macOS uses the built-in Seatbelt (nothing to install); **Linux needs `bubblewrap`** (`apt install bubblewrap` / `dnf install bubblewrap`) — or set `sandbox.backend: "none"` / `sandbox.enabled: false`.
