@@ -1,9 +1,12 @@
 /**
  * /chat/* on the health server (spec 2026-09-01 §5): SSE out, POST in, and
- * the auth boundary — loopback-only regardless of healthHost, and any request
- * carrying an Origin header is refused (a browser always sends one
- * cross-origin; the TUI never does), which closes the localhost-CSRF door
- * without a token. Every response is JSON except the event stream.
+ * the auth boundary — loopback-only regardless of healthHost, a Host-header
+ * allowlist (closes a DNS-rebinding read of GET /chat/events: a page whose
+ * hostname has been rebound to 127.0.0.1 is same-origin with the daemon, so
+ * its GET carries no Origin), and any request carrying an Origin header
+ * refused (a browser always sends one cross-origin; the TUI never does).
+ * All three checks run before any other work, on every /chat/* path. Every
+ * response is JSON except the event stream.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ChatManager, ChatError } from "./chatManager.js";
@@ -24,12 +27,38 @@ export interface ChatRoutesDeps {
   pingMs?: number;
   /** Prompt text cap (default 64 KiB) → 413. */
   maxTextBytes?: number;
+  /** Extra Host-header value to allow beyond localhost/127.0.0.1/::1 — the
+   *  daemon's configured `healthHost` when it binds loopback under a name
+   *  other than those three. Absent → only the three fixed values pass. */
+  allowedHost?: string;
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 export function isLoopbackRequest(req: IncomingMessage): boolean {
   return LOOPBACK.has(req.socket.remoteAddress ?? "");
+}
+
+const FIXED_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+/** Strip a trailing `:port` and unwrap an IPv6 `[...]` literal, lowercased.
+ *  `null` for a missing header — treated as not-allowed, never as a pass. */
+function normalizeHost(hostHeader: string | undefined): string | null {
+  if (!hostHeader) return null;
+  const h = hostHeader.trim();
+  if (h.startsWith("[")) {
+    const end = h.indexOf("]");
+    return end === -1 ? null : h.slice(1, end).toLowerCase();
+  }
+  const idx = h.lastIndexOf(":");
+  return (idx === -1 ? h : h.slice(0, idx)).toLowerCase();
+}
+
+function isHostAllowed(req: IncomingMessage, allowedHost: string | undefined): boolean {
+  const host = normalizeHost(req.headers.host);
+  if (host === null) return false;
+  if (FIXED_HOSTS.has(host)) return true;
+  return allowedHost !== undefined && host === allowedHost.toLowerCase();
 }
 
 const STATUS: Record<ChatError, number> = {
@@ -79,41 +108,85 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
   const isLoopback = deps.isLoopback ?? isLoopbackRequest;
   const pingMs = deps.pingMs ?? 15_000;
   const maxTextBytes = deps.maxTextBytes ?? 64 * 1024;
+  const allowedHost = deps.allowedHost;
 
   const sse = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
     const key = url.searchParams.get("key");
     if (!key) return json(res, 400, { error: "missing key" });
-    const sinceRaw = url.searchParams.get("since") ?? req.headers["last-event-id"];
+    // A reconnecting client's Last-Event-ID reflects what it actually saw;
+    // its URL's `since` query may still carry the value from its FIRST
+    // connect, so the header wins whenever both are present.
+    const sinceRaw = req.headers["last-event-id"] ?? url.searchParams.get("since");
     const since = Number.parseInt(typeof sinceRaw === "string" ? sinceRaw : "0", 10);
 
-    // Declared before subscribing so `onEnd` (which fires from inside the
-    // manager call, before the ping timer or `unsubscribe` exist yet) can
-    // still reach a single, idempotent cleanup: `res.end()` there must
-    // synchronously disarm the ping, since the `close` event it eventually
-    // triggers fires too late to stop one more `res.write` after `end`.
+    // Registered BEFORE `manager.subscribe()` is awaited: session creation +
+    // ensureMeta is disk I/O that can be slow, and a client that disconnects
+    // during that window must still be released once subscribe resolves —
+    // attaching these listeners only after the await would arm the ping (and
+    // leave the subscriber registered) on an already-destroyed response,
+    // forever, since nothing would ever clear them again.
     let ping: NodeJS.Timeout | null = null;
     let unsubscribe: (() => void) | null = null;
     let cleaned = false;
     const cleanup = (): void => {
-      if (cleaned) return;
       cleaned = true;
-      if (ping) clearInterval(ping);
+      if (ping) {
+        clearInterval(ping);
+        ping = null;
+      }
+      // `unsubscribe` is still null on a close that lands while subscribe()
+      // is in flight; the post-await check below calls cleanup() again once
+      // it's set, and re-running these idempotent steps is harmless.
       unsubscribe?.();
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+
+    // Buffered until headers are sent: `manager.subscribe()` can invoke
+    // `onLine`/`onEnd` before we get a chance to `writeHead` (a synchronous
+    // callback from the subscribe call itself, or a concurrent publish
+    // racing the same await) — an unbuffered `res.write` there would send an
+    // implicit 200/chunked response missing the SSE content-type, and the
+    // later explicit `writeHead` would then throw ERR_HTTP_HEADERS_SENT.
+    const pending: string[] = [];
+    let ended = false;
+    const onLine = (line: string, offset: number | null): void => {
+      if (res.writableEnded) return;
+      const data = line.endsWith("\n") ? line.slice(0, -1) : line;
+      const frame = offset === null ? `data: ${data}\n\n` : `id: ${offset}\ndata: ${data}\n\n`;
+      if (res.headersSent) res.write(frame);
+      else pending.push(frame);
+    };
+    const onEnd = (reason: string): void => {
+      if (res.writableEnded) return;
+      const frame = `event: end\ndata: ${JSON.stringify({ reason })}\n\n`;
+      if (res.headersSent) {
+        res.write(frame);
+        res.end();
+        cleanup();
+      } else {
+        pending.push(frame);
+        ended = true;
+      }
     };
 
     const r = await manager.subscribe(key, Number.isFinite(since) && since > 0 ? since : 0, {
-      onLine(line, offset) {
-        const data = line.endsWith("\n") ? line.slice(0, -1) : line;
-        res.write(offset === null ? `data: ${data}\n\n` : `id: ${offset}\ndata: ${data}\n\n`);
-      },
-      onEnd(reason) {
-        res.write(`event: end\ndata: ${JSON.stringify({ reason })}\n\n`);
-        res.end();
-        cleanup();
-      },
+      onLine,
+      onEnd,
     });
-    if (!r.ok) return json(res, STATUS[r.error], { error: r.error });
+    if (!r.ok) {
+      cleanup();
+      return json(res, STATUS[r.error], { error: r.error });
+    }
     unsubscribe = r.value.unsubscribe;
+    if (cleaned || res.destroyed || res.writableEnded) {
+      // The client (or the stream itself, via onEnd above) was already gone
+      // before subscribe() resolved. cleanup() ran earlier with `unsubscribe`
+      // still null, so this call is what actually releases it — exactly once.
+      cleanup();
+      return;
+    }
+
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
@@ -124,12 +197,31 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
     // arrives, so flush explicitly.
     res.flushHeaders();
     for (const { offset, line } of r.value.replay) res.write(`id: ${offset}\ndata: ${line}\n\n`);
-    ping = setInterval(() => res.write(": ping\n\n"), pingMs);
-    req.on("close", cleanup);
-    res.on("close", cleanup);
+    for (const frame of pending) res.write(frame);
+    if (ended) {
+      res.end();
+      cleanup();
+      return;
+    }
+    ping = setInterval(() => {
+      if (!res.writableEnded) res.write(": ping\n\n");
+    }, pingMs);
   };
 
   const post = async (req: IncomingMessage, res: ServerResponse, path: string): Promise<void> => {
+    // GET-only routes mirror their method gate here too, and an unknown
+    // route 404s — both checked before reading the body so a misrouted POST
+    // never buffers a payload it's going to reject regardless.
+    if (path === "/chat/status" || path === "/chat/events")
+      return json(res, 405, { error: "method not allowed" });
+    if (
+      path !== "/chat/prompt" &&
+      path !== "/chat/abort" &&
+      path !== "/chat/new" &&
+      path !== "/chat/note"
+    )
+      return json(res, 404, { error: "not found" });
+
     const body = await readBody(req, maxTextBytes + 4096);
     if (!body.ok) return json(res, 413, { error: "payload too large" });
     const obj = parseJsonObject(body.text);
@@ -182,7 +274,7 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
 
   return {
     async handle(req, res) {
-      if (!isLoopback(req) || req.headers.origin !== undefined)
+      if (!isLoopback(req) || req.headers.origin !== undefined || !isHostAllowed(req, allowedHost))
         return json(res, 403, { error: "forbidden" });
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
