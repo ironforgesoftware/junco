@@ -150,10 +150,15 @@ describe("ChatView", () => {
     const f = r.lastFrame()!;
     expect(f).toContain("◐ streaming");
     expect(f).toContain("local/m1");
-    expect(f).toContain("chat $0.42");
+    // ChatHealth.costUsd counts this DAEMON's lifetime, not today's spend —
+    // the label has to say so, or it reads as the daily ledger the budget cap
+    // uses (spec §8.2).
+    expect(f).toContain("chat $0.42 since start");
     // Header segments in order: 2 turns (many), $ cost, model id — all in one
     // contiguous string, which also proves nothing extra snuck in between.
-    expect(f).toContain("chat · acme/api · ◐ streaming · 2 turns · chat $0.42 · local/m1");
+    expect(f).toContain(
+      "chat · acme/api · ◐ streaming · 2 turns · chat $0.42 since start · local/m1",
+    );
     expect(f).toContain("you: why is the build slow?");
     expect(f).toContain("because of X");
     expect(f).toContain("▌"); // cursor on the draft card (the only anchor)

@@ -419,6 +419,59 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
     expect(readdirSync(join(root, "acme__api")).some((n) => n.startsWith("corrupt-"))).toBe(true);
   });
 
+  it("a turn that had already TIMED OUT keeps 'timeout' as its abort reason through a drain", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    // Wedged: prompt() never settles and abort() does not release it, so the
+    // turn sits in runChatTurn's abort grace — a window wide enough to drain
+    // in deterministically.
+    let streaming = false;
+    const wedged: ChatSessionLike = {
+      messages: [],
+      get isStreaming() {
+        return streaming;
+      },
+      get isIdle() {
+        return !streaming;
+      },
+      subscribe: () => () => {},
+      prompt: () => {
+        streaming = true;
+        return new Promise<void>(() => {});
+      },
+      steer: async () => {},
+      abort: async () => {},
+      dispose: () => {},
+    };
+    const session = new ChatSession(
+      {
+        cfg,
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        dir: join(root, "acme__api"),
+      },
+      { makeSessionManager: fakeSm, sessionFactoryFor: () => async () => wedged },
+    );
+    const started = await session.startPrompt("slow", {
+      source: "operator",
+      timeoutMs: 10,
+      abortGraceMs: 300,
+    });
+    await new Promise((r) => setTimeout(r, 60)); // the timeout has fired
+    await session.drain();
+    const r = await started.done;
+    expect(r.abortReason).toBe("timeout");
+    const aborted = readFileSync(session.transcriptPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { type: string; reason?: string })
+      .filter((x) => x.type === "junco_chat_turn_aborted");
+    // The transcript must say what actually ended the turn: "daemon_stopped"
+    // here would blame the shutdown for a model that had already wedged.
+    expect(aborted.map((a) => a.reason)).toEqual(["timeout"]);
+  });
+
   it("abort() soft-aborts an in-flight turn; drain() writes daemon_stopped and ends subscribers", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
     const { session, sdk } = makeSession(root, [{ events: [], delayMs: 10_000 }]);

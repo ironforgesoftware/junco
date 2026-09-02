@@ -142,7 +142,9 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
       <Text bold wrap="truncate">
         chat · {state.key} · <Text {...toneProps(status.tone)}>{status.text}</Text>
         {turns > 0 ? ` · ${turns} turn${turns === 1 ? "" : "s"}` : ""}
-        {p.costUsd !== null ? ` · chat $${p.costUsd.toFixed(2)}` : ""}
+        {/* "since start": ChatHealth.costUsd is this daemon's lifetime total,
+            not today's ledger — an unqualified "$" reads as the latter. */}
+        {p.costUsd !== null ? ` · chat $${p.costUsd.toFixed(2)} since start` : ""}
         {p.modelId ? ` · ${p.modelId}` : ""}
         {state.overflowed ? ` · showing last ${CHAT_RING}` : ""}
       </Text>

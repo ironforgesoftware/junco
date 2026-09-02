@@ -347,12 +347,16 @@ Session state lives under the [unified data root](#unified-data-root): one direc
 at `<dataDir>/data/chats/<slug>/` (`meta.json`, the transcript, and the SDK's own session
 file), and parked drafts at `<dataDir>/data/chat-drafts/` — the same `makeReviewStore` idiom
 `audit`/`investigate` findings use. A chat session's tools are the same read-only subset a Q&A
-ticket gets — the hard rule against widening that default applies here too. The chat drafts
-work; it never performs work itself.
+ticket gets — the hard rule against widening that default applies here too. The chat only ever
+drafts work — it never performs it.
 
 `/chat/*` is **loopback-only regardless of `healthHost`** and rejects any request carrying an
 `Origin` header — there is no additional auth to configure. See [Operations § Health &
-observability](operations.md#health--observability) for the route table.
+observability](operations.md#health--observability) for the route table. Note the flip side of
+that rule: if `healthHost` is a LAN address rather than a loopback one, even the dashboard on the
+same machine reaches the daemon over that address, so its remote address is not loopback and
+every `/chat/*` request is answered `403` (the pane reads "daemon down"). Keep `healthHost` on
+loopback if you want the chat.
 
 Chat spend is not separate: every completed turn is recorded against the same daily ledger a
 ticket session uses, so `worker.dailyBudgetUsd` (above) caps chat and tickets together, and a

@@ -65,15 +65,29 @@ const store = makeReviewStore<PendingDraft>([
 export function chatDraftsDir(cfg: Config): string {
   return dataTreePaths(cfg).chatDrafts;
 }
+
+/**
+ * slugifyId collapses separators but KEEPS dots, so "." and ".." survive it
+ * intact — and `join(dir, "..")` is the drafts dir's PARENT, which
+ * `removeChatDraft` would then rm -rf. Every component below goes through
+ * here: a name that cannot be a real directory entry is a throw, never a
+ * path. (Traversal shapes like "../../x" are unaffected: they slugify to one
+ * inert component.) */
+function safeComponent(raw: string, what: "draft id" | "draft file name"): string {
+  const s = slugifyId(raw);
+  if (s === "" || s === "." || s === "..")
+    throw new Error(`unsafe ${what}: ${JSON.stringify(raw)}`);
+  return s;
+}
 /** `<chatDrafts>/<slugifyId(id)>.json` — the one place a draft id becomes its
  * JSON path, so `removeChatDraft` and `unwatchCmd.ts`'s chat-draft plan item
  * can never compute it differently from each other or from what
  * `store.write` (the makeReviewStore instance above) actually wrote. */
 export function draftJsonPath(cfg: Config, id: string): string {
-  return join(chatDraftsDir(cfg), `${slugifyId(id)}.json`);
+  return join(chatDraftsDir(cfg), `${safeComponent(id, "draft id")}.json`);
 }
 export function draftFilesDir(cfg: Config, draftId: string): string {
-  return join(chatDraftsDir(cfg), slugifyId(draftId));
+  return join(chatDraftsDir(cfg), safeComponent(draftId, "draft id"));
 }
 /** Defence in depth: chatDrafts.ts already slugifies `DraftFile.name` at park
  * time, so the stored name IS this path's last component and the slug here is
@@ -81,7 +95,7 @@ export function draftFilesDir(cfg: Config, draftId: string): string {
  * only place a name reaches the filesystem, and a caller that builds a
  * PendingDraft by hand must not be able to escape the drafts dir. */
 export function draftFilePath(cfg: Config, draftId: string, name: string): string {
-  return join(draftFilesDir(cfg, draftId), slugifyId(name));
+  return join(draftFilesDir(cfg, draftId), safeComponent(name, "draft file name"));
 }
 
 export function listChatDrafts(cfg: Config, deps: ReviewStoreDeps = {}): PendingDraft[] {

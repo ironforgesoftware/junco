@@ -58,6 +58,10 @@ SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
   node /path/to/junco/dist/cli.js config init && <smoke> ; cd / && rm -rf "$SB"
 ```
 
+A sandboxed `HOME` isolates config and data, not the PORT: `junco status`/`dashboard` (and the
+dashboard's `/chat/*`) talk to whatever is listening on the default `healthPort`, i.e. the LIVE
+daemon, unless the sandbox config sets another one.
+
 Parallel dev sessions: `claude -w <topic>` from the repo root, or a manual worktree under the
 gitignored `worktrees-manual/` — **never under `worktrees/`** (daemon-owned; junco force-removes
 paths there). The main checkout is the daemon's build home — park it on `main`, do feature work in

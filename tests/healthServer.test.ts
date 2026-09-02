@@ -512,6 +512,25 @@ describe("healthServer", () => {
     expect(resp.status).toBe(200);
   });
 
+  it("an unexpected handler throw answers 500 AND is logged with the path", async () => {
+    const logged: string[] = [];
+    handle = await startHealthServer({
+      port: 0,
+      metrics: {
+        snapshot: () => {
+          throw new Error("metrics exploded");
+        },
+      },
+      logFn: (m) => logged.push(m),
+    });
+    const resp = await fetch(`${handle.url}/health`);
+    expect(resp.status).toBe(500);
+    expect(await resp.json()).toEqual({ error: "internal" });
+    // A silent 500 is unactionable: the operator sees a dead endpoint and the
+    // daemon says nothing about why.
+    expect(logged.some((m) => m.includes("/health") && m.includes("metrics exploded"))).toBe(true);
+  });
+
   it("close() is idempotent — second call resolves without throwing", async () => {
     handle = await startHealthServer({
       port: 0,

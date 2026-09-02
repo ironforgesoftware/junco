@@ -267,6 +267,45 @@ describe("/chat routes (spec 2026-09-01 §5)", () => {
     expect(m.calls[2]![2]).toEqual(note);
   });
 
+  it("POST /chat/note validates the record's shape, not just its type tag → 400", async () => {
+    const m = fakeManager();
+    const url = await serve(m);
+    const ok = {
+      type: "junco_chat_draft",
+      draftId: "d1",
+      kind: "ticket",
+      status: "parked",
+      ids: ["t"],
+      destination: null,
+    };
+    const bad: unknown[] = [
+      { ...ok, draftId: 7 },
+      { ...ok, kind: "nonsense" },
+      { ...ok, status: "maybe" },
+      { ...ok, ids: "t" },
+      { ...ok, ids: [1] },
+      { ...ok, destination: 3 },
+      { type: "junco_chat_draft" },
+    ];
+    for (const record of bad) {
+      const r = await fetch(`${url}/chat/note`, {
+        method: "POST",
+        body: JSON.stringify({ key: "k", record }),
+      });
+      expect(r.status, JSON.stringify(record)).toBe(400);
+    }
+    // The whole shape is what reaches the transcript, so the valid one still passes.
+    expect(
+      (
+        await fetch(`${url}/chat/note`, {
+          method: "POST",
+          body: JSON.stringify({ key: "k", record: ok }),
+        })
+      ).status,
+    ).toBe(202);
+    expect(m.calls.filter((c) => c[0] === "note")).toHaveLength(1);
+  });
+
   it("GET /chat/events replays from `since`, then streams live lines (id-less when bus-only) and ends", async () => {
     const m = fakeManager();
     const url = await serve(m, { pingMs: 60_000 });

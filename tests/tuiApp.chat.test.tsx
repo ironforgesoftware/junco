@@ -210,14 +210,17 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     // so drive both keys until it lands: `h` is idempotent once pane 1 holds
     // the focus, and a dropped `h` leaves `j` a no-op (no records ⇒ no
     // anchors ⇒ moveCursor cannot move) rather than a wrong move.
-    const on = (key: string): boolean => r.lastFrame()!.includes(`chat · ${key}`);
-    for (let i = 0; i < 40 && !on("beta/two"); i++) {
+    // The retry is gated on `subs` — pushed synchronously by the re-subscribe
+    // the rail move triggers — NOT on the frame: `j` is not idempotent, and a
+    // slow runner that has already moved the rail but not yet repainted would
+    // otherwise take a second step past beta/two.
+    for (let i = 0; i < 40 && subs.length === 1; i++) {
       r.stdin.write("h");
       await tick();
       r.stdin.write("j");
-      for (let k = 0; k < 5 && !on("beta/two"); k++) await tick();
+      for (let k = 0; k < 5 && subs.length === 1; k++) await tick();
     }
-    expect(r.lastFrame()).toContain("chat · beta/two");
+    await until(() => r.lastFrame()!.includes("chat · beta/two"));
     expect(subs).toEqual(["acme/api", "beta/two"]);
     // The re-subscribe re-opened the session, so `composerFocused` is true
     // again while pane 1 still holds the focus — ChatView's Composer is

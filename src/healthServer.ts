@@ -233,8 +233,13 @@ export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerH
 
       // Unknown path
       writeJson(res, 404, { error: "not found" });
-    } catch {
-      // Unexpected handler throw — respond 500 and swallow
+    } catch (e) {
+      // Unexpected handler throw — 500, but never silently: a swallowed
+      // stack leaves the operator with a dead endpoint and no reason.
+      logFn(
+        `health server handler failed for ${(req.url ?? "/").split("?")[0] ?? "/"}: ` +
+          (e instanceof Error ? e.message : String(e)),
+      );
       try {
         writeJson(res, 500, { error: "internal" });
       } catch {

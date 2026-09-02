@@ -6,6 +6,7 @@ import {
   archiveChatDraft,
   chatDraftsDir,
   draftFilePath,
+  draftFilesDir,
   draftJsonPath,
   draftsParkedFor,
   listChatDrafts,
@@ -72,6 +73,23 @@ describe("chat draft store (spec 2026-09-01 §6.2)", () => {
     removeChatDraft(cfg, "d2");
     expect(listChatDrafts(cfg)).toEqual([]);
     expect(existsSync(draftFilePath(cfg, "d2", "t.md"))).toBe(false);
+  });
+
+  it("an id or name that slugifies to a directory link throws instead of resolving upward", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-ds-"));
+    const cfg = cfgAt(root);
+    // slugifyId KEEPS dots, so ".." survives it intact: without this guard
+    // draftFilesDir(cfg, "..") is the chat-drafts dir's PARENT, and
+    // removeChatDraft would rm -rf the whole data tree branch.
+    for (const bad of ["..", "."]) {
+      expect(() => draftFilesDir(cfg, bad)).toThrow(/draft id/i);
+      expect(() => draftJsonPath(cfg, bad)).toThrow(/draft id/i);
+      expect(() => draftFilePath(cfg, "d1", bad)).toThrow(/draft file/i);
+    }
+    // The ordinary shapes are untouched, traversal attempts included — those
+    // slugify to inert one-component names.
+    expect(draftFilesDir(cfg, "../../x")).toBe(join(chatDraftsDir(cfg), "..-..-x"));
+    expect(draftFilePath(cfg, "d1", "t.md")).toBe(join(chatDraftsDir(cfg), "d1", "t.md"));
   });
 
   it("draftJsonPath is the exact path removeChatDraft removes (R29: one exported helper)", () => {

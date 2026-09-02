@@ -104,6 +104,40 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
+const DRAFT_KINDS = new Set<string>([
+  "ticket",
+  "amend",
+  "apply",
+  "audit",
+  "investigate",
+  "ticketSet",
+  "planSet",
+]);
+const DRAFT_STATUSES = new Set<string>(["parked", "lint_failed", "submitted", "discarded"]);
+const DRAFT_DESTINATIONS = new Set<string>(["inbox", "issue", "command"]);
+
+/** The whole `junco_chat_draft` shape, not just its type tag: this record is
+ *  appended verbatim to the transcript, and `junco transcript` (plus the
+ *  dashboard's own summarizer) reads its fields back. A malformed one from a
+ *  buggy client would sit in the file forever. */
+function draftRecord(v: unknown): Omit<ChatDraftRecord, "ts"> | null {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
+  const r = v as Record<string, unknown>;
+  const ok =
+    r.type === "junco_chat_draft" &&
+    typeof r.draftId === "string" &&
+    r.draftId !== "" &&
+    typeof r.kind === "string" &&
+    DRAFT_KINDS.has(r.kind) &&
+    typeof r.status === "string" &&
+    DRAFT_STATUSES.has(r.status) &&
+    Array.isArray(r.ids) &&
+    r.ids.every((x) => typeof x === "string") &&
+    (r.destination === null ||
+      (typeof r.destination === "string" && DRAFT_DESTINATIONS.has(r.destination)));
+  return ok ? (v as Omit<ChatDraftRecord, "ts">) : null;
+}
+
 export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps = {}): ChatRoutes {
   const isLoopback = deps.isLoopback ?? isLoopbackRequest;
   const pingMs = deps.pingMs ?? 15_000;
@@ -259,14 +293,9 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
         return;
       }
       case "/chat/note": {
-        const rec = obj.record;
-        if (
-          !rec ||
-          typeof rec !== "object" ||
-          (rec as { type?: unknown }).type !== "junco_chat_draft"
-        )
-          return json(res, 400, { error: "bad request" });
-        const r = await manager.note(key, rec as Omit<ChatDraftRecord, "ts">);
+        const rec = draftRecord(obj.record);
+        if (rec === null) return json(res, 400, { error: "bad request" });
+        const r = await manager.note(key, rec);
         if (!r.ok) return fail(r.error);
         res.writeHead(202);
         res.end();

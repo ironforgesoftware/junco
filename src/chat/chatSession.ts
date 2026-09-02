@@ -615,7 +615,14 @@ export class ChatSession {
       if (r.status === "aborted") {
         this.writeRecord({
           type: "junco_chat_turn_aborted",
-          reason: this.drainReason ?? r.abortReason ?? "operator",
+          // A turn that had already timed out keeps saying so: the drain
+          // that arrived afterwards is not what ended it, and
+          // "daemon_stopped" would send the reader looking at the shutdown
+          // instead of at a model that wedged.
+          reason:
+            r.abortReason === "timeout"
+              ? "timeout"
+              : (this.drainReason ?? r.abortReason ?? "operator"),
         });
       } else {
         this.writeRecord({
