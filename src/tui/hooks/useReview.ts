@@ -43,20 +43,31 @@ export function useReview({
     ]).then(([rev, drafts, chat]) => {
       if (!aliveRef.current) return;
       if (rev.ok && drafts.ok && chat.ok) {
-        setReviewState((s) => ({
-          ...s,
-          loading: false,
-          error: null,
-          batches: rev.value,
-          drafts: drafts.value,
-          chatDrafts: chat.value,
-          cursor: 0,
-          // A chat draft the reload no longer lists was just submitted or
-          // discarded (the verbs reload through here): its preview would
-          // otherwise linger on a row that is gone.
-          open:
-            s.open?.kind === "chatDraft" && chat.value[s.open.idx] === undefined ? null : s.open,
-        }));
+        setReviewState((s) => {
+          // An open chat-draft preview is reconciled BY ID, never by index: a
+          // submit/discard shortens the list, so keeping the old index would
+          // silently re-aim the preview (and the next s/e/r/D) at whichever
+          // draft slid into that slot. Gone from the reload → close it.
+          const openId =
+            s.open?.kind === "chatDraft" ? (s.chatDrafts[s.open.idx]?.id ?? null) : null;
+          const openIdx =
+            s.open?.kind === "chatDraft" ? chat.value.findIndex((d) => d.id === openId) : -1;
+          return {
+            ...s,
+            loading: false,
+            error: null,
+            batches: rev.value,
+            drafts: drafts.value,
+            chatDrafts: chat.value,
+            cursor: 0,
+            open:
+              s.open?.kind !== "chatDraft"
+                ? s.open
+                : openIdx >= 0
+                  ? { kind: "chatDraft", idx: openIdx }
+                  : null,
+          };
+        });
       } else {
         const error = !rev.ok
           ? rev.error

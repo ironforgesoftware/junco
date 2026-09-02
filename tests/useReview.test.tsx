@@ -140,18 +140,76 @@ describe("useReview", () => {
     r.unmount();
   });
 
+  it("the open chat draft is reconciled by ID, not by index", async () => {
+    // [A, B] with A's preview open: submitting A reloads to [B]. An
+    // index-based reconcile would keep idx 0 and silently re-aim the preview
+    // (and the next s/e/r/D) at B.
+    const B: PendingDraft = { ...MARKER_CHAT_DRAFT, id: "other-1" };
+    const gone = makeClient(
+      { ok: true, value: [] },
+      { ok: true, value: [] },
+      {
+        ok: true,
+        value: [B],
+      },
+    );
+    let api!: ReturnType<typeof useReview>;
+    const r = render(<Probe client={gone} onReady={(a) => (api = a)} />);
+    api.setReviewState((s) => ({
+      ...s,
+      chatDrafts: [MARKER_CHAT_DRAFT, B],
+      open: { kind: "chatDraft", idx: 0 },
+    }));
+    await until(() => api.reviewState.chatDrafts.length === 2);
+    void api.loadReview();
+    await until(() => api.reviewState.chatDrafts.length === 1);
+    expect(api.reviewState.open).toBeNull();
+    r.unmount();
+
+    // Still listed but at a new index (a sibling landed ahead of it): the
+    // preview follows the draft, not the slot.
+    const moved = makeClient(
+      { ok: true, value: [] },
+      { ok: true, value: [] },
+      {
+        ok: true,
+        value: [B, MARKER_CHAT_DRAFT],
+      },
+    );
+    let api2!: ReturnType<typeof useReview>;
+    const r2 = render(<Probe client={moved} onReady={(a) => (api2 = a)} />);
+    api2.setReviewState((s) => ({
+      ...s,
+      chatDrafts: [MARKER_CHAT_DRAFT],
+      open: { kind: "chatDraft", idx: 0 },
+    }));
+    await until(() => api2.reviewState.chatDrafts.length === 1);
+    void api2.loadReview();
+    await until(() => api2.reviewState.chatDrafts.length === 2);
+    expect(api2.reviewState.open).toEqual({ kind: "chatDraft", idx: 1 });
+    r2.unmount();
+  });
+
   it("a reload that KEEPS the open chat draft leaves the preview open", async () => {
+    // The reload answers with the SAME id carrying a changed field (what an
+    // `r` route cycle produces), so the wait gates on the reloaded value
+    // rather than on the seeded one.
+    const reloaded: PendingDraft = { ...MARKER_CHAT_DRAFT, routeOverride: "inbox" };
     const client = makeClient(
       { ok: true, value: [] },
       { ok: true, value: [] },
-      { ok: true, value: [MARKER_CHAT_DRAFT] },
+      { ok: true, value: [reloaded] },
     );
     let api!: ReturnType<typeof useReview>;
     const r = render(<Probe client={client} onReady={(a) => (api = a)} />);
-    api.setReviewState((s) => ({ ...s, open: { kind: "chatDraft", idx: 0 } }));
+    api.setReviewState((s) => ({
+      ...s,
+      chatDrafts: [MARKER_CHAT_DRAFT],
+      open: { kind: "chatDraft", idx: 0 },
+    }));
     await until(() => api.reviewState.open !== null);
     void api.loadReview();
-    await until(() => api.reviewState.chatDrafts.length === 1);
+    await until(() => api.reviewState.chatDrafts[0]?.routeOverride === "inbox");
     expect(api.reviewState.open).toEqual({ kind: "chatDraft", idx: 0 });
     r.unmount();
   });

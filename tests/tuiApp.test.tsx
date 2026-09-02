@@ -480,7 +480,9 @@ function renderApp(
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
         draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
-        editFileFn={editFileFn}
+        // Never the real default here either: it would spawn $EDITOR/vi with
+        // stdio inherited inside vitest (see localFixtures' makeAppProps).
+        editFileFn={editFileFn ?? (async () => {})}
         refreshPollMs={refreshPollMs}
         healthPollMs={999999}
         queuePollMs={999999}

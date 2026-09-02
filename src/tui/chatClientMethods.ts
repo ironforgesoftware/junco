@@ -21,9 +21,8 @@ import {
   type PendingDraft,
 } from "../chat/draftStore.js";
 import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
-import { parseTicket } from "../ticket.js";
-import { lintTicket } from "../planLint.js";
-import { decideRoute } from "../submitPreflight.js";
+import { lintDraftFile, draftLintFailed } from "../chat/draftLint.js";
+import type { decideRoute } from "../submitPreflight.js";
 
 export interface ChatClientMethodDeps {
   attempt: <T>(fn: () => Promise<T>) => Promise<Result<T>>;
@@ -60,7 +59,6 @@ export function chatClientMethods(
   | "issueContext"
 > {
   const { attempt, ghFn, readFileFn, fetchFn, healthBase, ghTimeoutMs } = deps;
-  const routeFn = deps.decideRouteFn ?? decideRoute;
 
   return {
     chat: {
@@ -103,10 +101,14 @@ export function chatClientMethods(
       return attempt(async () => readFileFn(draftFilePath(cfg, id, name)));
     },
     /** The `e` edit round-trip's return leg (spec §6.6): the operator's
-     * $EDITOR wrote the files in place, so re-read each one and re-run
-     * exactly what parking ran — lintTicket (never the network: no label
-     * check) + decideRoute — then rewrite the JSON. The command kinds and a
-     * planSet carry no ticket, so their files are only refreshed. */
+     * $EDITOR wrote the files in place, so re-read each one and re-run the
+     * SAME per-file pass parking ran (draftLint.ts — a ticket's lint+route, a
+     * plan set's compiler errors, nothing for the command kinds), then
+     * rewrite the JSON. Sharing that pass (R26) is what keeps a lint-failed
+     * plan set fixable instead of a dead end where `s` refuses and `e` can
+     * never clear the verdict. audit/investigate keep their parked rows
+     * verbatim: their violations came from fence extraction, and there is no
+     * fence on disk to re-run. */
     relintChatDraft(id: string) {
       return attempt(async () => {
         const { entry, error } = readChatDraft(cfg, id);
@@ -115,30 +117,39 @@ export function chatClientMethods(
         const files = await Promise.all(
           entry.files.map(async (f) => {
             const content = readFileFn(draftFilePath(cfg, id, f.name));
-            if (entry.kind === "audit" || entry.kind === "investigate" || entry.kind === "planSet")
-              return { ...f, content };
-            const t = parseTicket(f.name, content, cfg.defaultTimeoutMinutes);
-            const lint = lintTicket(t.body, t.frontmatter, {
-              repoPath: entry.cwd,
-              repoNwo: entry.nwo,
-              checkLabels: false,
-            }).violations;
-            const route = await routeFn(cfg, t.frontmatter);
+            if (entry.kind === "audit" || entry.kind === "investigate") return { ...f, content };
+            const { lint, route } = await lintDraftFile(
+              cfg,
+              entry.kind,
+              { name: f.name, content },
+              { cwd: entry.cwd, nwo: entry.nwo },
+              { routeFn: deps.decideRouteFn },
+            );
             return { ...f, content, lint, route };
           }),
         );
-        const updated: PendingDraft = {
-          ...entry,
-          files,
-          lintFailed: files.some((f) => f.lint.some((v) => v.severity === "error")),
-        };
+        const updated: PendingDraft = { ...entry, files, lintFailed: draftLintFailed(files) };
         writeChatDraft(cfg, updated);
         return updated;
       });
     },
+    /** Ruling R25: the FILES on disk are the truth and the JSON mirrors them.
+     * writeChatDraft rewrites every file from `files[].content`, and the only
+     * caller (the `r` route cycle) hands over whatever snapshot the review
+     * list last loaded — which an `$EDITOR` pass, or the reload that follows
+     * one, may already have superseded. Re-read each body here so a route
+     * press can never author file bytes from a stale draft. A file that is
+     * not on disk keeps its in-memory body: there is nothing to clobber. */
     updateChatDraft(draft: PendingDraft) {
       return attempt(async () => {
-        writeChatDraft(cfg, draft);
+        const files = draft.files.map((f) => {
+          try {
+            return { ...f, content: readFileFn(draftFilePath(cfg, draft.id, f.name)) };
+          } catch {
+            return f;
+          }
+        });
+        writeChatDraft(cfg, { ...draft, files });
         return null;
       });
     },

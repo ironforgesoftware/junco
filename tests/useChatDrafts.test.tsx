@@ -7,7 +7,7 @@ import { Text } from "ink";
 import { nextRoute, submitArgv, useChatDrafts } from "../src/tui/hooks/useChatDrafts.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
-import { stubClient } from "./helpers/localFixtures.js";
+import { okv, stubClient } from "./helpers/localFixtures.js";
 
 const file = (name: string, route: "inbox" | "issue" | null = "inbox") => ({
   name,
@@ -311,6 +311,22 @@ describe("useChatDrafts", () => {
     await api.submit(draft());
     expect(archived).toEqual(["acme__api-1"]);
     expect(toasts[0]).toBe("error:submitted → inbox (transcript note failed: daemon down)");
+    unmount();
+  });
+
+  it("submit: a failed archive is the whole story — no 'submitted' note, no reload", async () => {
+    const notes: unknown[] = [];
+    const client: DashboardClient = {
+      ...stubClient,
+      archiveSubmittedChatDraft: async () => ({ ok: false, error: "read-only store" }),
+      chat: { ...stubClient.chat, note: async (_k, rec) => (notes.push(rec), okv(null)) },
+    };
+    let changed = 0;
+    const { api, toasts, unmount } = mount({ client, changed: () => changed++ });
+    await api.submit(draft());
+    expect(notes).toEqual([]);
+    expect(changed).toBe(0);
+    expect(toasts).toEqual(["error:submitted, but the draft did not archive: read-only store"]);
     unmount();
   });
 

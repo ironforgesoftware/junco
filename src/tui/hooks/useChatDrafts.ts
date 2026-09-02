@@ -90,7 +90,13 @@ export function useChatDrafts(opts: {
           return;
         }
       }
-      await client.archiveSubmittedChatDraft(d.id);
+      // A draft still listed after a "submitted" toast invites a second
+      // queue of the same work, so an archive failure is the whole story —
+      // the transcript note (which says "submitted") waits for a clean one.
+      const archived = await client.archiveSubmittedChatDraft(d.id);
+      if (!aliveRef.current) return;
+      if (!archived.ok)
+        return showToast("error", `submitted, but the draft did not archive: ${archived.error}`);
       const destination =
         d.kind === "audit" || d.kind === "investigate"
           ? "command"

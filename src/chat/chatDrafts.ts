@@ -6,10 +6,8 @@
  * once, keyed by slug, and replaces the failed draft when the retry parks.
  */
 import type { Config } from "../types.js";
-import { parseTicket } from "../ticket.js";
-import { lintTicket, formatViolations, type LintViolation } from "../planLint.js";
-import { decideRoute, type PreflightDeps, type RouteDecision } from "../submitPreflight.js";
-import { parsePlanSet } from "../planCompiler.js";
+import { formatViolations, type LintViolation } from "../planLint.js";
+import { lintDraftFile, draftLintFailed, type DraftLintDeps } from "./draftLint.js";
 import type { ReviewStoreDeps } from "../reviewStore.js";
 import { slugifyId } from "../slug.js";
 import type { ChatManagerDeps } from "./chatManager.js";
@@ -22,12 +20,7 @@ import {
   type PendingDraft,
 } from "./draftStore.js";
 
-export interface ParkDeps {
-  lintFn?: typeof lintTicket;
-  routeFn?: typeof decideRoute;
-  /** decideRoute's own seams (git/fs) — the real one probes the watchlist by
-   *  the repo PATH's origin remote when github + bot are on (R17). */
-  routeDeps?: PreflightDeps;
+export interface ParkDeps extends DraftLintDeps {
   store?: ReviewStoreDeps;
   now?: () => number;
 }
@@ -70,39 +63,24 @@ function draftId(slug: string, now: number): string {
   return `${slug}-${ts}-${++seq}`;
 }
 
-/** One extracted draft's files, linted and routed. audit/investigate run a
- * CLI verb rather than a ticket, so plan-lint (a plan-body ruleset) does not
- * apply to them and there is nothing to route; a planSet is validated by the
- * compiler that will actually expand it. */
+/** One extracted draft's files, linted and routed by the SHARED per-file pass
+ * (draftLint.ts) the review surface's re-lint also runs (R26), with this
+ * path's own fence-extraction problems layered in front of its violations. */
 async function lintFiles(
   cfg: Config,
   session: SessionRef,
   x: ExtractedDraft,
-  lintFn: typeof lintTicket,
-  routeFn: typeof decideRoute,
-  routeDeps: PreflightDeps | undefined,
+  deps: ParkDeps,
 ): Promise<DraftFile[]> {
   const files: DraftFile[] = [];
   for (const [i, f] of x.files.entries()) {
-    const lint: LintViolation[] = problemsFor(x, i);
-    let route: RouteDecision | null = null;
-    if (x.kind === "planSet") {
-      const parsed = parsePlanSet(f.body, { maxTasks: cfg.planSets.maxTasks });
-      if (!parsed.ok)
-        for (const message of parsed.errors)
-          lint.push({ rule: "plan_set", severity: "error", message });
-    } else if (x.kind !== "audit" && x.kind !== "investigate") {
-      const t = parseTicket(f.name, f.content, cfg.defaultTimeoutMinutes);
-      lint.push(
-        ...lintFn(t.body, t.frontmatter, {
-          repoPath: session.cwd,
-          repoNwo: session.nwo,
-          // No network from a chat turn: the label check shells out to gh.
-          checkLabels: false,
-        }).violations,
-      );
-      route = await routeFn(cfg, t.frontmatter, routeDeps);
-    }
+    const { lint, route } = await lintDraftFile(
+      cfg,
+      x.kind,
+      { name: f.name, content: f.content },
+      { cwd: session.cwd, nwo: session.nwo },
+      deps,
+    );
     // Slugify ONCE, here: the stored name IS the on-disk name. The extracted
     // name is `<model-authored frontmatter id>.md`, so `id: fix login bug`
     // arrives as "fix login bug.md" — draftStore's own slugify would then
@@ -112,7 +90,7 @@ async function lintFiles(
     files.push({
       name: slugifyId(f.name),
       content: f.content,
-      lint,
+      lint: [...problemsFor(x, i), ...lint],
       route,
       droppedKeys: f.droppedKeys,
     });
@@ -126,12 +104,10 @@ export async function parkDrafts(
   extracted: ExtractedDraft[],
   deps: ParkDeps = {},
 ): Promise<PendingDraft[]> {
-  const lintFn = deps.lintFn ?? lintTicket;
-  const routeFn = deps.routeFn ?? decideRoute;
   const now = deps.now ?? ((): number => Date.now());
   const out: PendingDraft[] = [];
   for (const x of extracted) {
-    const files = await lintFiles(cfg, session, x, lintFn, routeFn, deps.routeDeps);
+    const files = await lintFiles(cfg, session, x, deps);
     const at = now();
     const draft: PendingDraft = {
       id: draftId(session.slug, at),
@@ -142,7 +118,7 @@ export async function parkDrafts(
       cwd: session.cwd,
       nwo: session.nwo,
       createdAt: new Date(at).toISOString(),
-      lintFailed: files.some((f) => f.lint.some((v) => v.severity === "error")),
+      lintFailed: draftLintFailed(files),
       blocked: x.blocked,
       routeOverride: "auto",
       commandArgs: x.commandArgs,

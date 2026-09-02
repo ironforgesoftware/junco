@@ -45,6 +45,9 @@ const cfg = {
   // fileReview traverses the REAL withFileAsAuth by default — "me" is its
   // side-effect-free short-circuit, so the fixture must carry the field.
   assess: { fileAs: "me" },
+  // relintChatDraft runs the shared draft lint, which reads maxTasks for a
+  // plan set (src/chat/draftLint.ts).
+  planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
 } as unknown as Config;
 
 /** botAccount.enabled=true — ensureBotAccess's non-short-circuit paths need
@@ -1431,6 +1434,23 @@ describe("chat", () => {
     expect(listChatDrafts(c2).map((d) => d.id)).toEqual([draftBase.id]);
   });
 
+  it("updateChatDraft re-reads the file bodies from disk, never writing a stale snapshot (R25)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftstale-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    const path = draftFilePath(c2, draftBase.id, "ticket.md");
+    writeFileSync(path, "edited in $EDITOR\n", "utf8");
+    const c = makeGhDashboardClient(c2, fakes());
+    // The review list's snapshot still carries the pre-edit body — a route
+    // press must not resurrect it.
+    const r = await c.updateChatDraft({ ...draftBase, routeOverride: "issue" });
+    expect(r).toEqual({ ok: true, value: null });
+    expect(readFileSync(path, "utf8")).toBe("edited in $EDITOR\n");
+    const stored = listChatDrafts(c2)[0]!;
+    expect(stored.files[0]!.content).toBe("edited in $EDITOR\n");
+    expect(stored.routeOverride).toBe("issue");
+  });
+
   it("discardChatDraft archives the draft as discarded, removing it from the pending list", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftdiscard-"));
     const c2 = { ...cfg, dataDir: stateDir } as Config;
@@ -1519,6 +1539,81 @@ describe("chat", () => {
       value: { lintFailed: false, files: [{ content: "sweep it\n", lint: [], route: null }] },
     });
     expect(routed).toEqual([]);
+  });
+
+  // A plan set's lint is the compiler's own parse, and relint must re-run it
+  // (R26) — otherwise a lint-failed plan is a dead end: `s` refuses, `e` can
+  // never clear it, only `D` gets out.
+  const GOOD_PLAN = [
+    "```junco-plan",
+    "version: 1",
+    "tasks:",
+    "  - id: seed",
+    "    title: Seed the changelog",
+    "    description: Create the changelog file at the repo root.",
+    "    acceptance:",
+    "      - CHANGELOG.md exists at the repo root.",
+    "```",
+    "",
+  ].join("\n");
+  const BAD_PLAN = "```junco-plan\nversion: 1\ntasks: []\n```\n";
+
+  it("relintChatDraft re-runs the plan-set compiler: a fixed plan clears lintFailed", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-relintplan-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    const plan: PendingDraft = {
+      ...draftBase,
+      id: "chat-plan-1",
+      kind: "planSet",
+      lintFailed: true,
+      files: [
+        {
+          name: "plan.md",
+          content: BAD_PLAN,
+          lint: [{ rule: "plan_set", severity: "error", message: "tasks: must be non-empty" }],
+          route: null,
+          droppedKeys: [],
+        },
+      ],
+    };
+    writeChatDraft(c2, plan);
+    const c = makeGhDashboardClient(c2, fakes());
+    // Still broken on disk → still failing.
+    const before = await c.relintChatDraft(plan.id);
+    expect(before).toMatchObject({ ok: true, value: { lintFailed: true } });
+    // The operator's edit fixes it → the verdict clears and the draft is
+    // submittable again.
+    writeFileSync(draftFilePath(c2, plan.id, "plan.md"), GOOD_PLAN, "utf8");
+    const after = await c.relintChatDraft(plan.id);
+    expect(after).toMatchObject({ ok: true, value: { lintFailed: false } });
+    if (!after.ok) return;
+    expect(after.value.files[0]!.lint).toEqual([]);
+    expect(after.value.files[0]!.route).toBeNull(); // a plan set never routes
+    expect(listChatDrafts(c2)[0]!.lintFailed).toBe(false);
+  });
+
+  it("relintChatDraft fails a plan set whose edit broke it, or deleted the fence", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-relintplan2-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    const plan: PendingDraft = {
+      ...draftBase,
+      id: "chat-plan-2",
+      kind: "planSet",
+      files: [{ name: "plan.md", content: GOOD_PLAN, lint: [], route: null, droppedKeys: [] }],
+    };
+    writeChatDraft(c2, plan);
+    const c = makeGhDashboardClient(c2, fakes());
+    writeFileSync(draftFilePath(c2, plan.id, "plan.md"), BAD_PLAN, "utf8");
+    const broken = await c.relintChatDraft(plan.id);
+    expect(broken).toMatchObject({ ok: true, value: { lintFailed: true } });
+    if (!broken.ok) return;
+    expect(broken.value.files[0]!.lint.map((v) => v.rule)).toEqual(["plan_set"]);
+    // An edit that dropped the fence is what `junco submit --plan` refuses.
+    writeFileSync(draftFilePath(c2, plan.id, "plan.md"), "version: 1\ntasks: []\n", "utf8");
+    const noFence = await c.relintChatDraft(plan.id);
+    expect(noFence).toMatchObject({ ok: true, value: { lintFailed: true } });
+    if (!noFence.ok) return;
+    expect(noFence.value.files[0]!.lint[0]!.message).toBe("no junco-plan fence found");
   });
 
   it("relintChatDraft fails loudly for an unknown or unreadable draft id", async () => {
