@@ -85,10 +85,16 @@ returns handles for assertions.
 
 ### 4.1 Sandboxed HOME
 
-- `mkdtemp` under `os.tmpdir()`; `HOME` and `XDG_CONFIG_HOME` both point inside
-  it. Config resolution is HOME-anchored (`src/config.ts` — `env.HOME` wins
-  over `os.homedir()`), so nothing the child does can reach the maintainer's
-  live `~/.junco`.
+- `mkdtemp` under `sandboxBaseDir()`; `HOME` and `XDG_CONFIG_HOME` both point
+  inside it. Config resolution is HOME-anchored (`src/config.ts` — `env.HOME`
+  wins over `os.homedir()`), so nothing the child does can reach the
+  maintainer's live `~/.junco`.
+- **The base is `os.tmpdir()` except when that is `/tmp`, where it is
+  `/var/tmp`.** The Linux sandbox backend opens every sandboxed bash call with
+  `--tmpfs /tmp`, which hides everything under it that the policy does not
+  bind explicitly — including the repo's `.git/config`. A sandbox under `/tmp`
+  therefore breaks the agent's `git commit` on Linux only. See §11; pinned by
+  `tests/e2eHarnessBaseDir.test.ts`, which runs on every platform.
 - The harness writes `<sandbox>/.junco/config.json` **directly** as a minimal
   literal, not via `config init`. An explicit literal is easier to read in a
   failing test and exercises loading a user-authored file. Baseline literal:
@@ -380,6 +386,25 @@ unit tests in the regular suite (precedent: `tests/helpersGhScript.test.ts`):
   the worktree under `<dataDir>/worktrees`; the `work` clone lives elsewhere
   in the sandbox. If the jail blocks something the flow legitimately needs,
   that is a product finding (the maintainer's own setup has the same shape).
+  **This fired.** `bwrapArgs` (`src/agent/sandbox/backend.ts`) opens every
+  sandboxed bash call with `--tmpfs /tmp`, so under Linux only the paths the
+  policy binds explicitly survive: the linked worktree's gitdir, `objects`,
+  `refs`, `logs`. The repo's `.git/config` is not among them — in production
+  it is readable through `--ro-bind / /` and needs no bind — so a repo under
+  `/tmp` has no readable config inside the sandbox, `git commit` makes no
+  commit, and the run ends `no commits but wt dirty`. The harness put its
+  sandbox at `os.tmpdir()`, which is `/tmp` on Linux and `/var/folders/...`
+  on macOS, so both PR-flow scenarios failed on the ubuntu leg of PR #435
+  while macOS passed. Fixed in the harness (`sandboxBaseDir`, §4.1): the
+  fixture moves to `/var/tmp`, keeping every assertion and matching the path
+  shape real repos have.
+  **Open product finding, deliberately not fixed here:** on Linux a repo that
+  genuinely lives under `/tmp` cannot be committed to by the agent. The
+  masking is intentional hardening, and widening it is a security-relevant
+  change that belongs in its own change with its own tests — not in the test
+  layer that found it. The narrow fix, if taken, is to make the repo's git
+  common dir a readable root in the policy alongside the write roots it
+  already grants.
 - **`transient-requeue` classification.** Whether a 503 through the SDK's
   retry/backoff surfaces as transient is exactly what the test finds out; the
   scenario's assertion is written for the intended behavior and a mismatch is

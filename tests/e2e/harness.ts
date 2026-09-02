@@ -19,6 +19,9 @@
  * an unscripted subcommand fails loud with `fake-gh: unhandled: <args>`, which
  * is how a scenario discovers the exact table it needs).
  *
+ * Sandbox location: NOT under `/tmp` — see `sandboxBaseDir` below. The OS
+ * sandbox backend masks that path, which cost PR #435 a red ubuntu leg.
+ *
  * Diagnostics ordering (spec §8's "read them before deciding anything"
  * guarantee): every scenario's `afterEach(() => sb.close())` runs BEFORE this
  * module's `onTestFailed` diagnostics handler, not after. Confirmed by
@@ -43,7 +46,7 @@ import {
 } from "node:fs";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { onTestFailed } from "vitest";
 import { cloneHarness, run, type GitHarness } from "../helpers/gitHarness.js";
@@ -80,6 +83,52 @@ export function childEnv(home: string): Record<string, string> {
     if (v !== undefined) env[k] = v;
   }
   return env;
+}
+
+/**
+ * The path the Linux sandbox backend mounts a fresh tmpfs over on every
+ * sandboxed bash call (`src/agent/sandbox/backend.ts`'s `bwrapArgs`:
+ * `--tmpfs /tmp`, emitted before any policy mount).
+ */
+export const MASKED_TMP = "/tmp";
+
+/** Where the sandbox goes instead when the platform temp root is masked. */
+export const SANDBOX_FALLBACK_BASE = "/var/tmp";
+
+/**
+ * Where to `mkdtemp` the sandbox HOME.
+ *
+ * NOT simply `os.tmpdir()`. On Linux that is `/tmp`, and bwrap masks `/tmp`
+ * with a tmpfs, so ONLY the paths the sandbox policy binds explicitly survive
+ * inside the agent's bash: the linked worktree's gitdir, `objects`, `refs`,
+ * `logs` — but not the repo's own `.git/config`, which in production is
+ * readable through bwrap's `--ro-bind / /` and needs no bind of its own.
+ * A repo under `/tmp` therefore has no readable config inside the sandbox:
+ * `git commit` makes no commit, junco says "no commits but wt dirty", and the
+ * PR-flow scenarios fail with no branch on the remote. That is exactly how
+ * PR #435 went red on ubuntu while macOS — whose `os.tmpdir()` is
+ * `/var/folders/...`, never masked — passed.
+ *
+ * `/var/tmp` is the fix rather than a policy change because production repos
+ * do not live in `/tmp`: the sandbox's masking of it is deliberate hardening,
+ * and moving the fixture keeps every assertion intact while testing the path
+ * shape real users have. (The narrower product limitation — a repo genuinely
+ * under `/tmp` cannot be committed to on Linux — is a real finding, recorded
+ * in the spec's risk register, not something this harness should paper over
+ * by weakening the sandbox.)
+ *
+ * Pure and injectable so the Linux behavior is pinned by a unit test that
+ * runs on every platform (tests/e2eHarnessBaseDir.test.ts).
+ */
+export function sandboxBaseDir(
+  platformTmp: string = tmpdir(),
+  exists: (p: string) => boolean = existsSync,
+): string {
+  const masked = platformTmp === MASKED_TMP || platformTmp.startsWith(MASKED_TMP + sep);
+  if (!masked) return platformTmp;
+  // No /var/tmp (unusual, but never guess): keep the caller's root. The e2e
+  // run then fails loudly on its assertions rather than silently elsewhere.
+  return exists(SANDBOX_FALLBACK_BASE) ? SANDBOX_FALLBACK_BASE : platformTmp;
 }
 
 /** argv prefix for the CLI under test: `JUNCO_E2E_BIN` (packaging layer) or the built dist. */
@@ -288,7 +337,7 @@ export async function createSandbox(opts: SandboxOptions = {}): Promise<Sandbox>
   if ((opts.script === undefined) === (opts.model === undefined)) {
     throw new Error("createSandbox: pass exactly one of `script` (stub) or `model` (live)");
   }
-  const home = mkdtempSync(join(tmpdir(), "junco-e2e-"));
+  const home = mkdtempSync(join(sandboxBaseDir(), "junco-e2e-"));
   for (const d of [".config", "tmp", "bin", "git", ".junco"])
     mkdirSync(join(home, d), { recursive: true });
 
