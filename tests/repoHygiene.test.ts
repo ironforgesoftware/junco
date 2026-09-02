@@ -82,13 +82,81 @@ describe(".editorconfig", () => {
 describe("eslint.config.js", () => {
   const root = fileURLToPath(new URL("..", import.meta.url));
 
+  const configFor = async (rel: string): Promise<Record<string, [number, ...unknown[]]>> => {
+    const { ESLint } = await import("eslint");
+    const cfg = await new ESLint({ cwd: root }).calculateConfigForFile(join(root, rel));
+    return cfg.rules as Record<string, [number, ...unknown[]]>;
+  };
+
   // #354: `any` in src/ is an enforced error, not a convention — the remaining
   // ones are SDK-boundary casts carrying an eslint-disable with a reason.
   it("enforces no-explicit-any on src/", async () => {
-    const { ESLint } = await import("eslint");
-    const cfg = await new ESLint({ cwd: root }).calculateConfigForFile(
-      join(root, "src/agent/guardManager.ts"),
-    );
-    expect(cfg.rules["@typescript-eslint/no-explicit-any"][0]).toBe(2);
+    const rules = await configFor("src/agent/guardManager.ts");
+    expect(rules["@typescript-eslint/no-explicit-any"][0]).toBe(2);
+  });
+
+  // #361: a structural ceiling so the next 900-line function trips the gate.
+  // The five already over it are pinned at their measured size, not exempted —
+  // the rule stays on for those files, so each can shrink but not grow.
+  describe("max-lines-per-function", () => {
+    type Entry = { file: string; max: number; comment: string };
+
+    /**
+     * The `GRANDFATHERED_FUNCTION_LINES` table, read out of the config as text
+     * rather than imported: `tsconfig.eslint.json` type-checks the tests but
+     * sets no `allowJs`, so a TS test cannot import the `.js` config. Each
+     * entry carries the comment lines that precede it.
+     */
+    const grandfathered = (): Entry[] => {
+      const src = read("eslint.config.js");
+      const table = /GRANDFATHERED_FUNCTION_LINES = \[\n([\s\S]*?)\n\];/.exec(src);
+      if (!table) throw new Error("eslint.config.js has no GRANDFATHERED_FUNCTION_LINES table");
+      const entries: Entry[] = [];
+      let comment = "";
+      for (const line of table[1].split("\n")) {
+        const m = /\{ file: "([^"]+)", max: (\d+) \}/.exec(line);
+        if (m) {
+          entries.push({ file: m[1], max: Number(m[2]), comment });
+          comment = "";
+        } else comment += `${line}\n`;
+      }
+      return entries;
+    };
+
+    it("caps a src/ function at 400 lines of code", async () => {
+      expect((await configFor("src/agent/guardManager.ts"))["max-lines-per-function"]).toEqual([
+        2,
+        { max: 400, skipComments: true, skipBlankLines: true, IIFEs: true },
+      ]);
+    });
+
+    it("leaves tests/ uncapped — a `describe` body is a function too", async () => {
+      expect(
+        (await configFor("tests/repoHygiene.test.ts"))["max-lines-per-function"],
+      ).toBeUndefined();
+    });
+
+    it("raises the cap for a grandfathered file instead of switching the rule off", async () => {
+      const entries = grandfathered();
+      expect(entries.length).toBeGreaterThan(0);
+      for (const { file, max } of entries) {
+        const rule = (await configFor(file))["max-lines-per-function"];
+        expect(rule[0], `${file} must keep the rule at error`).toBe(2);
+        expect(rule[1], `${file} must be pinned at its own size`).toMatchObject({ max });
+        expect(max, `${file} would not need a pin under the ceiling`).toBeGreaterThan(400);
+      }
+    });
+
+    it("names the follow-up that retires each pin", () => {
+      for (const { file, comment } of grandfathered()) {
+        expect(comment, `${file}'s pin must cite the issue that retires it`).toMatch(/#\d+/);
+      }
+    });
+
+    // A ratchet on the ratchet: the list may only shrink. A sixth offender
+    // means a function grew past 400 lines and someone exempted it instead.
+    it("does not grow past the five offenders it was written for", () => {
+      expect(grandfathered().length).toBeLessThanOrEqual(5);
+    });
   });
 });

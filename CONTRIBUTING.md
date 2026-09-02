@@ -39,6 +39,7 @@ npm run lint && npm run format:check && npm run typecheck && npm run build && np
   ```
 
 - **Strict mode** is on. Do not disable individual strict checks.
+- **Function size** — `max-lines-per-function` caps one function in `src/` at 400 lines of code (blank lines and comments do not count). The handful of functions that predate the rule are pinned at their current size in `eslint.config.js`, each with the issue that will retire it; that table is only allowed to shrink, so a new function over the ceiling gets split rather than an entry.
 - Config is parsed and validated with **zod**. All config types flow from `configSchema.ts` / `types.ts` (re-exported through `config.ts`); do not add raw `any` casts to handle config fields.
 
 ### Dependencies
