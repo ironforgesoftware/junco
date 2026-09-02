@@ -474,6 +474,14 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description: "Labels applied to every PR Junco opens.",
   },
+  {
+    path: "pr.secretScan",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "live",
+    description: "Scan the diff about to be pushed for secret shapes; fail the ticket on a hit.",
+  },
 
   // --- verify.* ---
   {
