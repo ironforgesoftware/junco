@@ -601,8 +601,11 @@ interface SdkModelRuntime {
  * A models store that never touches disk. `ModelRuntime.create` otherwise
  * defaults to a `FileModelsStore` writing `models-store.json` NEXT TO the
  * operator's models.json — junco must not write there.
+ *
+ * Exported so tests can assert identity on the option literal below
+ * (tests/sessionFactoryInvariants.test.ts) rather than re-describing it.
  */
-const NOOP_MODELS_STORE = {
+export const NOOP_MODELS_STORE = {
   read: async () => undefined,
   write: async () => {},
   delete: async () => {},
@@ -621,6 +624,10 @@ const NOOP_MODELS_STORE = {
  * default file store can write beside the operator's models.json).
  * `allowModelNetwork` defaults to false and is left alone. Junco's three
  * cascade paths are all static, so skipping the refresh costs nothing.
+ *
+ * Exported for that invariant's test: `ModelRuntimeStatic` is the only SDK
+ * value here, so a fake makes the option literal assertable without an SDK
+ * import (tests/sessionFactoryInvariants.test.ts).
  */
 // The OBJECT LITERAL passed to `create()` below is annotated with `satisfies
 // CreateModelRuntimeOptions` (imported type-only from the SDK root, which
@@ -633,7 +640,7 @@ const NOOP_MODELS_STORE = {
 // `CredentialStore` here because `modify` is declared with method-shorthand
 // syntax on both interfaces, which tsc checks bivariantly regardless of
 // `strictFunctionTypes`.
-function sdkRegistryOps(
+export function sdkRegistryOps(
   ModelRuntimeStatic: { create(options: Record<string, unknown>): Promise<unknown> },
   credentials: InMemoryCredentialStore,
 ): RegistryOps {
