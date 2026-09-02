@@ -11,20 +11,20 @@
  * Left pane: `LEVERS` (src/configLevers.ts) grouped by top-level section,
  * order fixed by `SECTION_ORDER`. Right pane: the focused section's levers
  * (label · current value), edited in place. Footer: the focused lever's
- * `description`, then a save/error toast. Every commit mirrors the `junco
- * config set` CLI's save path (src/configCmd.ts): coerce (or toggle/cycle),
- * `setAtPath` a clone, `validateConfigObject`, atomic write (temp + rename —
- * same pattern as ghClient.ts's cache writers), re-read the file into state.
+ * `description`, then a save/error toast. Every commit IS the `junco config
+ * set` CLI's save path: coerce (or toggle/cycle), then `updateConfigFile`
+ * (src/configWrite.ts — re-read, `setAtPath`, `validateConfigObject`, atomic
+ * temp + rename). No fs call lives in this component: every read and write
+ * goes through the `configDeps` prop (#349), so the round trip is testable
+ * against an in-memory seam.
  */
 import React, { useEffect, useRef, useState } from "react";
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { Box, Text, useStdout } from "ink";
 import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { TextField } from "./TextField.js";
 import { LEVERS, getAtPath, setAtPath, coerceLever, type Lever } from "../../configLevers.js";
-import { validateConfigObject } from "../../config.js";
+import { readConfigFile, updateConfigFile, type ConfigWriteDeps } from "../../configWrite.js";
 import { useGuardedInput } from "../useGuardedInput.js";
 
 /** Top-level scalar leaves that share one "general" section rather than each
@@ -146,24 +146,16 @@ function clampScrollOffset(
   return Math.min(Math.max(next, 0), maxOffset);
 }
 
-/** Parses the config file; `null` on a missing/corrupt file so callers can
- * fall back (mount: to `{}`; a mid-session re-read: to the last-known state
- * — never let a transient read hiccup zero out the write). */
-function tryReadRaw(configPath: string): Record<string, unknown> | null {
+/** Parses the config file at mount; `null` on a missing/corrupt file so the
+ * view falls back to `{}` (defaults on display, nothing written until a
+ * commit). Commits never use this — updateConfigFile re-reads at write time
+ * and refuses to write over a file it could not read. */
+function tryReadRaw(configPath: string, deps: ConfigWriteDeps): Record<string, unknown> | null {
   try {
-    return JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    return readConfigFile(configPath, deps);
   } catch {
     return null;
   }
-}
-
-/** Atomic write: a PID-suffixed temp file (avoids colliding with a concurrent
- * `junco config set`) written then renamed over the target — mirrors
- * configCmd.ts's `set` and ghClient.ts's cache writers. */
-function writeRaw(configPath: string, obj: Record<string, unknown>): void {
-  const tmp = join(dirname(configPath), `.config.json.tmp-${process.pid}`);
-  writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", "utf8");
-  renameSync(tmp, configPath);
 }
 
 export function ConfigView({
@@ -171,9 +163,13 @@ export function ConfigView({
   onExit,
   visibleRows,
   inputActive = true,
+  configDeps = {},
 }: {
   configPath: string;
   onExit: () => void;
+  /** The config file's read/write seam (tests inject an in-memory file);
+   * production omits it → configWrite.ts's real-fs defaults. */
+  configDeps?: ConfigWriteDeps;
   /** Override for the right pane's lever-row viewport height. Defaults to
    * the terminal height minus `CHROME_ROWS`; exposed so tests can force a
    * small deterministic window instead of depending on the terminal size
@@ -188,7 +184,9 @@ export function ConfigView({
   const { stdout } = useStdout();
   const terminalRows = stdout?.rows ?? 24;
   const visibleCount = visibleRows ?? Math.max(MIN_VISIBLE_ROWS, terminalRows - CHROME_ROWS);
-  const [raw, setRaw] = useState<Record<string, unknown>>(() => tryReadRaw(configPath) ?? {});
+  const [raw, setRaw] = useState<Record<string, unknown>>(
+    () => tryReadRaw(configPath, configDeps) ?? {},
+  );
   const [sectionIdx, setSectionIdx] = useState(0);
   const [fieldIdx, setFieldIdx] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -244,21 +242,24 @@ export function ConfigView({
   const hiddenBelow = Math.max(0, fields.length - (scrollOffsetSafe + visibleCount));
 
   /** Save path shared by toggle/cycle (immediate) and inline-edit commit:
-   * re-read the file at write time (never mutate a stale in-memory copy —
-   * same rule App.tsx's watchlist writers follow), setAtPath a clone,
-   * validate, atomic-write on success, reload `raw` from the written file. */
+   * updateConfigFile re-reads the file at write time (never mutates a stale
+   * in-memory copy — same rule App.tsx's watchlist writers follow), setAtPath,
+   * validates, atomic-writes on success; `raw` reloads from what was written.
+   * Any failure — schema-invalid, unreadable, or unwritable file — is a toast,
+   * never an exception escaping the input handler. */
   const commit = (target: Lever, value: unknown): void => {
-    const fresh = tryReadRaw(configPath) ?? raw;
-    const clone: Record<string, unknown> = JSON.parse(JSON.stringify(fresh));
-    setAtPath(clone, target.path, value);
+    let next: Record<string, unknown>;
     try {
-      validateConfigObject(clone);
+      next = updateConfigFile(
+        configPath,
+        (fresh) => setAtPath(fresh, target.path, value),
+        configDeps,
+      );
     } catch (e) {
       showToast("error", errMsg(e));
       return;
     }
-    writeRaw(configPath, clone);
-    setRaw(tryReadRaw(configPath) ?? clone);
+    setRaw(next);
     showToast(
       "success",
       target.reload === "restart" ? "Saved — restart to apply" : "Saved — applies live",

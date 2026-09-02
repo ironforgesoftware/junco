@@ -127,7 +127,7 @@ export async function runCmd(argv: string[], opts: RunOpts = {}): Promise<CmdRes
  * The exact 10 lowercased substrings from worker.py `_NETWORK_ERROR_PATTERNS`.
  * Patterns are intentionally lower-cased and matched via substring search.
  */
-export const NETWORK_ERROR_PATTERNS: readonly string[] = [
+const NETWORK_ERROR_PATTERNS: readonly string[] = [
   "i/o timeout",
   "dial tcp",
   "could not resolve host",

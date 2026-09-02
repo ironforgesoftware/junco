@@ -714,7 +714,15 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
                   ],
                   { timeoutMs: GH_TIMEOUT },
                 );
-                op.prUrl = v.stdout.trim();
+                // `--jq .url` exits 0 with empty stdout or a bare `null` when
+                // the field is missing — same validation as the create path,
+                // or "" gets checkpointed, written to the done ticket, and
+                // posted as "Opened " (#348).
+                const url = v.stdout.trim();
+                if (!url || url === "null") {
+                  throw new GitOpError("gh pr view returned no URL", v.stderr, 1);
+                }
+                op.prUrl = url;
               } else {
                 throw e;
               }
@@ -766,7 +774,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
             }
           }
           if (op.finalize !== null && op.issue !== null) {
-            const body = prFlushComment(op.finalize, op.prUrl!);
+            const body = prFlushComment(op.finalize, op.prUrl);
             await postCommentIdempotent(op.nwo, op.issue, body);
             const ll = lifecycleLabels(cfg.github.triggerLabel);
             const doneLabel = TERMINAL_DONE_STATUSES.has(op.finalize.status) ? ll.done : ll.failed;

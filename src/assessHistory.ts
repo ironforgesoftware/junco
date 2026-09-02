@@ -30,7 +30,7 @@ import { join } from "node:path";
 import { makeReviewStore, type ReviewStoreDeps } from "./reviewStore.js";
 import { dataTreePaths } from "./dataTree.js";
 import { slugifyId } from "./slug.js";
-import type { Config } from "./types.js";
+import type { Config, Result } from "./types.js";
 
 export interface AssessHistory {
   id: string; // = nwo ("owner/repo") — the store key
@@ -94,9 +94,8 @@ export function readHistory(
 export function recordRun(
   cfg: Config,
   nwo: string,
-  run:
-    | { ok: true; at: string; found: number; parked: number }
-    | { ok: false; at: string; reason: string },
+  // `at` intersects BOTH arms — every run is stamped, success or not.
+  run: Result<{ found: number; parked: number }> & { at: string },
   deps: AssessHistoryDeps = {},
 ): void {
   const prev = readHistory(cfg, nwo, deps);
@@ -104,8 +103,8 @@ export function recordRun(
     ? {
         id: nwo,
         lastSuccessAt: run.at,
-        lastFound: run.found,
-        lastParked: run.parked,
+        lastFound: run.value.found,
+        lastParked: run.value.parked,
         lastFailureAt: null,
         lastFailureReason: null,
       }
@@ -115,7 +114,7 @@ export function recordRun(
         lastFound: prev?.lastFound ?? null,
         lastParked: prev?.lastParked ?? null,
         lastFailureAt: run.at,
-        lastFailureReason: run.reason,
+        lastFailureReason: run.error,
       };
   store.write(dataTreePaths(cfg).assessHistory, next, deps);
 }

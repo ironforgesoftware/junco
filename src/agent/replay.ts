@@ -25,6 +25,7 @@
  *     boundaries are inferred from `agent_end`.
  */
 import { GuardManager, type GuardDecision, type GuardManagerOptions } from "./guardManager.js";
+import type { AgentEvent } from "./session.js";
 import {
   parseTranscriptLine,
   type GuardDecisionRecord,
@@ -83,6 +84,14 @@ interface ActiveRun {
 }
 
 type SynthesizedDelta = { type: "text_delta" | "thinking_delta"; delta: string };
+
+/**
+ * The cast at the transcript seam. A recorded line is untyped JSON and a
+ * synthesized `message_update` carries only the fields the guards read, so
+ * neither is a full `AgentEvent` — the GuardManager parses defensively anyway
+ * (tests/helpers/fakeSession.ts casts the same way for the same reason).
+ */
+const asAgentEvent = (e: unknown): AgentEvent => e as AgentEvent;
 
 /**
  * The `message_update` delta a recorded content block stands in for. Unknown
@@ -189,7 +198,9 @@ export function replayTranscript(lines: string[], opts: ReplayOptions): ReplayRe
         for (const block of msg.content) {
           const delta = deltaForBlock(block);
           if (!delta) continue;
-          const d = active.gm.observe({ type: "message_update", assistantMessageEvent: delta });
+          const d = active.gm.observe(
+            asAgentEvent({ type: "message_update", assistantMessageEvent: delta }),
+          );
           if (d) {
             record(active, d, i);
             if (d.action === "kill") break;
@@ -199,7 +210,7 @@ export function replayTranscript(lines: string[], opts: ReplayOptions): ReplayRe
       continue;
     }
 
-    const decision = active.gm.observe(ev);
+    const decision = active.gm.observe(asAgentEvent(ev));
     if (decision) record(active, decision, i);
   }
 

@@ -2,14 +2,16 @@
  * `junco auth login` — the headless/re-auth vehicle for the bot account
  * (spec 2026-07-15): run gh's interactive device-flow login into the isolated
  * GH_CONFIG_DIR, verify the identity, flip botAccount.enabled in config.json
- * (atomic temp+rename, the wizard/configCmd pattern). The wizard's Account
- * chapter shares the same runGhLogin/detectBotLogin routines (src/ghAuth.ts).
+ * (validated atomic write via updateConfigFile, configWrite.ts). The wizard's
+ * Account chapter shares the same runGhLogin/detectBotLogin routines
+ * (src/ghAuth.ts).
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { validateConfigObject, loadConfig, resolveBotGhConfigDir } from "./config.js";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { loadConfig, resolveBotGhConfigDir } from "./config.js";
 import { getAtPath, setAtPath } from "./configLevers.js";
+import { readConfigFile, updateConfigFile, isConfigValidationError } from "./configWrite.js";
 import { detectBotLogin, runGhLogin } from "./ghAuth.js";
 import { grantBotAccess } from "./botAccess.js";
 import type { Config } from "./types.js";
@@ -84,10 +86,9 @@ export async function runAuthCommand(
     );
     return 1;
   }
-  const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
   let raw: Record<string, unknown>;
   try {
-    raw = JSON.parse(readFileFn(resolved)) as Record<string, unknown>;
+    raw = readConfigFile(resolved, deps);
   } catch (e) {
     printErr(`config unreadable: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
@@ -114,35 +115,19 @@ export async function runAuthCommand(
     return 1;
   }
 
-  setAtPath(raw, "botAccount.enabled", true);
-  // #188: validate BEFORE writing and catch here so a config that was ALREADY
-  // schema-invalid in some unrelated field surfaces a one-line message and a
-  // clean exit 1 — parity with configCmd's `set` — instead of letting the raw
-  // ZodError propagate to cli.ts's top-level catch and print a stack trace.
+  // #188: validation runs BEFORE the write (inside updateConfigFile) and is
+  // caught here so a config that was ALREADY schema-invalid in some unrelated
+  // field surfaces a one-line message and a clean exit 1 — parity with
+  // configCmd's `set` — instead of letting the raw ZodError propagate to
+  // cli.ts's top-level catch and print a stack trace. The file is re-read at
+  // write time: the login above can take minutes, and an edit made meanwhile
+  // must not be clobbered by the snapshot taken before it.
   try {
-    validateConfigObject(raw);
+    updateConfigFile(resolved, (fresh) => setAtPath(fresh, "botAccount.enabled", true), deps);
   } catch (e) {
+    const what = isConfigValidationError(e) ? "config invalid" : "config write failed";
     printErr(
-      `config invalid — not modified: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}\n`,
-    );
-    return 1;
-  }
-  // Atomic temp+rename (wizard/configCmd pattern) — never truncate in place.
-  const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
-  const writeFileFn = deps.writeFileFn ?? ((p: string, c: string) => writeFileSync(p, c, "utf8"));
-  const renameFn = deps.renameFn ?? renameSync;
-  const unlinkFn = deps.unlinkFn ?? unlinkSync;
-  try {
-    writeFileFn(tmp, JSON.stringify(raw, null, 2) + "\n");
-    renameFn(tmp, resolved);
-  } catch (e) {
-    try {
-      unlinkFn(tmp);
-    } catch {
-      /* best effort */
-    }
-    printErr(
-      `config write failed — not modified: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}\n`,
+      `${what} — not modified: ${(e instanceof Error ? e.message : String(e)).split("\n")[0]}\n`,
     );
     return 1;
   }

@@ -29,7 +29,21 @@ export interface PatchSeries {
 // pattern and inflate `count` (a single patch counted as two).
 const MBOX_FROM =
   /^From [0-9a-f]{7,40} [A-Za-z]{3} [A-Za-z]{3} {1,2}\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/gm;
-const DIFF_GIT = /^diff --git a\/(.+?) b\/(.+)$/gm;
+// The plain `a/… b/…` header only. Git C-quotes a path (`"a/…" "b/…"`, or one
+// side only) when it holds a quote, backslash, tab, or non-ASCII byte under
+// the default core.quotePath — such a line does NOT match this and is a parse
+// failure (#339): `files` is what unsafePatchPaths examines, so a header the
+// parser cannot read must reject the series rather than silently skip it.
+const DIFF_GIT_PREFIX = "diff --git ";
+const DIFF_GIT_PLAIN = /^a\/(.+?) b\/(.+)$/;
+// Git's extended header lines (Documentation/diff-generate-patch.txt): a
+// contiguous block right after `diff --git`, ended by the first line that is
+// not one of these. `rename`/`copy` `from`/`to` OVERRIDE the names on the
+// `diff --git` line in `git apply` (apply.c gitdiff_renamesrc et al.), so they
+// go into `files` explicitly; C-quoted values fail closed like the header.
+const EXT_HEADER =
+  /^(?:old mode|new mode|deleted file mode|new file mode|copy from|copy to|rename from|rename to|similarity index|dissimilarity index|index) /;
+const RENAME_COPY = /^(?:rename|copy) (?:from|to) (.+)$/;
 const SUBJECT_LINE = /^Subject:\s*(.*)$/m;
 const PATCH_TAG_PREFIX = /^\[PATCH[^\]]*\]\s*/i;
 
@@ -41,10 +55,19 @@ export function parsePatchSeries(body: string): PatchSeries | null {
   if (raw.length > MAX_PATCH_BYTES) return null;
   const froms = raw.match(MBOX_FROM);
   if (!froms || froms.length === 0) return null;
-  if (!/^diff --git /m.test(raw)) return null;
   const files = new Set<string>();
-  for (const m of raw.matchAll(DIFF_GIT)) {
+  const lines = raw.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith(DIFF_GIT_PREFIX)) continue;
+    const m = DIFF_GIT_PLAIN.exec(lines[i].slice(DIFF_GIT_PREFIX.length));
+    if (!m) return null;
     for (const p of [m[1], m[2]]) if (p !== "/dev/null") files.add(p);
+    while (i + 1 < lines.length && EXT_HEADER.test(lines[i + 1])) {
+      const r = RENAME_COPY.exec(lines[++i]);
+      if (!r) continue;
+      if (r[1].startsWith('"')) return null;
+      files.add(r[1]);
+    }
   }
   if (files.size === 0) return null;
   return { raw, count: froms.length, files: [...files].sort() };

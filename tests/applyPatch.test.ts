@@ -5,13 +5,19 @@
  * `git format-patch --stdout` in a scratch clone, never hand-approximated.
  */
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import { applyPatchSeries, buildApplyFallbackPrompt } from "../src/applyPatch.js";
-import { parsePatchSeries, type PatchSeries } from "../src/patchTicket.js";
+import {
+  parsePatchSeries,
+  unsafePatchPaths,
+  hasBinaryHunk,
+  type PatchSeries,
+} from "../src/patchTicket.js";
+import type { git } from "../src/git.js";
 import type { Config, RunResult } from "../src/types.js";
 import { parseTicket } from "../src/ticket.js";
 import { makeConfig } from "./helpers/config.js";
@@ -49,17 +55,24 @@ function toPatchSeries(raw: string): PatchSeries {
 }
 
 /** Clone `workDir` into a throwaway scratch dir, apply `commits` (each writes
- * `file` with `content` and commits `message`), then `git format-patch -N
- * --stdout` the last N commits — a REAL mbox series, not an approximation.
- * The scratch clone is discarded; `workDir` itself is left untouched. */
+ * `file` with `content` — or makes it a symlink to `symlinkTo` — and commits
+ * `message`), then `git format-patch -N --stdout` the last N commits — a REAL
+ * mbox series, not an approximation. The scratch clone is discarded; `workDir`
+ * itself is left untouched. */
 function buildRealSeries(
   workDir: string,
-  commits: Array<{ file: string; content: string; message: string }>,
+  commits: Array<{ file: string; message: string } & ({ content: string } | { symlinkTo: string })>,
 ): string {
   const scratch = mkdtempSync(join(tmpdir(), "junco-am-src-"));
   run(["git", "clone", "-q", workDir, scratch]);
   for (const c of commits) {
-    writeFileSync(join(scratch, c.file), c.content, "utf8");
+    const target = join(scratch, c.file);
+    if ("symlinkTo" in c) {
+      symlinkSync(c.symlinkTo, target);
+    } else {
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, c.content, "utf8");
+    }
     run(["git", "-C", scratch, "add", "-A"]);
     run(["git", "-C", scratch, "commit", "-q", "-m", c.message]);
   }
@@ -209,7 +222,7 @@ describe("applyPatchSeries", () => {
     const out = await applyPatchSeries(cfg, work, "t1", conflicting);
 
     expect(out.ok).toBe(false);
-    expect((out as { reason: string }).reason).toMatch(/conflict|failed/i);
+    expect((out as { error: string }).error).toMatch(/conflict|failed/i);
     expect(run(["git", "-C", work, "status", "--porcelain"]).trim()).toBe("");
     expect(existsSync(join(work, ".git", "rebase-apply"))).toBe(false);
   });
@@ -248,7 +261,7 @@ describe("applyPatchSeries", () => {
     const out = await applyPatchSeries(cfg, work, "t1", conflicting);
 
     expect(out.ok).toBe(false);
-    const reason = (out as { reason: string }).reason;
+    const reason = (out as { error: string }).error;
     // Before the fix: reason was just "git am --3way failed (exit 128):
     // error: Failed to merge in the changes." plus hint: lines — this file
     // name and CONFLICT marker were never present anywhere in it.
@@ -275,10 +288,182 @@ describe("applyPatchSeries", () => {
     const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
-    const result = (out as { result: RunResult }).result;
+    const result = (out as { value: RunResult }).value;
     expect(result.usage.total).toBe(0);
     expect(result.stopReason).toBe("apply");
     expect(result.toolCalls).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // #339: the symlink-then-write-through pattern. Commit 1 adds `link` as a
+  // symlink to a directory OUTSIDE the worktree; commit 2 adds `link/passwd`
+  // as an ordinary file. Neither path is absolute or traversing, so
+  // unsafePatchPaths passes the series — containment here rests entirely on
+  // git's own beyond-symlink check (apply.c path_is_beyond_symlink). This
+  // pins that external guarantee so junco notices if it ever changes. The
+  // symlink targets a scratch directory, never a real system path: if the
+  // check regressed, the write would land in tmp, not in /etc.
+  // -------------------------------------------------------------------------
+
+  it("refuses a series whose second commit writes through a symlink the first commit created (#339)", async () => {
+    const { root, work } = setup();
+    const outside = join(root, "outside");
+    mkdirSync(outside);
+
+    // Two one-commit series off the SAME base, concatenated. Commit 2 comes
+    // from a clone where `link` is a real directory — the only way to build
+    // that commit without the fixture itself writing through the symlink.
+    const p1 = buildRealSeries(work, [
+      { file: "link", symlinkTo: outside, message: "chore: add link" },
+    ]);
+    const p2 = buildRealSeries(work, [
+      { file: "link/passwd", content: "pwned\n", message: "feat: write through link" },
+    ]);
+    const series = toPatchSeries(p1 + p2);
+    expect(series.count).toBe(2);
+    expect(series.files).toEqual(["link", "link/passwd"]);
+    expect(unsafePatchPaths(series.files)).toEqual([]); // junco's own check is blind here
+
+    const cfg = cfgFor(root);
+    const out = await applyPatchSeries(cfg, work, "t1", series);
+
+    expect(out.ok).toBe(false);
+    expect((out as { error: string }).error).toMatch(/git am --3way failed/);
+    expect(existsSync(join(outside, "passwd"))).toBe(false); // nothing escaped
+    // am --abort rolled the WHOLE series back — commit 1's symlink included.
+    expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
+    expect(run(["git", "-C", work, "status", "--porcelain"]).trim()).toBe("");
+    expect(existsSync(join(work, ".git", "rebase-apply"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #338: containment is enforced by applyPatchSeries ITSELF, before `git am` —
+// not only by plan-lint's `patch_paths_sane` rule, which runs only while the
+// live-editable `planLint.enabled` + `planLint.blockOnError` levers are both
+// on. cfgFor already turns lint off; these pin that the executor refuses
+// anyway, and that a refused series touches nothing: no git invocation at
+// all (the gitFn seam records and throws), no commit, worktree byte-identical.
+// ---------------------------------------------------------------------------
+
+describe("applyPatchSeries — pre-git-am containment backstop (#338)", () => {
+  let roots: string[] = [];
+
+  afterEach(() => {
+    for (const r of roots) rmSync(r, { recursive: true, force: true });
+    roots = [];
+  });
+
+  function setup(): { root: string; work: string } {
+    const root = mkdtempSync(join(tmpdir(), "junco-applypatch-338-"));
+    roots.push(root);
+    const { work } = cloneHarness(root);
+    return { root, work };
+  }
+
+  /** A gitFn that records every invocation and refuses to run any of them —
+   * the strongest available "git am never ran" evidence (an `am --abort`
+   * would be recorded too). */
+  function refusingGit(): { calls: string[][]; gitFn: typeof git } {
+    const calls: string[][] = [];
+    const gitFn: typeof git = async (_cfg, args) => {
+      calls.push(args);
+      throw new Error(`git must not run for a refused series: git ${args.join(" ")}`);
+    };
+    return { calls, gitFn };
+  }
+
+  /** A hand-built one-patch mbox creating `path` — the one fixture git cannot
+   * generate for us: `git add` refuses a traversing path, so a series naming
+   * one only ever comes from a hand-edited or hostile mbox, which is exactly
+   * what the backstop exists for. Still run through the REAL parser. */
+  function traversalSeries(path: string): PatchSeries {
+    const raw =
+      "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n" +
+      "From: Someone <someone@example.com>\n" +
+      "Date: Mon, 1 Sep 2025 00:00:00 +0000\n" +
+      "Subject: [PATCH] feat: escape the worktree\n\n" +
+      "---\n" +
+      ` ${path} | 1 +\n` +
+      " 1 file changed, 1 insertion(+)\n" +
+      ` create mode 100644 ${path}\n\n` +
+      `diff --git a/${path} b/${path}\n` +
+      "new file mode 100644\n" +
+      "index 0000000..3e75765\n" +
+      "--- /dev/null\n" +
+      `+++ b/${path}\n` +
+      "@@ -0,0 +1 @@\n" +
+      "+x\n";
+    return toPatchSeries(raw);
+  }
+
+  it("refuses a series touching a path outside the repo before git am — lint off and non-blocking", async () => {
+    const { root, work } = setup();
+    const series = traversalSeries("../escaped-338.txt");
+    expect(series.files).toEqual(["../escaped-338.txt"]);
+    // cfgFor sets planLintEnabled: false; blockOnError off too — neither
+    // lever may matter at this layer.
+    const cfg = cfgFor(root, { planLintBlockOnError: false });
+    const { calls, gitFn } = refusingGit();
+
+    const out = await applyPatchSeries(cfg, work, "t-338", series, { gitFn });
+
+    expect(out.ok).toBe(false);
+    const failure = out as { ok: false; error: string; refused: boolean };
+    expect(failure.refused).toBe(true);
+    expect(failure.error).toMatch(/refused before git am/);
+    expect(failure.error).toMatch(/outside the repo/);
+    expect(failure.error).toContain('"../escaped-338.txt"');
+    expect(calls).toEqual([]); // no `git am` — and no `git am --abort` either
+    expect(existsSync(join(root, "escaped-338.txt"))).toBe(false); // nothing escaped
+    expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
+    expect(run(["git", "-C", work, "status", "--porcelain"]).trim()).toBe("");
+    expect(existsSync(join(work, ".git", "rebase-apply"))).toBe(false);
+  });
+
+  it("refuses a series carrying a binary hunk before git am", async () => {
+    const { root, work } = setup();
+    // A REAL binary series: git format-patch emits `GIT binary patch` by
+    // default for a NUL-bearing file.
+    const raw = buildRealSeries(work, [
+      { file: "blob.bin", content: "ab\0cd", message: "feat: add a blob" },
+    ]);
+    expect(hasBinaryHunk(raw)).toBe(true);
+    const series = toPatchSeries(raw);
+    const cfg = cfgFor(root);
+    const { calls, gitFn } = refusingGit();
+
+    const out = await applyPatchSeries(cfg, work, "t-338-bin", series, { gitFn });
+
+    expect(out.ok).toBe(false);
+    const failure = out as { ok: false; error: string; refused: boolean };
+    expect(failure.refused).toBe(true);
+    expect(failure.error).toMatch(/refused before git am/);
+    expect(failure.error).toMatch(/binary hunk/);
+    expect(calls).toEqual([]);
+    expect(existsSync(join(work, "blob.bin"))).toBe(false);
+    expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
+  });
+
+  it("a real git am failure is not a refusal — the escalation ladder still owns it", async () => {
+    const { root, work } = setup();
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "two", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "feat: add game.js"]);
+    const raw = buildRealSeries(work, [
+      { file: "game.js", content: levelsFile(["one", "TWO-CHANGED", "three"]), message: "x" },
+    ]);
+    const conflicting = toPatchSeries(raw);
+    writeFileSync(join(work, "game.js"), levelsFile(["one", "dos", "three"]), "utf8");
+    run(["git", "-C", work, "add", "-A"]);
+    run(["git", "-C", work, "commit", "-q", "-m", "chore: rename two differently"]);
+
+    const out = await applyPatchSeries(cfgFor(root), work, "t-338-conflict", conflicting);
+
+    expect(out.ok).toBe(false);
+    const failure = out as { ok: false; error: string; refused: boolean };
+    expect(failure.refused).toBe(false);
+    expect(failure.error).toMatch(/git am --3way failed/);
   });
 });
 
@@ -425,7 +610,7 @@ describe("applyPatchSeries — transcript frames (Stage 4a)", () => {
       fileExists: mem.fileExists,
     });
     expect(out.ok).toBe(false);
-    const reason = (out as { reason: string }).reason;
+    const reason = (out as { error: string }).error;
 
     const frames = parseFrames(mem.lines);
     expect(frames.map((f) => f.type)).toEqual(["junco_meta", "junco_run_start", "junco_run_end"]);

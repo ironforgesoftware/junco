@@ -34,6 +34,7 @@ import {
   type GuardEvent,
   type GuardKind,
 } from "./supervisor.js";
+import type { AgentEvent } from "./session.js";
 
 // `detail` and `turnIndex` mirror the underlying GuardEvent so the decision is
 // self-describing: session.ts logs and transcribes it verbatim (#37) without
@@ -103,10 +104,8 @@ export class GuardManager {
    * guard is RE-INSTANTIATED here so it doesn't immediately re-trip on the
    * already-buffered state.
    */
-  observe(event: any): GuardDecision | null {
-    const type = event?.type;
-
-    switch (type) {
+  observe(event: AgentEvent): GuardDecision | null {
+    switch (event?.type) {
       case "message_start":
       case "turn_start":
         // New assistant message / turn → fresh cumulative buffers (the rep
@@ -134,8 +133,13 @@ export class GuardManager {
 
   // -- text / thinking repetition -------------------------------------------
 
-  private onMessageUpdate(event: any): GuardDecision | null {
-    const ame = event?.assistantMessageEvent;
+  private onMessageUpdate(event: AgentEvent): GuardDecision | null {
+    // The PUBLIC boundary is typed; internally the guards parse defensively
+    // against partial shapes (test fakes, replayed transcripts, older servers),
+    // so access goes through one local cast (runResult.ts uses the same idiom).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- defensive read of a partial SDK event shape
+    const e = event as any;
+    const ame = e?.assistantMessageEvent;
     const ameType = ame?.type;
     if (ameType === "text_delta") {
       this.textBuf += typeof ame.delta === "string" ? ame.delta : "";
@@ -224,9 +228,11 @@ export class GuardManager {
 
   // -- tool-call loop + commit-intent detection -----------------------------
 
-  private onToolStart(event: any): GuardDecision | null {
-    const name = typeof event?.toolName === "string" ? event.toolName : "?";
-    const args = event?.args ?? {};
+  private onToolStart(event: AgentEvent): GuardDecision | null {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- defensive read of a partial SDK event shape (see onMessageUpdate)
+    const e = event as any;
+    const name = typeof e?.toolName === "string" ? e.toolName : "?";
+    const args = e?.args ?? {};
 
     // Commit-intent detection: a `bash` call whose command contains `git commit`
     // raises the output budget (commits_made at the call site, so a failed
@@ -274,9 +280,11 @@ export class GuardManager {
 
   // -- tool-error loop ------------------------------------------------------
 
-  private onToolEnd(event: any): GuardDecision | null {
-    const name = typeof event?.toolName === "string" ? event.toolName : "?";
-    const isError = Boolean(event?.isError);
+  private onToolEnd(event: AgentEvent): GuardDecision | null {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- defensive read of a partial SDK event shape (see onMessageUpdate)
+    const e = event as any;
+    const name = typeof e?.toolName === "string" ? e.toolName : "?";
+    const isError = Boolean(e?.isError);
     if (this.toolErrorLoopGuard.observe(name, isError)) {
       const evt: GuardEvent = {
         kind: "tool_error_loop",
@@ -313,12 +321,14 @@ export class GuardManager {
 
   // -- turn boundary + output budget ----------------------------------------
 
-  private onTurnEnd(event: any): GuardDecision | null {
+  private onTurnEnd(event: AgentEvent): GuardDecision | null {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- defensive read of a partial SDK event shape (see onMessageUpdate)
+    const e = event as any;
     let decision: GuardDecision | null = null;
 
     // Observe the turn's output tokens for the budget check BEFORE resetting.
     if (this.outputBudgetGuard) {
-      const usage = event?.message?.usage;
+      const usage = e?.message?.usage;
       // Pi/oMLX usage shape: { output: N }. Fall back to totalTokens-input if
       // `output` is absent (mirrors RunAccumulator's defensive read).
       let outTokens = 0;

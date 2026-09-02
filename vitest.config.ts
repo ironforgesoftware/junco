@@ -5,6 +5,9 @@ export default defineConfig({
     // tests/e2e/ is its own project (vitest.e2e.config.ts): it spawns the
     // built CLI and must never ride along with the unit run.
     exclude: [...configDefaults.exclude, "tests/e2e/**"],
+    // vi.restoreAllMocks() before every test: a vi.spyOn left behind by a
+    // failed (or forgetful) test must not leak into the next one.
+    restoreMocks: true,
     coverage: {
       provider: "v8",
       include: ["src/**"],

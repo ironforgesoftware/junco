@@ -4,7 +4,7 @@ import { join } from "node:path";
 import React from "react";
 import { Text } from "ink";
 import { render, cleanup } from "ink-testing-library";
-import { until, fireUntil } from "./helpers/until.js";
+import { until, fireUntil, tick } from "./helpers/until.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { Tip, ReceiptList, Select, MultiSelect } from "../src/tui/wizard/controls.js";
 import { Welcome } from "../src/tui/wizard/chapters/Welcome.js";
@@ -39,7 +39,6 @@ const BACKSPACE = "\x7f";
 // the parser to emit Enter as a separate trailing event. That reproduces
 // the real two-events-in-one-chunk dispatch the fix must survive.
 const META_SPACE = "\x1b ";
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30));
 async function press(stdin: { write: (s: string) => void }, ...keys: string[]): Promise<void> {
   for (const k of keys) {
     stdin.write(k);

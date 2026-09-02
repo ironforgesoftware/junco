@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ConfigView } from "../src/tui/components/ConfigView.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
-import { until, fireUntil } from "./helpers/until.js";
+import { until, fireUntil, tick } from "./helpers/until.js";
 
 afterEach(cleanup);
 
@@ -16,14 +16,6 @@ const RIGHT = "\x1b[C";
 const ENTER = "\r";
 const ESC = "\x1b";
 const BACKSPACE = "\x7f";
-
-// A single native `data` event (one `stdin.write` call) is one keypress, and
-// Ink schedules its resulting state update as a React "discrete" update — a
-// SECOND write issued before that update has committed can race a stale
-// closure (confirmed empirically: chained writes with no tick between them
-// silently dropped keystrokes). tuiApp.test.tsx's own `tick()` helper exists
-// for the same reason — mirrored here for every multi-step key sequence.
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30));
 
 async function press(stdin: { write: (s: string) => void }, ...keys: string[]): Promise<void> {
   for (const k of keys) {
@@ -117,6 +109,67 @@ describe("ConfigView", () => {
     await press(stdin, ENTER); // toggle reasoning: true → false
     await until(() => readCfg(p).model !== undefined);
     expect((readCfg(p).model as { reasoning: boolean }).reasoning).toBe(false);
+  });
+
+  // #349: the save path is updateConfigFile (configWrite.ts) reached through
+  // the `configDeps` prop — the component itself has no fs calls, so the
+  // whole edit → validate → atomic-write round trip runs against an
+  // in-memory seam here. The path is synthetic: a stray real fs call would
+  // ENOENT, not silently pass.
+  it("routes reads and the save through the injected configDeps seam (no direct fs)", async () => {
+    const configPath = "/sbxroot/.junco/config.json";
+    let file = JSON.stringify({ vaultRoot: "/v", model: { reasoning: true } });
+    const writes: [string, string][] = [];
+    const renames: [string, string][] = [];
+    const configDeps = {
+      readFileFn: (p: string) => {
+        if (p !== configPath) throw new Error(`unexpected read: ${p}`);
+        return file;
+      },
+      writeFileFn: (p: string, s: string) => void writes.push([p, s]),
+      renameFn: (from: string, to: string) => {
+        renames.push([from, to]);
+        file = writes[writes.length - 1][1]; // the rename is what publishes the temp file
+      },
+      unlinkFn: () => {},
+    };
+    const { lastFrame, stdin } = render(
+      <ConfigView configPath={configPath} onExit={() => {}} configDeps={configDeps} />,
+    );
+    await until(() => /model/i.test(lastFrame() ?? ""));
+    await press(stdin, RIGHT); // general → model
+    await press(stdin, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN); // ...reasoning
+    await press(stdin, ENTER); // toggle reasoning: true → false
+    await until(() => renames.length === 1);
+    const [tmp, content] = writes[0];
+    expect(tmp).toBe(`/sbxroot/.junco/.config.json.tmp-${process.pid}`);
+    expect(renames).toEqual([[tmp, configPath]]);
+    expect(JSON.parse(content)).toEqual({ vaultRoot: "/v", model: { reasoning: false } });
+    await until(() => /Saved/.test(lastFrame() ?? ""));
+    // State reloaded from what was written, not from a stale in-memory copy.
+    expect(lastFrame() ?? "").toMatch(/reasoning\s+false/);
+  });
+
+  it("a validation failure on save shows the error toast and never reaches the writer", async () => {
+    const configPath = "/sbxroot/.junco/config.json";
+    const writes: string[] = [];
+    // vaultRoot: 123 is JSON-valid but schema-invalid — any save must be refused.
+    const configDeps = {
+      readFileFn: () => JSON.stringify({ vaultRoot: 123 }),
+      writeFileFn: (p: string) => void writes.push(p),
+      renameFn: () => {},
+      unlinkFn: () => {},
+    };
+    const { lastFrame, stdin } = render(
+      <ConfigView configPath={configPath} onExit={() => {}} configDeps={configDeps} />,
+    );
+    await until(() => /model/i.test(lastFrame() ?? ""));
+    await press(stdin, RIGHT); // general → model
+    await press(stdin, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN); // ...reasoning
+    await press(stdin, ENTER); // toggle attempt
+    await until(() => /vaultRoot|Expected string|invalid/i.test(lastFrame() ?? ""));
+    expect(writes).toEqual([]);
+    expect(lastFrame() ?? "").not.toMatch(/Saved/);
   });
 
   it("inputActive={false} makes the editor inert (a confirm modal owns input over it)", async () => {

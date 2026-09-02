@@ -114,6 +114,23 @@ describe("seatbeltProfile", () => {
     expect(p).not.toContain(`(deny file-read* (subpath "${dataDir}"))`);
   });
 
+  // #340: `(deny default)` was only nominal while Mach lookup stayed blanket —
+  // every service on the host (securityd/the keychain, fseventsd, the
+  // TCC-mediated daemons) was one bootstrap_look_up away. Only enumerated
+  // global names are allowed now; the platform-gated integration suite proves a
+  // real keychain lookup fails while user lookup still works.
+  it("allows Mach lookup only for enumerated global names, never blanket (#340)", () => {
+    const p = seatbeltProfile(denyNet);
+    expect(p).not.toContain("(allow mach-lookup)");
+    const machRules = p.split("\n").filter((l) => l.startsWith("(allow mach-lookup"));
+    expect(machRules).toHaveLength(1);
+    expect(machRules[0]).toContain('(global-name "com.apple.system.opendirectoryd.libinfo")');
+    // Every filter is a literal global name — no bare allow, no regex/prefix.
+    expect(machRules[0]).toMatch(/^\(allow mach-lookup( \(global-name "[^"]+"\))+\)$/);
+    // The exec grant is deliberately untouched by #340.
+    expect(p).toContain("(allow process-exec)");
+  });
+
   // Every prior assertion in this describe block is `toContain` — order-blind
   // by construction. SBPL is last-match-wins, so *meaning* depends entirely on
   // line order; only an indexOf-based assertion can catch a reordering bug.
@@ -198,6 +215,18 @@ describe("bwrapArgs", () => {
   });
   it("does not unshare net when network is allowed", () => {
     expect(bwrapArgs(allowNet, () => true).join(" ")).not.toContain("--unshare-net");
+  });
+  it("always isolates pid/ipc/uts and starts a new session, whatever the network policy", () => {
+    // --new-session closes the TIOCSTI terminal-injection escape bwrap's own
+    // docs warn about; ipc/uts isolation is free (#345). None of these depend
+    // on the policy, so they must survive an allow-network policy too.
+    for (const policy of [denyNet, allowNet]) {
+      const args = bwrapArgs(policy, () => true);
+      for (const flag of ["--unshare-pid", "--unshare-ipc", "--unshare-uts", "--new-session"]) {
+        expect(args).toContain(flag);
+      }
+      expect(args).toContain("--die-with-parent");
+    }
   });
   it("masks only the sensitive data subtrees, never the data root, for today's policy", () => {
     const args = bwrapArgs(dataPolicy, () => true);
@@ -442,5 +471,21 @@ describe("classifyAvailability", () => {
   it("an explicit backend + unavailable fails closed", () => {
     expect(classifyAvailability("bwrap", "bwrap", false)).toBe("fail-closed");
     expect(classifyAvailability("seatbelt", "seatbelt", false)).toBe("fail-closed");
+  });
+  // #344: auto's degrade is a fail-open — on a Linux host without bubblewrap the
+  // default config runs agent bash unconfined while status looks healthy.
+  // requireBackend lets an operator demand the guarantee without pinning
+  // bwrap vs seatbelt per host.
+  it("auto + unavailable + requireBackend fails closed instead of degrading (#344)", () => {
+    expect(classifyAvailability("auto", "bwrap", false, true)).toBe("fail-closed");
+    expect(classifyAvailability("auto", "seatbelt", false, true)).toBe("fail-closed");
+  });
+  it("requireBackend changes nothing when the backend is available, explicit, or none", () => {
+    expect(classifyAvailability("auto", "bwrap", true, true)).toBe("ok");
+    expect(classifyAvailability("bwrap", "bwrap", false, true)).toBe("fail-closed");
+    expect(classifyAvailability("none", "none", false, true)).toBe("ok");
+    // auto on an unsupported platform selects none with no probe to fail —
+    // the lever governs the probe's verdict, not platform support.
+    expect(classifyAvailability("auto", "none", false, true)).toBe("ok");
   });
 });

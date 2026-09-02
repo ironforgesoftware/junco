@@ -9,6 +9,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, unlinkSync, rmSync
 import { join, resolve, sep } from "node:path";
 import type { Config } from "./types.js";
 import { dataTreePaths } from "./dataTree.js";
+import { githubCacheFilesFor } from "./githubCachePaths.js";
 import { readWatchlist, writeWatchlist, watchlistPath, type WatchlistEntry } from "./watchlist.js";
 import { parseTicket } from "./ticket.js";
 import { repoDiscriminator, worktreesLockPath } from "./worktree.js";
@@ -147,17 +148,6 @@ function ticketsTargeting(
     }
   }
   return out;
-}
-
-/** `<dataDir>/github-cache/{issues,prs}-<owner>__<repo>.json`. Mirrors
- * `tui/ghClient.ts`'s `cachePathFor`/`prCachePathFor` byte-for-byte (pinned by
- * tests/unwatchCmd.test.ts's drift-pin test) — duplicated here rather than
- * imported so `src/unwatchCmd.ts` (the CLI graph) never pulls in the heavy
- * `tui/ghClient.ts` module. */
-export function githubCacheFilesFor(cfg: Config, nwo: string): string[] {
-  const dir = dataTreePaths(cfg).githubCache;
-  const key = nwo.replace(/\//g, "__");
-  return [join(dir, `issues-${key}.json`), join(dir, `prs-${key}.json`)];
 }
 
 /** The shared nwo-keyed enumerator both watched and residue plans call:

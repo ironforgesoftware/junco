@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { GuardManager } from "../src/agent/guardManager.js";
+import type { AgentEvent } from "../src/agent/session.js";
 
 // ---------------------------------------------------------------------------
 // Synthetic event helpers (no SDK). Shapes mirror the Pi AgentSessionEvent
@@ -8,25 +9,29 @@ import { GuardManager } from "../src/agent/guardManager.js";
 //   tool_execution_end    { type, toolName, isError }
 //   message_update        { type, assistantMessageEvent: { type:"text_delta"|"thinking_delta", delta } }
 //   turn_end              { type, message: { usage: { output } } }
+// They are partial shapes, not full AgentEvent unions, so the cast to the typed
+// boundary happens once here (as tests/runResult.test.ts does at its call sites).
 // ---------------------------------------------------------------------------
 
+const ev = (e: unknown): AgentEvent => e as AgentEvent;
+
 function toolStart(toolName: string, args: unknown) {
-  return { type: "tool_execution_start", toolCallId: "x", toolName, args };
+  return ev({ type: "tool_execution_start", toolCallId: "x", toolName, args });
 }
 function toolEnd(toolName: string, isError: boolean) {
-  return { type: "tool_execution_end", toolCallId: "x", toolName, result: {}, isError };
+  return ev({ type: "tool_execution_end", toolCallId: "x", toolName, result: {}, isError });
 }
 function textDelta(delta: string) {
-  return { type: "message_update", assistantMessageEvent: { type: "text_delta", delta } };
+  return ev({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
 }
 function thinkingDelta(delta: string) {
-  return { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta } };
+  return ev({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta } });
 }
 function turnEnd(output: number) {
-  return {
+  return ev({
     type: "turn_end",
     message: { usage: { output, input: 0, cacheRead: 0, totalTokens: output } },
-  };
+  });
 }
 
 describe("GuardManager — tool_call_loop", () => {
@@ -170,7 +175,7 @@ describe("GuardManager — text repetition", () => {
 
     // After re-instantiation + a fresh-message boundary, the buffer is reset and
     // a brand-new short message does not immediately re-trip.
-    gm.observe({ type: "message_start", message: { role: "assistant" } });
+    gm.observe(ev({ type: "message_start", message: { role: "assistant" } }));
     expect(gm.observe(textDelta("short reply"))).toBeNull();
   });
 
@@ -274,6 +279,18 @@ describe("GuardManager — thinking repetition", () => {
     expect(decision).not.toBeNull();
     expect(decision!.action).toBe("nudge");
     expect(decision!.kind).toBe("thinking_rep");
+  });
+});
+
+describe("GuardManager — event boundary", () => {
+  // #354: the public reducer takes the SDK's typed event union, so a caller
+  // that hands it an arbitrary object is a compile error, not a silent no-op
+  // routed through `default:`. Enforced by `npm run typecheck`: the directive
+  // below goes unused — and so fails the build — if `observe` widens to `any`.
+  it("rejects an object that is not an AgentEvent", () => {
+    const gm = new GuardManager();
+    // @ts-expect-error — observe() takes AgentEvent, not an arbitrary shape.
+    expect(gm.observe({ type: "not_an_sdk_event" })).toBeNull();
   });
 });
 

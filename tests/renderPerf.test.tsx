@@ -91,7 +91,9 @@ async function waitForNextAppRender(baseline: number): Promise<void> {
  * bumpRender — used to snapshot the full picture at each waypoint even
  * though only a subset is mounted in any one view. Written to disk (not
  * asserted directly) so the before/after tables in the task report and
- * commit body are reproducible, not hand-typed. */
+ * commit body are reproducible, not hand-typed — but only when
+ * JUNCO_PERF_OUT names the path: an unconditional default outside the test's
+ * own tmp dir is a shared, uncleaned file that concurrent runs race on. */
 const ALL_TARGETS = [
   "IssueList",
   "PrList",
@@ -120,8 +122,8 @@ function record(name: string): void {
 }
 
 afterAll(() => {
-  const outPath = process.env.JUNCO_PERF_OUT ?? "/tmp/perf-after.json";
-  writeFileSync(outPath, JSON.stringify(waypoints, null, 2));
+  const outPath = process.env.JUNCO_PERF_OUT;
+  if (outPath) writeFileSync(outPath, JSON.stringify(waypoints, null, 2));
 });
 
 describe("React.memo perf pass — unrelated (health-only) App re-render", () => {

@@ -21,6 +21,7 @@ import {
   PLAN_SET_FENCE,
 } from "./githubInbox.js";
 import { gh } from "./git.js";
+import { sanitizeFindingText } from "./findings.js";
 import { log } from "./logging.js";
 import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
 import { dataTreePaths } from "./dataTree.js";
@@ -68,10 +69,14 @@ export function buildFinalComment(
   const transcriptPointer = transcriptExists
     ? `_Transcript on the worker host: \`transcripts/${ticket.id}.jsonl\` under the state dir._`
     : null;
+  // Model output is untrusted: strip HTML comments (a forged `<!-- junco:plan -->`
+  // marker in a bot-authored comment would be read back by findOwnPlanComment)
+  // and control chars before it lands on the issue (#341). Already trimmed.
+  const finalText = sanitizeFindingText(outcome.finalText, COMMENT_LIMIT);
 
   if (outcome.kind === "qa") {
     if (done) {
-      parts.push(outcome.finalText.trim() || "_(no answer text)_");
+      parts.push(finalText || "_(no answer text)_");
     } else {
       parts.push(`**Junco could not answer this ticket** (status: \`${outcome.status}\`).`);
       if (outcome.failureReason) parts.push(`> ${outcome.failureReason.slice(0, 1000)}`);
@@ -85,7 +90,7 @@ export function buildFinalComment(
           "cutoff were salvaged into the PR. Review for completeness.",
       );
     }
-    const summary = excerpt(outcome.finalText);
+    const summary = excerpt(finalText);
     if (summary) parts.push(summary);
   } else if (done) {
     parts.push(`Finished with status \`${outcome.status}\` — no pull request was needed.`);

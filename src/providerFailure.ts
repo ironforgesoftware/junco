@@ -1,7 +1,7 @@
 /**
  * Classify a provider/session error string into an infrastructure failure
  * class. The SDK flattens HTTP status into display text (no structured codes
- * reach the event stream — verified against pi-coding-agent 0.84.2: pi-ai's
+ * reach the event stream — verified against pi-coding-agent 0.84.4: pi-ai's
  * `ProviderResponse.status` exists but is only ever handed to an opt-in
  * `onResponse` callback junco never registers, and every error field on
  * `AgentSessionEvent`/`AgentEvent` — `errorMessage`, `finalError`, a thrown

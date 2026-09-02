@@ -7,6 +7,9 @@ import {
   makeJailedReadOperations,
   makeJailedWriteOperations,
   makeJailedEditOperations,
+  makeJailedLsOperations,
+  makeJailedFindOperations,
+  makeJailedGrepOperations,
 } from "../src/agent/sandbox/fsOps.js";
 import { SandboxViolation } from "../src/agent/sandbox/pathJail.js";
 import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
@@ -68,6 +71,67 @@ describe("jailed edit", () => {
     writeFileSync(join(outside, "f.txt"), "x");
     const ops = makeJailedEditOperations(work, policyFor(work));
     await expect(ops.access(join(outside, "f.txt"))).rejects.toBeInstanceOf(SandboxViolation);
+  });
+
+  it("reads an allowed file, blocks a denied subpath", async () => {
+    const work = tmp();
+    writeFileSync(join(work, "a.txt"), "hello");
+    const secret = tmp();
+    writeFileSync(join(secret, "id_rsa"), "KEY");
+    const ops = makeJailedEditOperations(work, policyFor(work, [secret]));
+    expect((await ops.readFile(join(work, "a.txt"))).toString()).toBe("hello");
+    await expect(ops.readFile(join(secret, "id_rsa"))).rejects.toBeInstanceOf(SandboxViolation);
+  });
+});
+
+describe("jailed ls", () => {
+  it("lists an allowed dir, blocks a denied subpath", async () => {
+    const work = tmp();
+    writeFileSync(join(work, "a.txt"), "hello");
+    const secret = tmp();
+    writeFileSync(join(secret, "id_rsa"), "KEY");
+    const ops = makeJailedLsOperations(work, policyFor(work, [secret]));
+    expect(await ops.exists(join(work, "a.txt"))).toBe(true);
+    expect((await ops.stat(work)).isDirectory()).toBe(true);
+    expect(await ops.readdir(work)).toEqual(["a.txt"]);
+    // The file exists on disk, so `false` here can only be the jail firing.
+    expect(await ops.exists(join(secret, "id_rsa"))).toBe(false);
+    await expect(ops.stat(join(secret, "id_rsa"))).rejects.toBeInstanceOf(SandboxViolation);
+    await expect(ops.readdir(secret)).rejects.toBeInstanceOf(SandboxViolation);
+  });
+});
+
+describe("jailed find", () => {
+  it("globs under an allowed root, blocks a denied root", async () => {
+    const work = tmp();
+    writeFileSync(join(work, "a.txt"), "hello");
+    writeFileSync(join(work, "b.txt"), "world");
+    const secret = tmp();
+    writeFileSync(join(secret, "id_rsa"), "KEY");
+    const ops = makeJailedFindOperations(work, policyFor(work, [secret]));
+    expect(await ops.exists(join(work, "a.txt"))).toBe(true);
+    const all = await ops.glob("*.txt", work, { ignore: [], limit: 10 });
+    expect(all.sort()).toEqual(["a.txt", "b.txt"]);
+    expect(await ops.glob("*.txt", work, { ignore: [], limit: 1 })).toHaveLength(1);
+    expect(await ops.exists(join(secret, "id_rsa"))).toBe(false);
+    await expect(ops.glob("*", secret, { ignore: [], limit: 10 })).rejects.toBeInstanceOf(
+      SandboxViolation,
+    );
+  });
+});
+
+describe("jailed grep", () => {
+  it("reads an allowed file, blocks a denied subpath", async () => {
+    const work = tmp();
+    writeFileSync(join(work, "a.txt"), "hello");
+    const secret = tmp();
+    writeFileSync(join(secret, "id_rsa"), "KEY");
+    const ops = makeJailedGrepOperations(work, policyFor(work, [secret]));
+    expect(await ops.isDirectory(work)).toBe(true);
+    expect(await ops.isDirectory(join(work, "a.txt"))).toBe(false);
+    expect(await ops.readFile(join(work, "a.txt"))).toBe("hello");
+    await expect(ops.isDirectory(secret)).rejects.toBeInstanceOf(SandboxViolation);
+    await expect(ops.readFile(join(secret, "id_rsa"))).rejects.toBeInstanceOf(SandboxViolation);
   });
 });
 

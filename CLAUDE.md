@@ -11,7 +11,7 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 | Action    | Command                                                                                              |
 | --------- | ---------------------------------------------------------------------------------------------------- |
 | Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                        |
-| All tests | `npm test` (vitest, ~4,250 tests, ~50s)                                                              |
+| All tests | `npm test` (vitest, ~4,300 tests, ~40s)                                                              |
 | One file  | `npx vitest run tests/<name>.test.ts`                                                                |
 | E2E       | `npm run test:e2e` (needs `dist/`; spawns the built CLI in a sandboxed HOME against a scripted model stub; not part of `npm test`) |
 | Coverage  | `npx vitest run --coverage` (floor pinned by `vitest.config.ts` thresholds; CI job `coverage`)       |
@@ -68,13 +68,14 @@ a semantic merge. Details: `docs/parallel-sessions.md`.
 
 - `node dist/cli.js doctor` — preflight config, git/gh auth, endpoint, model, dirs.
 - `node dist/cli.js status` / `list` / `logs -f` — daemon, queue, and log visibility; health JSON at `http://127.0.0.1:8787/health` (default).
-- Per-ticket event transcripts (the debugging record for failed runs): `<dataDir>/data/transcripts/<ticket-id>.jsonl`, default `~/.junco/data/transcripts/` (a pre-0.10 `flat`-layout root keeps `<dataDir>/transcripts/`). `junco replay <id>` re-runs a transcript through the guards under any policy (flag > recorded > config > defaults) — a what-if report, not a live rerun. `junco transcript <id>` (or `enter` on the dashboard's queue row) renders it: runs, tool calls + results, the agent's answer.
+- Per-ticket event transcripts (the debugging record for failed runs): `<dataDir>/data/transcripts/<ticket-id>.jsonl`, default `~/.junco/data/transcripts/` (a pre-0.10 `flat`-layout root keeps `<dataDir>/transcripts/`). `junco replay <id>` re-runs a transcript through the guards under any policy (flag > recorded > config > defaults) — a what-if report, not a live rerun. `junco transcript <id>` (or `enter` on the dashboard's queue row, `t` on an issue row) renders it: runs, tool calls + results, the agent's answer.
 
 ## Git & release
 
 - Branch `feat/<topic>` off `main`; conventional commits (`feat:`, `fix:`, `refactor:`, `chore:`, optional scope); suite green at every commit.
 - **No AI attribution, ever:** no `Co-Authored-By: Claude` trailers, no "Generated with Claude Code" lines. Subagent-driven commits auto-append the trailer — amend it away before finishing.
 - **Release HOLD (absolute):** never push, tag, `gh release create`, or publish without the maintainer's explicit, per-release approval — generic approval of the work does not cover release actions. Once approved, the flow is: bump `package.json` + `CHANGELOG.md` (Keep a Changelog) via PR → quality gate green → merge → annotated tag `vX.Y.Z` → `gh release create vX.Y.Z` (this triggers `.github/workflows/publish.yml` → npm publish via OIDC trusted publishing with provenance (no NPM_TOKEN)) → verify with `npm view @ironforgesoftware/junco version`. `publish.yml` checks out the TAG — a gate-blocking fix after tagging means delete release+tag, fix, re-tag, re-release (harmless while nothing reached npm).
+- **Pre-tag doc checklist** (each item is a drift the 2026-09 sweep found already shipped): diff `USAGE` in `src/cli.ts` against the README command table and the `docs/operations.md` CLI table; confirm every new `ConfigSchema` top-level key has a `docs/configuration.md` heading; add the new version to the link-reference block at the bottom of `CHANGELOG.md` and repoint `[Unreleased]` at it (`tests/docsChangelog.test.ts` pins the block to the headings and `package.json`; `tests/docsOperationsCli.test.ts` pins the operations table).
 - The npm package ships only the `files` allowlist (`dist`, `templates`, `skills`, `examples`, README/CHANGELOG/LICENSE). Everything that ships is **stack-agnostic**: no personal-setup strings in wizard text, templates, README, or the `junco-dispatch` skill; user-visible runtime text says "inference endpoint", never a specific server.
 
 ## Maintaining this file

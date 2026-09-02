@@ -584,13 +584,16 @@ export async function verifyLabelApplier(
   }
 }
 
-/** Sub-issue parent lookup (GraphQL `parent` field). Non-fatal: null on any error. */
+/** Sub-issue parent lookup (GraphQL `parent` field). Non-fatal: null on any
+ * error. Carries the parent's own coordinates (sub-issues may live in another
+ * repo) so the caller can run the body-vouching check against the right issue;
+ * a parent without them is unvettable and reads as absent. */
 async function fetchParent(
   cfg: Config,
   nwo: string,
   issueNumber: number,
   ghFn: typeof gh,
-): Promise<{ title: string; body: string | null } | null> {
+): Promise<{ nwo: string; number: number; title: string; body: string | null } | null> {
   const [owner, name] = nwo.split("/");
   try {
     const r = await ghFn(
@@ -599,7 +602,7 @@ async function fetchParent(
         "api",
         "graphql",
         "-f",
-        "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){parent{title body}}}}",
+        "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){parent{number repository{nameWithOwner} title body}}}}",
         "-f",
         `owner=${owner}`,
         "-f",
@@ -613,9 +616,20 @@ async function fetchParent(
     );
     const out = r.stdout.trim();
     if (!out || out === "null") return null;
-    const p = JSON.parse(out) as { title?: unknown; body?: unknown };
-    return typeof p.title === "string"
-      ? { title: p.title, body: typeof p.body === "string" ? p.body : null }
+    const p = JSON.parse(out) as {
+      number?: unknown;
+      repository?: { nameWithOwner?: unknown };
+      title?: unknown;
+      body?: unknown;
+    };
+    const pNwo = p.repository?.nameWithOwner;
+    return typeof p.title === "string" && typeof p.number === "number" && typeof pNwo === "string"
+      ? {
+          nwo: pNwo,
+          number: p.number,
+          title: p.title,
+          body: typeof p.body === "string" ? p.body : null,
+        }
       : null;
   } catch {
     return null; // background context only — never blocks dispatch
@@ -660,7 +674,7 @@ async function fetchIssueLastEdited(
     const ms = Date.parse(out);
     return Number.isFinite(ms) ? { verified: true, lastEditedMs: ms } : { verified: false };
   } catch (e) {
-    log.warn("github bridge: issue lastEditedAt lookup failed; skipping this sweep", {
+    log.warn("github bridge: issue lastEditedAt lookup failed", {
       nwo,
       issue: issueNumber,
       error: errMsg(e),
@@ -859,6 +873,417 @@ async function guardOrQueue(
   }
 }
 
+/** argv for one `gh issue edit` label swap. Owns the approval-cleanup
+ * invariant (#357): a swap that takes an issue OUT of `plan-ready` also
+ * strips `approved` in requireApproval mode — a lingering approval label is
+ * exactly what verifyLabelApplier would vouch a LATER plan against. Every
+ * plan-ready transition builds its argv here rather than by hand, so a new
+ * transition cannot forget the clause. Argv order is add, then remove(s). */
+export function labelSwapArgs(
+  cfg: Config,
+  nwo: string,
+  issueNumber: number,
+  swap: { add?: string; remove?: string },
+): string[] {
+  const ll = lifecycleLabels(cfg.github.triggerLabel);
+  const args = ["issue", "edit", String(issueNumber), "--repo", nwo];
+  if (swap.add !== undefined) args.push("--add-label", swap.add);
+  if (swap.remove !== undefined) args.push("--remove-label", swap.remove);
+  if (swap.remove === ll.planReady && cfg.github.requireApproval) {
+    args.push("--remove-label", ll.approved);
+  }
+  return args;
+}
+
+/** The seams processIssue reaches for, resolved once by pollGithubInbox. */
+type IssueDeps = Required<Pick<BridgeDeps, "ghFn" | "submitFn">>;
+
+/**
+ * One issue of a sweep: the plan-ready door (approval → execution ticket)
+ * first, then the trigger-label doors (denied / ask / issue-body fence /
+ * plan set / planner). Resolves true when a ticket was dispatched (the
+ * sweep's `bridged` count), false on every skip. Throws propagate to the
+ * caller's per-issue catch; the only catch here is the pre-existing
+ * approval-scan one, which contains the plan-ready door on its own.
+ */
+export async function processIssue(
+  cfg: Config,
+  repo: GithubRepoMapping,
+  issue: GhIssue,
+  state: BridgeState,
+  deps: IssueDeps,
+): Promise<boolean> {
+  const { ghFn, submitFn } = deps;
+  const trigger = cfg.github.triggerLabel;
+  const ll = lifecycleLabels(trigger);
+  const names = new Set(issue.labels.map((l) => l.name));
+  if (names.has(ll.planReady)) {
+    try {
+      // Already dispatched on a prior sweep (a lifecycle label proves the
+      // execution ticket left the gate) but the label swap that should
+      // have cleared plan-ready/approved was lost. Re-attempt ONLY that
+      // cleanup — never re-submit — and move on.
+      if ([ll.queued, ll.working, ll.done, ll.failed].some((n) => names.has(n))) {
+        await ghFn(cfg, labelSwapArgs(cfg, repo.nwo, issue.number, { remove: ll.planReady }), {
+          timeoutMs: GH_TIMEOUT,
+          retryNetwork: true,
+        });
+        log.info("github bridge: plan-ready lingering after dispatch; cleaned up labels", {
+          nwo: repo.nwo,
+          issue: issue.number,
+        });
+        return false;
+      }
+      const login = await viewerLogin(cfg, state, ghFn);
+      const comment = await findOwnPlanComment(cfg, repo.nwo, issue.number, login, ghFn);
+      if (!comment) {
+        log.warn("github bridge: plan-ready but no own-authored plan comment", {
+          nwo: repo.nwo,
+          issue: issue.number,
+        });
+        return false;
+      }
+      if (cfg.github.requireApproval) {
+        if (!names.has(ll.approved)) return false; // awaiting review
+        const approval = await verifyLabelApplier(cfg, repo.nwo, issue.number, ll.approved, ghFn);
+        if (approval.verdict !== "ok") {
+          log.warn("github bridge: approval not by a verified writer; ignoring", {
+            nwo: repo.nwo,
+            issue: issue.number,
+          });
+          return false;
+        }
+        // Fail closed on an unparseable timestamp on EITHER side: an
+        // approval only counts if it is strictly newer than BOTH the
+        // plan comment's creation AND its last edit (updated_at). The
+        // body that executes is read fresh below, so an edit AFTER the
+        // approval label must invalidate it — otherwise an injected
+        // plan would run under the stale approval.
+        if (
+          !(
+            Number.isFinite(comment.createdAtMs) &&
+            Number.isFinite(comment.updatedAtMs) &&
+            approval.atMs !== null &&
+            approval.atMs > comment.createdAtMs &&
+            approval.atMs > comment.updatedAtMs
+          )
+        ) {
+          log.warn(
+            "github bridge: approval predates the plan comment or its latest edit; re-apply it",
+            {
+              nwo: repo.nwo,
+              issue: issue.number,
+            },
+          );
+          return false;
+        }
+      }
+      // Layer 2: a junco-plan fence (multi-task set) takes precedence
+      // when the feature is on; the single-ticket junco-ticket path
+      // below is unchanged and still handles every pre-existing plan
+      // comment.
+      const setBody = cfg.planSets.enabled ? extractPlanSetBody(comment.body) : null;
+      if (setBody !== null) {
+        const dr = dispatchPlanSet(cfg, repo, issue.number, setBody, new Date().toISOString(), {
+          submitFn,
+        });
+        if (!dr.ok) {
+          const errList = dr.errors.map((e) => `- ${e}`).join("\n");
+          // Unlike the supersede failure comment (planSetBridge.ts),
+          // "edit + re-approve" is a dead end here: this branch already
+          // removed plan-ready and flips to junco:failed below, so the
+          // dispatch branch (which requires plan-ready) can never see a
+          // re-approval — and re-adding plan-ready by hand while
+          // junco:failed stands gets stripped by the lingering-label
+          // cleanup on the next sweep. Mirror the single-ticket failure
+          // comment's working gesture instead (githubReport.ts).
+          const failureComment =
+            `**Junco could not compile this plan set** — nothing was dispatched.\n\n${errList}\n\n` +
+            `_Remove the \`${ll.failed}\` label to re-plan from scratch._\n`;
+          const failId = `${repo.nwo}#${issue.number}`;
+          const failRemove = [ll.planReady, ...(cfg.github.requireApproval ? [ll.approved] : [])];
+          // Labels FIRST, then the comment — the inverse of the
+          // reporter's comment-first ordering. There, the comment is
+          // the valuable artifact worth protecting; here, flipping to
+          // junco:failed is what BOUNDS re-entry into this branch: a
+          // lost label swap would otherwise leave plan-ready+approved
+          // standing, and every subsequent sweep would re-dispatch
+          // this same compile failure and post another failure
+          // comment, unbounded. The compile errors also land in the
+          // daemon log either way, so the comment is comparatively
+          // cheap to lose to an outbox queue/warn-and-swallow.
+          await guardOrQueue(
+            cfg,
+            "plan set failure labels",
+            failId,
+            {
+              kind: "labels",
+              nwo: repo.nwo,
+              issue: issue.number,
+              add: [ll.failed],
+              remove: failRemove,
+            },
+            async () => {
+              await ghFn(
+                cfg,
+                labelSwapArgs(cfg, repo.nwo, issue.number, {
+                  add: ll.failed,
+                  remove: ll.planReady,
+                }),
+                { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+              );
+            },
+          );
+          await guardOrQueue(
+            cfg,
+            "plan set failure comment",
+            failId,
+            { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
+            () => postIssueComment(cfg, repo.nwo, issue.number, failureComment, ghFn),
+          );
+          return false;
+        }
+        // I3 (#298 review round 2): a per-child submit throw is now
+        // CONTAINED inside dispatchPlanSet/submitPlanSet rather than
+        // propagating. dispatchPlanSet ALSO seeds the record's
+        // `pendingFanout` from `stranded` (fix wave C, item 1) — THAT
+        // is the actual recovery: the next `maintainPlanSets` sweep's
+        // `drainPendingFanout` resubmits straight from the record,
+        // independent of what labels stand on this issue. Still leave
+        // `plan-ready` (and, in requireApproval mode, `approved`)
+        // standing rather than swapping to `junco:queued` here — this
+        // is belt-and-suspenders, not load-bearing: it only keeps this
+        // door itself from reporting the set as cleanly dispatched
+        // while a child hasn't actually landed yet. (A prior version
+        // of this comment claimed leaving `plan-ready` standing was
+        // BY ITSELF sufficient to guarantee a retry — it is not: the
+        // SAME sweep's `maintainPlanSets` unconditionally sets a
+        // lifecycle label on the fresh record regardless of what this
+        // branch does, so by the NEXT sweep the "already dispatched"
+        // branch above would see `plan-ready` next to a lifecycle
+        // label, strip both, and return — never re-dispatching.
+        // Before `pendingFanout` was seeded on this door, nothing else
+        // would have resubmitted the child either — it was lost for
+        // good.)
+        if (dr.stranded.length > 0) {
+          log.warn(
+            "github bridge: plan set dispatch stranded child submit(s); leaving plan-ready for retry",
+            { nwo: repo.nwo, issue: issue.number, stranded: dr.stranded },
+          );
+          return false;
+        }
+        // Same submit-before-label ordering as the single path.
+        await ghFn(
+          cfg,
+          labelSwapArgs(cfg, repo.nwo, issue.number, { add: ll.queued, remove: ll.planReady }),
+          { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+        );
+        log.info("github bridge: approved plan set dispatched", {
+          nwo: repo.nwo,
+          issue: issue.number,
+        });
+        return true;
+      }
+      const planBody = extractPlanBody(comment.body);
+      if (!planBody) {
+        log.error("github bridge: plan comment has no extractable plan; fix the comment", {
+          nwo: repo.nwo,
+          issue: issue.number,
+        });
+        return false;
+      }
+      const t = buildExecutionTicket(issue.number, repo, planBody);
+      // A prior sweep may have queued this ticket then crashed before the
+      // label swap. Detect the existing file and skip re-submit, going
+      // straight to the (idempotent) label swap.
+      if (ticketInFlight(cfg, t.id)) {
+        log.info("github bridge: execution ticket already in local queue; re-marking", {
+          id: t.id,
+        });
+      } else {
+        try {
+          submitFn(cfg, t.content, { idHint: t.id });
+        } catch (e) {
+          if (!errMsg(e).includes("already queued")) throw e;
+          log.info("github bridge: execution ticket already queued; re-marking", {
+            id: t.id,
+          });
+        }
+      }
+      await ghFn(
+        cfg,
+        labelSwapArgs(cfg, repo.nwo, issue.number, { add: ll.queued, remove: ll.planReady }),
+        { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      );
+      log.info("github bridge: approved plan dispatched for execution", {
+        nwo: repo.nwo,
+        issue: issue.number,
+        id: t.id,
+      });
+      return true;
+    } catch (e) {
+      log.warn("github bridge: approval scan failed for issue; retrying next sweep", {
+        nwo: repo.nwo,
+        issue: issue.number,
+        error: errMsg(e),
+      });
+    }
+    return false;
+  }
+  if (!isEligible(issue, trigger)) return false;
+  const verdict = await verifyLabelApplier(cfg, repo.nwo, issue.number, trigger, ghFn);
+  if (verdict.verdict === "unverified") return false; // fail-closed; retry next sweep
+  if (verdict.verdict === "denied") {
+    await ghFn(
+      cfg,
+      ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.denied],
+      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+    );
+    log.warn("github bridge: trigger label applied without write permission", {
+      nwo: repo.nwo,
+      issue: issue.number,
+    });
+    return false;
+  }
+  // The trigger label vouches the issue body AS IT WAS WHEN LABELED. A
+  // zero-permission author can edit the body between labeling and this
+  // sweep; the ask/plan dispatch below reads the CURRENT body, so an
+  // edit after the vouching label would auto-run (ask) or auto-post a
+  // plan (plan path) an un-approved instruction. Refuse if the body was
+  // edited after the label event — re-apply the trigger to re-vouch.
+  // Fail closed if we can't establish either timestamp. Mirrors the
+  // plan-comment postdate defense on the approval path above (#130).
+  const edited = await fetchIssueLastEdited(cfg, repo.nwo, issue.number, ghFn);
+  if (
+    !edited.verified ||
+    verdict.atMs === null ||
+    (edited.lastEditedMs !== null && edited.lastEditedMs > verdict.atMs)
+  ) {
+    log.warn(
+      "github bridge: issue body edited after the trigger label (or unverifiable); re-apply the label to re-vouch",
+      { nwo: repo.nwo, issue: issue.number },
+    );
+    return false;
+  }
+  const isAsk = issue.labels.some((l) => l.name === cfg.github.askLabel);
+  // junco-plan fence: a multi-task set dispatches through the plan-set
+  // compiler, mirroring the approval-comment door. Checked before the
+  // single-ticket fence, same precedence as the comment path. Gated on
+  // planSets.enabled exactly like that path — disabled, the fence is
+  // invisible and the issue falls through to the planner.
+  const fenceSet = isAsk || !cfg.planSets.enabled ? null : extractPlanSetBody(issue.body ?? "");
+  if (fenceSet !== null) {
+    const dr = dispatchPlanSet(cfg, repo, issue.number, fenceSet, new Date().toISOString());
+    if (!dr.ok) {
+      const errList = dr.errors.map((e) => `- ${e}`).join("\n");
+      const failureComment =
+        `**Junco could not compile this plan set** — nothing was dispatched.\n\n${errList}\n\n` +
+        `_Remove the \`${ll.failed}\` label and re-apply the \`${cfg.github.triggerLabel}\` label to retry._\n`;
+      const failId = `${repo.nwo}#${issue.number}`;
+      await guardOrQueue(
+        cfg,
+        "issue plan set failure labels",
+        failId,
+        {
+          kind: "labels",
+          nwo: repo.nwo,
+          issue: issue.number,
+          add: [ll.failed],
+          remove: [],
+        },
+        async () => {
+          await ghFn(
+            cfg,
+            ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.failed],
+            { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+          );
+        },
+      );
+      await guardOrQueue(
+        cfg,
+        "issue plan set failure comment",
+        failId,
+        { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
+        () => postIssueComment(cfg, repo.nwo, issue.number, failureComment, ghFn),
+      );
+      return false;
+    }
+    await ghFn(
+      cfg,
+      ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.queued],
+      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+    );
+    log.info("github bridge: issue-body plan set dispatched", {
+      nwo: repo.nwo,
+      issue: issue.number,
+    });
+    return true;
+  }
+  // Issue-as-inbox door (spec 2026-08-21): a vouched body carrying a
+  // junco-ticket fence queues verbatim — the planner is only the fence
+  // PRODUCER for issues that arrive without one. Ask wins over a fence
+  // (ask rails are prose-in, read-only). The edited-after-label guard
+  // above vouches the body this fence is read from.
+  const fenceTicket = isAsk ? null : extractPlanBody(issue.body ?? "");
+  const carriedTimeout = fenceTicket !== null ? parseTimeoutMarker(issue.body ?? "") : null;
+  let parent =
+    isAsk || fenceTicket !== null ? null : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
+  // The trigger label vouched the CHILD body; the parent is a different
+  // issue with a different author whose body also flows into the
+  // planner prompt. Apply the same edited-after-label check to it, but
+  // a failed check drops the (background-only) context rather than
+  // refusing the child — the child was vouched on its own (#342).
+  if (parent !== null) {
+    const pEdited = await fetchIssueLastEdited(cfg, parent.nwo, parent.number, ghFn);
+    if (
+      !pEdited.verified ||
+      (pEdited.lastEditedMs !== null && pEdited.lastEditedMs > verdict.atMs)
+    ) {
+      log.warn(
+        "github bridge: parent issue body edited after the trigger label (or unverifiable); dropping parent context",
+        { nwo: repo.nwo, issue: issue.number, parent: `${parent.nwo}#${parent.number}` },
+      );
+      parent = null;
+    }
+  }
+  const t = isAsk
+    ? issueToTicket(issue, repo, cfg, null)
+    : fenceTicket !== null
+      ? buildExecutionTicket(issue.number, repo, fenceTicket, {
+          timeoutMinutes: carriedTimeout,
+        })
+      : buildPlanningTicket(issue, repo, cfg, parent);
+  const stateLabel = isAsk || fenceTicket !== null ? ll.queued : ll.planning;
+  // Same in-flight guard as the execution path: a prior sweep may have
+  // submitted this ticket and then lost the label add (crash, or a
+  // non-network gh failure swallowed by the per-issue catch). Once the
+  // worker claims it into processing/, submitTicket's inbox collision
+  // no longer fires — detect the file and skip straight to the
+  // (idempotent) label marking instead of double-running the ticket.
+  if (ticketInFlight(cfg, t.id)) {
+    log.info("github bridge: ticket already in local queue; re-marking", { id: t.id });
+  } else {
+    try {
+      submitFn(cfg, t.content, { idHint: t.id });
+    } catch (e) {
+      if (!errMsg(e).includes("already queued")) throw e;
+      log.info("github bridge: ticket already queued; re-marking", { id: t.id });
+    }
+  }
+  await ghFn(
+    cfg,
+    ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", stateLabel],
+    { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+  );
+  log.info("github bridge: dispatched issue", {
+    nwo: repo.nwo,
+    issue: issue.number,
+    id: t.id,
+    kind: isAsk ? "ask" : fenceTicket !== null ? "fence" : "plan",
+  });
+  return true;
+}
+
 /**
  * One bridge sweep across all configured repos. Failures are contained at the
  * repo and issue level — the queue never depends on GitHub being up. Ordering
@@ -883,7 +1308,6 @@ export async function pollGithubInbox(
   const submitFn = deps.submitFn ?? submitTicket;
   const flushFn = deps.flushFn ?? flushOutbox;
   const trigger = cfg.github.triggerLabel;
-  const ll = lifecycleLabels(trigger);
 
   try {
     const fr = await flushFn(cfg);
@@ -919,409 +1343,7 @@ export async function pollGithubInbox(
 
       for (const issue of issues) {
         try {
-          const names = new Set(issue.labels.map((l) => l.name));
-          if (names.has(ll.planReady)) {
-            try {
-              // Already dispatched on a prior sweep (a lifecycle label proves the
-              // execution ticket left the gate) but the label swap that should
-              // have cleared plan-ready/approved was lost. Re-attempt ONLY that
-              // cleanup — never re-submit — and move on.
-              if ([ll.queued, ll.working, ll.done, ll.failed].some((n) => names.has(n))) {
-                const cleanupArgs = [
-                  "issue",
-                  "edit",
-                  String(issue.number),
-                  "--repo",
-                  repo.nwo,
-                  "--remove-label",
-                  ll.planReady,
-                ];
-                if (cfg.github.requireApproval) cleanupArgs.push("--remove-label", ll.approved);
-                await ghFn(cfg, cleanupArgs, { timeoutMs: GH_TIMEOUT, retryNetwork: true });
-                log.info("github bridge: plan-ready lingering after dispatch; cleaned up labels", {
-                  nwo: repo.nwo,
-                  issue: issue.number,
-                });
-                continue;
-              }
-              const login = await viewerLogin(cfg, state, ghFn);
-              const comment = await findOwnPlanComment(cfg, repo.nwo, issue.number, login, ghFn);
-              if (!comment) {
-                log.warn("github bridge: plan-ready but no own-authored plan comment", {
-                  nwo: repo.nwo,
-                  issue: issue.number,
-                });
-                continue;
-              }
-              if (cfg.github.requireApproval) {
-                if (!names.has(ll.approved)) continue; // awaiting review
-                const approval = await verifyLabelApplier(
-                  cfg,
-                  repo.nwo,
-                  issue.number,
-                  ll.approved,
-                  ghFn,
-                );
-                if (approval.verdict !== "ok") {
-                  log.warn("github bridge: approval not by a verified writer; ignoring", {
-                    nwo: repo.nwo,
-                    issue: issue.number,
-                  });
-                  continue;
-                }
-                // Fail closed on an unparseable timestamp on EITHER side: an
-                // approval only counts if it is strictly newer than BOTH the
-                // plan comment's creation AND its last edit (updated_at). The
-                // body that executes is read fresh below, so an edit AFTER the
-                // approval label must invalidate it — otherwise an injected
-                // plan would run under the stale approval.
-                if (
-                  !(
-                    Number.isFinite(comment.createdAtMs) &&
-                    Number.isFinite(comment.updatedAtMs) &&
-                    approval.atMs !== null &&
-                    approval.atMs > comment.createdAtMs &&
-                    approval.atMs > comment.updatedAtMs
-                  )
-                ) {
-                  log.warn(
-                    "github bridge: approval predates the plan comment or its latest edit; re-apply it",
-                    {
-                      nwo: repo.nwo,
-                      issue: issue.number,
-                    },
-                  );
-                  continue;
-                }
-              }
-              // Layer 2: a junco-plan fence (multi-task set) takes precedence
-              // when the feature is on; the single-ticket junco-ticket path
-              // below is unchanged and still handles every pre-existing plan
-              // comment.
-              const setBody = cfg.planSets.enabled ? extractPlanSetBody(comment.body) : null;
-              if (setBody !== null) {
-                const dr = dispatchPlanSet(
-                  cfg,
-                  repo,
-                  issue.number,
-                  setBody,
-                  new Date().toISOString(),
-                  { submitFn },
-                );
-                if (!dr.ok) {
-                  const errList = dr.errors.map((e) => `- ${e}`).join("\n");
-                  // Unlike the supersede failure comment (planSetBridge.ts),
-                  // "edit + re-approve" is a dead end here: this branch already
-                  // removed plan-ready and flips to junco:failed below, so the
-                  // dispatch branch (which requires plan-ready) can never see a
-                  // re-approval — and re-adding plan-ready by hand while
-                  // junco:failed stands gets stripped by the lingering-label
-                  // cleanup on the next sweep. Mirror the single-ticket failure
-                  // comment's working gesture instead (githubReport.ts).
-                  const failureComment =
-                    `**Junco could not compile this plan set** — nothing was dispatched.\n\n${errList}\n\n` +
-                    `_Remove the \`${ll.failed}\` label to re-plan from scratch._\n`;
-                  const failId = `${repo.nwo}#${issue.number}`;
-                  const failRemove = [
-                    ll.planReady,
-                    ...(cfg.github.requireApproval ? [ll.approved] : []),
-                  ];
-                  // Labels FIRST, then the comment — the inverse of the
-                  // reporter's comment-first ordering. There, the comment is
-                  // the valuable artifact worth protecting; here, flipping to
-                  // junco:failed is what BOUNDS re-entry into this branch: a
-                  // lost label swap would otherwise leave plan-ready+approved
-                  // standing, and every subsequent sweep would re-dispatch
-                  // this same compile failure and post another failure
-                  // comment, unbounded. The compile errors also land in the
-                  // daemon log either way, so the comment is comparatively
-                  // cheap to lose to an outbox queue/warn-and-swallow.
-                  await guardOrQueue(
-                    cfg,
-                    "plan set failure labels",
-                    failId,
-                    {
-                      kind: "labels",
-                      nwo: repo.nwo,
-                      issue: issue.number,
-                      add: [ll.failed],
-                      remove: failRemove,
-                    },
-                    async () => {
-                      const failArgs = [
-                        "issue",
-                        "edit",
-                        String(issue.number),
-                        "--repo",
-                        repo.nwo,
-                        "--add-label",
-                        ll.failed,
-                        "--remove-label",
-                        ll.planReady,
-                      ];
-                      if (cfg.github.requireApproval) failArgs.push("--remove-label", ll.approved);
-                      await ghFn(cfg, failArgs, { timeoutMs: GH_TIMEOUT, retryNetwork: true });
-                    },
-                  );
-                  await guardOrQueue(
-                    cfg,
-                    "plan set failure comment",
-                    failId,
-                    { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
-                    () => postIssueComment(cfg, repo.nwo, issue.number, failureComment, ghFn),
-                  );
-                  continue;
-                }
-                // I3 (#298 review round 2): a per-child submit throw is now
-                // CONTAINED inside dispatchPlanSet/submitPlanSet rather than
-                // propagating. dispatchPlanSet ALSO seeds the record's
-                // `pendingFanout` from `stranded` (fix wave C, item 1) — THAT
-                // is the actual recovery: the next `maintainPlanSets` sweep's
-                // `drainPendingFanout` resubmits straight from the record,
-                // independent of what labels stand on this issue. Still leave
-                // `plan-ready` (and, in requireApproval mode, `approved`)
-                // standing rather than swapping to `junco:queued` here — this
-                // is belt-and-suspenders, not load-bearing: it only keeps this
-                // door itself from reporting the set as cleanly dispatched
-                // while a child hasn't actually landed yet. (A prior version
-                // of this comment claimed leaving `plan-ready` standing was
-                // BY ITSELF sufficient to guarantee a retry — it is not: the
-                // SAME sweep's `maintainPlanSets` unconditionally sets a
-                // lifecycle label on the fresh record regardless of what this
-                // branch does, so by the NEXT sweep the "already dispatched"
-                // branch above would see `plan-ready` next to a lifecycle
-                // label, strip both, and `continue` — never re-dispatching.
-                // Before `pendingFanout` was seeded on this door, nothing else
-                // would have resubmitted the child either — it was lost for
-                // good.)
-                if (dr.stranded.length > 0) {
-                  log.warn(
-                    "github bridge: plan set dispatch stranded child submit(s); leaving plan-ready for retry",
-                    { nwo: repo.nwo, issue: issue.number, stranded: dr.stranded },
-                  );
-                  continue;
-                }
-                // Same submit-before-label ordering as the single path.
-                const setArgs = [
-                  "issue",
-                  "edit",
-                  String(issue.number),
-                  "--repo",
-                  repo.nwo,
-                  "--add-label",
-                  ll.queued,
-                  "--remove-label",
-                  ll.planReady,
-                ];
-                if (cfg.github.requireApproval) setArgs.push("--remove-label", ll.approved);
-                await ghFn(cfg, setArgs, { timeoutMs: GH_TIMEOUT, retryNetwork: true });
-                bridged++;
-                log.info("github bridge: approved plan set dispatched", {
-                  nwo: repo.nwo,
-                  issue: issue.number,
-                });
-                continue;
-              }
-              const planBody = extractPlanBody(comment.body);
-              if (!planBody) {
-                log.error("github bridge: plan comment has no extractable plan; fix the comment", {
-                  nwo: repo.nwo,
-                  issue: issue.number,
-                });
-                continue;
-              }
-              const t = buildExecutionTicket(issue.number, repo, planBody);
-              // A prior sweep may have queued this ticket then crashed before the
-              // label swap. Detect the existing file and skip re-submit, going
-              // straight to the (idempotent) label swap.
-              if (ticketInFlight(cfg, t.id)) {
-                log.info("github bridge: execution ticket already in local queue; re-marking", {
-                  id: t.id,
-                });
-              } else {
-                try {
-                  submitFn(cfg, t.content, { idHint: t.id });
-                } catch (e) {
-                  if (!errMsg(e).includes("already queued")) throw e;
-                  log.info("github bridge: execution ticket already queued; re-marking", {
-                    id: t.id,
-                  });
-                }
-              }
-              const editArgs = [
-                "issue",
-                "edit",
-                String(issue.number),
-                "--repo",
-                repo.nwo,
-                "--add-label",
-                ll.queued,
-                "--remove-label",
-                ll.planReady,
-              ];
-              if (cfg.github.requireApproval) editArgs.push("--remove-label", ll.approved);
-              await ghFn(cfg, editArgs, { timeoutMs: GH_TIMEOUT, retryNetwork: true });
-              bridged++;
-              log.info("github bridge: approved plan dispatched for execution", {
-                nwo: repo.nwo,
-                issue: issue.number,
-                id: t.id,
-              });
-            } catch (e) {
-              log.warn("github bridge: approval scan failed for issue; retrying next sweep", {
-                nwo: repo.nwo,
-                issue: issue.number,
-                error: errMsg(e),
-              });
-            }
-            continue;
-          }
-          if (!isEligible(issue, trigger)) continue;
-          const verdict = await verifyLabelApplier(cfg, repo.nwo, issue.number, trigger, ghFn);
-          if (verdict.verdict === "unverified") continue; // fail-closed; retry next sweep
-          if (verdict.verdict === "denied") {
-            await ghFn(
-              cfg,
-              ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.denied],
-              { timeoutMs: GH_TIMEOUT, retryNetwork: true },
-            );
-            log.warn("github bridge: trigger label applied without write permission", {
-              nwo: repo.nwo,
-              issue: issue.number,
-            });
-            continue;
-          }
-          // The trigger label vouches the issue body AS IT WAS WHEN LABELED. A
-          // zero-permission author can edit the body between labeling and this
-          // sweep; the ask/plan dispatch below reads the CURRENT body, so an
-          // edit after the vouching label would auto-run (ask) or auto-post a
-          // plan (plan path) an un-approved instruction. Refuse if the body was
-          // edited after the label event — re-apply the trigger to re-vouch.
-          // Fail closed if we can't establish either timestamp. Mirrors the
-          // plan-comment postdate defense on the approval path above (#130).
-          const edited = await fetchIssueLastEdited(cfg, repo.nwo, issue.number, ghFn);
-          if (
-            !edited.verified ||
-            verdict.atMs === null ||
-            (edited.lastEditedMs !== null && edited.lastEditedMs > verdict.atMs)
-          ) {
-            log.warn(
-              "github bridge: issue body edited after the trigger label (or unverifiable); re-apply the label to re-vouch",
-              { nwo: repo.nwo, issue: issue.number },
-            );
-            continue;
-          }
-          const isAsk = issue.labels.some((l) => l.name === cfg.github.askLabel);
-          // junco-plan fence: a multi-task set dispatches through the plan-set
-          // compiler, mirroring the approval-comment door. Checked before the
-          // single-ticket fence, same precedence as the comment path. Gated on
-          // planSets.enabled exactly like that path — disabled, the fence is
-          // invisible and the issue falls through to the planner.
-          const fenceSet =
-            isAsk || !cfg.planSets.enabled ? null : extractPlanSetBody(issue.body ?? "");
-          if (fenceSet !== null) {
-            const dr = dispatchPlanSet(cfg, repo, issue.number, fenceSet, new Date().toISOString());
-            if (!dr.ok) {
-              const errList = dr.errors.map((e) => `- ${e}`).join("\n");
-              const failureComment =
-                `**Junco could not compile this plan set** — nothing was dispatched.\n\n${errList}\n\n` +
-                `_Remove the \`${ll.failed}\` label and re-apply the \`${cfg.github.triggerLabel}\` label to retry._\n`;
-              const failId = `${repo.nwo}#${issue.number}`;
-              await guardOrQueue(
-                cfg,
-                "issue plan set failure labels",
-                failId,
-                {
-                  kind: "labels",
-                  nwo: repo.nwo,
-                  issue: issue.number,
-                  add: [ll.failed],
-                  remove: [],
-                },
-                async () => {
-                  await ghFn(
-                    cfg,
-                    [
-                      "issue",
-                      "edit",
-                      String(issue.number),
-                      "--repo",
-                      repo.nwo,
-                      "--add-label",
-                      ll.failed,
-                    ],
-                    { timeoutMs: GH_TIMEOUT, retryNetwork: true },
-                  );
-                },
-              );
-              await guardOrQueue(
-                cfg,
-                "issue plan set failure comment",
-                failId,
-                { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
-                () => postIssueComment(cfg, repo.nwo, issue.number, failureComment, ghFn),
-              );
-              continue;
-            }
-            await ghFn(
-              cfg,
-              ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.queued],
-              { timeoutMs: GH_TIMEOUT, retryNetwork: true },
-            );
-            bridged++;
-            log.info("github bridge: issue-body plan set dispatched", {
-              nwo: repo.nwo,
-              issue: issue.number,
-            });
-            continue;
-          }
-          // Issue-as-inbox door (spec 2026-08-21): a vouched body carrying a
-          // junco-ticket fence queues verbatim — the planner is only the fence
-          // PRODUCER for issues that arrive without one. Ask wins over a fence
-          // (ask rails are prose-in, read-only). The edited-after-label guard
-          // above vouches the body this fence is read from.
-          const fenceTicket = isAsk ? null : extractPlanBody(issue.body ?? "");
-          const carriedTimeout = fenceTicket !== null ? parseTimeoutMarker(issue.body ?? "") : null;
-          const parent =
-            isAsk || fenceTicket !== null
-              ? null
-              : await fetchParent(cfg, repo.nwo, issue.number, ghFn);
-          const t = isAsk
-            ? issueToTicket(issue, repo, cfg, null)
-            : fenceTicket !== null
-              ? buildExecutionTicket(issue.number, repo, fenceTicket, {
-                  timeoutMinutes: carriedTimeout,
-                })
-              : buildPlanningTicket(issue, repo, cfg, parent);
-          const stateLabel = isAsk || fenceTicket !== null ? ll.queued : ll.planning;
-          // Same in-flight guard as the execution path: a prior sweep may have
-          // submitted this ticket and then lost the label add (crash, or a
-          // non-network gh failure swallowed by the per-issue catch). Once the
-          // worker claims it into processing/, submitTicket's inbox collision
-          // no longer fires — detect the file and skip straight to the
-          // (idempotent) label marking instead of double-running the ticket.
-          if (ticketInFlight(cfg, t.id)) {
-            log.info("github bridge: ticket already in local queue; re-marking", { id: t.id });
-          } else {
-            try {
-              submitFn(cfg, t.content, { idHint: t.id });
-            } catch (e) {
-              if (!errMsg(e).includes("already queued")) throw e;
-              log.info("github bridge: ticket already queued; re-marking", { id: t.id });
-            }
-          }
-          await ghFn(
-            cfg,
-            ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", stateLabel],
-            { timeoutMs: GH_TIMEOUT, retryNetwork: true },
-          );
-          bridged++;
-          log.info("github bridge: dispatched issue", {
-            nwo: repo.nwo,
-            issue: issue.number,
-            id: t.id,
-            kind: isAsk ? "ask" : fenceTicket !== null ? "fence" : "plan",
-          });
+          if (await processIssue(cfg, repo, issue, state, { ghFn, submitFn })) bridged++;
         } catch (e) {
           log.warn("github bridge: issue skipped", {
             nwo: repo.nwo,

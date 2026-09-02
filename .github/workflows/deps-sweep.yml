@@ -1,0 +1,62 @@
+name: Deps Sweep
+
+# The cadence for the manual-update policy in .github/dependabot.yml (npm is
+# security-only there; version bumps are exact-pinned and landed by hand as
+# one chore(deps) PR through the full gate). This job deliberately does NOT
+# open that PR: a PR pushed with GITHUB_TOKEN never triggers the quality gate,
+# and the sweep has to go through it anyway. It files ONE issue per month
+# carrying the `npm outdated` table, so the reminder arrives with its evidence
+# attached; the sweep PR closes the issue.
+on:
+  schedule:
+    - cron: "0 9 1 * *" # 09:00 UTC on the 1st of every month
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  outdated:
+    name: file the monthly sweep issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # nothing here pushes; don't leave a token in .git/config
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      # `npm outdated` exits 1 whenever anything is outdated — that is the
+      # signal this job exists for, not a failure.
+      - name: collect npm outdated
+        id: outdated
+        run: |
+          npm outdated > outdated.txt || true
+          cat outdated.txt
+          if [ -s outdated.txt ]; then echo "stale=true" >> "$GITHUB_OUTPUT"; fi
+      - name: file the sweep issue
+        if: steps.outdated.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="deps: monthly patch/minor sweep $(date -u +%Y-%m)"
+          open="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq 'length')"
+          if [ "$open" != "0" ]; then
+            echo "an open sweep issue for this month already exists — nothing to do"
+            exit 0
+          fi
+          {
+            echo "Monthly reminder from \`.github/workflows/deps-sweep.yml\`: land the patch/minor"
+            echo "bumps below as one \`chore(deps)\` PR through the full gate (\`npm install"
+            echo "--save-exact <pkg>@<version>\`). Majors are tracked in their own issues, and"
+            echo "\`@types/node\` stays on the \`engines\` floor's major on purpose."
+            echo
+            echo '```'
+            cat outdated.txt
+            echo '```'
+          } > body.md
+          gh issue create --title "$title" --label dependencies --body-file body.md

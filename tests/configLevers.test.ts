@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { LEVERS, getAtPath, setAtPath, leverAtPath } from "../src/configLevers.js";
+import { LEVERS, getAtPath, setAtPath, leverAtPath, coerceLever } from "../src/configLevers.js";
 import { ConfigSchema } from "../src/config.js";
 
 // Walk a zod object schema to dotted leaf paths, capturing default + kind.
@@ -138,6 +138,21 @@ describe("botAccount levers", () => {
   });
 });
 
+describe("sandbox levers", () => {
+  it("registers sandbox.requireBackend as a live boolean lever defaulting to false (#344)", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("sandbox.requireBackend")).toMatchObject({
+      type: "boolean",
+      default: false,
+      reload: "live",
+      editable: true,
+    });
+    // The description must say what the lever buys: auto fails closed
+    // instead of degrading, so nobody reads it as a synonym for `enabled`.
+    expect(byPath.get("sandbox.requireBackend")?.description).toMatch(/fail(s)? closed/i);
+  });
+});
+
 describe("path helpers", () => {
   it("gets and sets nested dotted paths", () => {
     const obj: Record<string, unknown> = {};
@@ -212,5 +227,24 @@ describe("hosted-provider levers", () => {
     const lever = byPath.get("worker.applyFallbackToAgent");
     expect(lever?.description).toMatch(/appl/i);
     expect(lever?.description).toMatch(/verif/i);
+  });
+});
+
+describe("coerceLever", () => {
+  // tests/configCmd.test.ts reaches coerceLever only through `junco config
+  // set`, which rejects structured levers before the call and never sets a
+  // secret or overshoots a max — so these three branches had no executing
+  // test (#369).
+  it("rejects a number above the lever's max", () => {
+    const lever = leverAtPath("observability.healthPort")!;
+    expect(coerceLever(lever, "65536")).toEqual({ error: "must be <= 65535" });
+  });
+  it("passes a secret through verbatim", () => {
+    const lever = leverAtPath("model.apiKey")!;
+    expect(coerceLever(lever, "sk-live-abc")).toEqual({ value: "sk-live-abc" });
+  });
+  it("falls back to the structured refusal for a lever the caller should have rejected first", () => {
+    const lever = leverAtPath("skills.harnessDirs")!;
+    expect(coerceLever(lever, "[]")).toEqual({ error: "structured — edit config.json directly" });
   });
 });

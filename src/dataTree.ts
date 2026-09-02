@@ -404,9 +404,14 @@ export interface EnsureDataTreeDeps {
  * root. When `legacy.vaultRoot` is set, the queue dirs created are the
  * legacy ones via `queuePaths` — exactly what the daemon needs, without a
  * phantom default queue under dataDir.
+ *
+ * Every directory is created owner-only (0700, #343): the tree holds
+ * transcripts (verbatim private-repo file contents) and, by default, the
+ * config with its apiKey. mkdir never re-modes a dir that already exists —
+ * `junco doctor` is what surfaces a loose pre-existing tree.
  */
 export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void {
-  const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
+  const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true, mode: 0o700 }));
   const existsFn = deps.existsFn ?? existsSync;
   const writeFn = deps.writeFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
   const p = dataTreePaths(cfg);

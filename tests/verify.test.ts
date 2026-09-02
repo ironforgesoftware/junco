@@ -1,13 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   extractVerificationBlocks,
   runSpecVerification,
+  makeSandboxedRunBlock,
+  makeLazySandboxedRunBlock,
   MAX_VERIFICATION_BLOCKS,
   VERIFICATION_MAX_TOTAL_MS,
+  type VerifySandbox,
 } from "../src/verify.js";
+import { noneBackend, type SandboxBackend } from "../src/agent/sandbox/backend.js";
+import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 import type { Config, Ticket } from "../src/types.js";
 import { makeConfig } from "./helpers/config.js";
 
@@ -423,5 +429,269 @@ test -n "$PATH" && test -n "$HOME" && test "$LC_ALL" = "C"
     const result = await runSpecVerification(cfg, ticket, wtPath);
     expect(result.blocksPassed).toBe(1);
     expect(result.failedOutputs).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sandbox routing (#335): blocks execute whatever the agent left in the
+// worktree, so they run under the ticket's own sandbox backend + policy.
+// ---------------------------------------------------------------------------
+
+/** Synthetic policy — /sbxroot paths so canonicalization is a no-op. */
+const POLICY: SandboxPolicy = {
+  writableRoots: ["/sbxroot/wt", "/sbxroot/scratch"],
+  readDenyPaths: ["/sbxroot/home/.ssh"],
+  readDenyFiles: [],
+  readAllowPaths: [],
+  network: false,
+  scratchDir: "/sbxroot/scratch",
+  bashTimeoutMs: undefined,
+};
+
+/** A backend that records every (command, policy) it is asked to wrap and
+ *  returns a runnable argv — by default the command itself under /bin/sh so
+ *  the block really executes; `argvFor` overrides what actually runs. */
+function recordingBackend(argvFor?: (command: string) => string[]): SandboxBackend & {
+  calls: Array<{ command: string; policy: SandboxPolicy }>;
+} {
+  const calls: Array<{ command: string; policy: SandboxPolicy }> = [];
+  return {
+    name: "none",
+    calls,
+    spawnArgv(command, policy) {
+      calls.push({ command, policy });
+      return argvFor ? argvFor(command) : ["/bin/sh", "-c", command];
+    },
+    async checkAvailability() {
+      return { available: true };
+    },
+  };
+}
+
+/** A fake child process the fake spawn returns; drive it in the test. */
+function fakeProc() {
+  const proc = new EventEmitter() as any;
+  proc.pid = 4242;
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = vi.fn();
+  return proc;
+}
+
+describe("makeSandboxedRunBlock (#335)", () => {
+  it("spawns exactly the backend's argv in the worktree with a scrubbed env + TMPDIR=scratch", async () => {
+    const proc = fakeProc();
+    const spawnFn = vi.fn(() => proc) as any;
+    const backend = recordingBackend((c) => ["fake-sandbox", "--confine", "/bin/bash", "-c", c]);
+    const run = makeSandboxedRunBlock(backend, POLICY, {
+      spawnFn,
+      env: () => ({ PATH: "/usr/bin", HOME: "/h", GH_TOKEN: "leak", TMPDIR: "/host/tmp" }),
+    });
+    const p = run("npm test", "/sbxroot/wt", 5_000);
+    proc.stdout.emit("data", Buffer.from("ok\n"));
+    proc.emit("close", 0);
+    const res = await p;
+
+    expect(res).toEqual({ exitCode: 0, output: "ok\n" });
+    expect(backend.calls).toEqual([{ command: "npm test", policy: POLICY }]);
+    const [bin, args, opts] = spawnFn.mock.calls[0];
+    expect(bin).toBe("fake-sandbox");
+    expect(args).toEqual(["--confine", "/bin/bash", "-c", "npm test"]);
+    expect(opts.cwd).toBe("/sbxroot/wt");
+    expect(opts.env.GH_TOKEN).toBeUndefined();
+    expect(opts.env.PATH).toBe("/usr/bin");
+    expect(opts.env.TMPDIR).toBe("/sbxroot/scratch");
+  });
+
+  it("the none backend produces the direct argv (/bin/bash -c <block>) — unchanged behavior", async () => {
+    const proc = fakeProc();
+    const spawnFn = vi.fn(() => proc) as any;
+    const run = makeSandboxedRunBlock(noneBackend, POLICY, { spawnFn, env: () => ({}) });
+    const p = run("true", "/sbxroot/wt", 5_000);
+    proc.emit("close", 0);
+    await p;
+    const [bin, args] = spawnFn.mock.calls[0];
+    expect(bin).toBe("/bin/bash");
+    expect(args).toEqual(["-c", "true"]);
+  });
+
+  it("really executes the block under a live backend argv and captures stdout+stderr", async () => {
+    const backend = recordingBackend();
+    const run = makeSandboxedRunBlock(backend, POLICY, {
+      env: () => ({ PATH: process.env.PATH, HOME: "/h", GH_TOKEN: "leak" }),
+    });
+    const res = await run(
+      'echo "tmp=$TMPDIR gh=${GH_TOKEN:-ABSENT}"; echo err >&2; exit 3',
+      wtPath,
+      5_000,
+    );
+    expect(res.exitCode).toBe(3);
+    expect(res.output).toContain("tmp=/sbxroot/scratch");
+    expect(res.output).toContain("gh=ABSENT");
+    expect(res.output).toContain("err");
+  });
+
+  it("kills a sandboxed block that overruns its timeout and reports exitCode -1", async () => {
+    // `sleep; true` forces the shell to FORK sleep (no exec-optimization), so
+    // the block's process tree — not just the shell — must be reaped: an
+    // orphaned sleep holds the stdio pipes and `close` would only fire when it
+    // exits on its own. dash (/bin/sh on Debian/Ubuntu) forks even a lone
+    // command, which is how CI caught this on Linux while macOS passed.
+    const run = makeSandboxedRunBlock(recordingBackend(), POLICY);
+    const res = await run("sleep 10; true", wtPath, 100);
+    expect(res.exitCode).toBe(-1);
+    expect(res.output).toContain("timed out");
+  });
+
+  it("spawns detached and reaps the whole process GROUP at the deadline (mirrors bashOps)", async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = fakeProc();
+      const spawnFn = vi.fn(() => proc) as any;
+      const kills: Array<[number, string]> = [];
+      const run = makeSandboxedRunBlock(recordingBackend(), POLICY, {
+        spawnFn,
+        env: () => ({}),
+        killFn: (pid, sig) => kills.push([pid, sig]),
+      });
+      const p = run("sleep 10", "/sbxroot/wt", 2_000);
+      expect(spawnFn.mock.calls[0][2].detached).toBe(true);
+      vi.advanceTimersByTime(1_999);
+      expect(kills).toEqual([]);
+      vi.advanceTimersByTime(2);
+      expect(kills).toEqual([[-4242, "SIGKILL"]]); // negative pid = the group
+      proc.emit("close", null);
+      const res = await p;
+      expect(res.exitCode).toBe(-1);
+      expect(res.output).toContain("timed out after 2s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("makeLazySandboxedRunBlock (#335)", () => {
+  it("resolves the sandbox on the first block — never at construction — and once across blocks", async () => {
+    const backend = recordingBackend();
+    const resolve = vi.fn(async () => ({ backend, policy: POLICY }));
+    const run = makeLazySandboxedRunBlock(resolve);
+    expect(resolve).not.toHaveBeenCalled();
+    await run("true", wtPath, 5_000);
+    await run("false", wtPath, 5_000);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(backend.calls.map((c) => c.command)).toEqual(["true", "false"]);
+    for (const c of backend.calls) expect(c.policy).toBe(POLICY);
+  });
+
+  it("a disabled sandbox (resolver → null) falls back to the direct /bin/bash -c spawn", async () => {
+    writeFileSync(join(wtPath, "sentinel.txt"), "ok");
+    const run = makeLazySandboxedRunBlock(async () => null);
+    // `[[` is bash-only: a pass proves the block ran under bash, in the worktree.
+    const res = await run("[[ -f sentinel.txt ]]", wtPath, 5_000);
+    expect(res).toEqual({ exitCode: 0, output: "" });
+  });
+
+  it("a resolver rejection is memoized and rejects every block — nothing spawns", async () => {
+    const spawnFn = vi.fn() as any;
+    const resolve = vi.fn(async (): Promise<VerifySandbox | null> => {
+      throw new Error('sandbox backend "bwrap" unavailable');
+    });
+    const run = makeLazySandboxedRunBlock(resolve, { spawnFn });
+    await expect(run("true", wtPath, 5_000)).rejects.toThrow('sandbox backend "bwrap" unavailable');
+    await expect(run("true", wtPath, 5_000)).rejects.toThrow('sandbox backend "bwrap" unavailable');
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("runSpecVerification — sandbox routing (#335)", () => {
+  /** What prFlow threads through `runBlockFn` while verify.sandboxed is on. */
+  const sandboxedDeps = (resolve: () => Promise<VerifySandbox | null>) => ({
+    runBlockFn: makeLazySandboxedRunBlock(resolve),
+  });
+
+  it("routes every block through backend.spawnArgv with the ticket policy", async () => {
+    const cfg = makeCfg();
+    const backend = recordingBackend();
+    const ticket = makeTicket(`
+## Verification
+\`\`\`bash
+true
+\`\`\`
+
+\`\`\`bash
+false
+\`\`\`
+`);
+    const result = await runSpecVerification(
+      cfg,
+      ticket,
+      wtPath,
+      sandboxedDeps(async () => ({ backend, policy: POLICY })),
+    );
+    expect(backend.calls.map((c) => c.command)).toEqual(["true", "false"]);
+    for (const c of backend.calls) expect(c.policy).toBe(POLICY);
+    expect(result.blocksRun).toBe(2);
+    expect(result.blocksPassed).toBe(1);
+    expect(result.failedOutputs).toHaveLength(1);
+  });
+
+  it("the backend's argv is what runs — a confining backend decides the block's fate", async () => {
+    const cfg = makeCfg();
+    // A backend that refuses the block outright (what a deny-all profile does).
+    const backend = recordingBackend(() => ["/bin/sh", "-c", "echo denied >&2; exit 77"]);
+    const result = await runSpecVerification(
+      cfg,
+      makeTicketWithBlocks(1),
+      wtPath,
+      sandboxedDeps(async () => ({ backend, policy: POLICY })),
+    );
+    expect(result.blocksPassed).toBe(0);
+    expect(result.failedOutputs).toEqual([
+      { preview: "true", exitCode: 77, output: expect.stringContaining("denied") },
+    ]);
+  });
+
+  it("resolves the sandbox lazily — never for a block-less ticket or with verify disabled", async () => {
+    const resolve = vi.fn(async () => ({ backend: recordingBackend(), policy: POLICY }));
+    await runSpecVerification(makeCfg(), makeTicket("# no blocks"), wtPath, sandboxedDeps(resolve));
+    await runSpecVerification(
+      makeCfg({ verifyEnabled: false }),
+      makeTicketWithBlocks(1),
+      wtPath,
+      sandboxedDeps(resolve),
+    );
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("resolves the sandbox once per ticket — a re-verification reuses the same runner", async () => {
+    const backend = recordingBackend();
+    const resolve = vi.fn(async () => ({ backend, policy: POLICY }));
+    const deps = sandboxedDeps(resolve);
+    await runSpecVerification(makeCfg(), makeTicketWithBlocks(2), wtPath, deps);
+    await runSpecVerification(makeCfg(), makeTicketWithBlocks(1), wtPath, deps);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(backend.calls).toHaveLength(3);
+  });
+
+  it("fails closed when the sandbox cannot be resolved: nothing spawns, every block is a harness failure", async () => {
+    const cfg = makeCfg();
+    const result = await runSpecVerification(
+      cfg,
+      makeTicketWithBlocks(2),
+      wtPath,
+      sandboxedDeps(async () => {
+        throw new Error('sandbox backend "bwrap" unavailable');
+      }),
+    );
+    expect(result.blocksRun).toBe(2);
+    expect(result.blocksPassed).toBe(0);
+    expect(result.skippedReason).toBeNull();
+    expect(result.failedOutputs).toHaveLength(2);
+    for (const f of result.failedOutputs) {
+      expect(f.exitCode).toBe(-2);
+      expect(f.output).toContain("verification harness error");
+      expect(f.output).toContain('sandbox backend "bwrap" unavailable');
+    }
   });
 });

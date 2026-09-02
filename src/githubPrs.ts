@@ -14,7 +14,7 @@ import { reduceChecks, ticketSlugFromBranch, type DashPr } from "./tui/prState.j
 /** `gh pr list --json` field list — the exact fields `DashPr` (+ `reduceChecks`)
  * are derived from. Exported so ghClient's tests (and any future caller) can
  * assert against the same constant instead of a hand-copied string. */
-export const PR_LIST_JSON_FIELDS = [
+const PR_LIST_JSON_FIELDS = [
   "number",
   "title",
   "url",

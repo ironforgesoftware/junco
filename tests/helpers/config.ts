@@ -104,8 +104,10 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
+    secretScanEnabled: true,
     verifyCommandTimeout: 60,
     verifyBlockOnFail: false,
+    verifySandboxed: true,
     criticMaxRetries: 1,
     criticThinking: "minimal",
     planLintBlockOnError: false,
@@ -133,6 +135,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     sandbox: {
       enabled: false,
       backend: "auto",
+      requireBackend: false,
       network: "deny",
       extraDenyRead: [],
       extraAllowWrite: [],

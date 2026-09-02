@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { makeSandboxedBashOperations } from "../src/agent/sandbox/bashOps.js";
 import { noneBackend, seatbeltBackend } from "../src/agent/sandbox/backend.js";
@@ -25,6 +25,10 @@ function fakeProc() {
 }
 
 describe("makeSandboxedBashOperations", () => {
+  // Restore in a hook, not as each test's last statement: a mid-test failure
+  // must not leak fake timers into the tests that follow it.
+  afterEach(() => vi.useRealTimers());
+
   it("spawns the backend argv, scrubs env, redirects TMPDIR to scratch", async () => {
     const proc = fakeProc();
     const spawnFn = vi.fn(() => proc) as any;
@@ -75,7 +79,6 @@ describe("makeSandboxedBashOperations", () => {
     expect(kills).toContainEqual([-4242, "SIGKILL"]); // negative pid = the group
     proc.emit("close", null);
     await expect(p).rejects.toThrow("timeout:2");
-    vi.useRealTimers();
   });
 
   it("applies the policy's default ceiling when the agent passes no timeout", async () => {
@@ -95,7 +98,6 @@ describe("makeSandboxedBashOperations", () => {
     expect(kills).toContainEqual([-4242, "SIGKILL"]);
     proc.emit("close", null);
     await expect(p).rejects.toThrow("timeout:3");
-    vi.useRealTimers();
   });
 
   it("the agent's explicit timeout overrides the default ceiling in both directions", async () => {
@@ -117,7 +119,6 @@ describe("makeSandboxedBashOperations", () => {
     expect(kills).toContainEqual([-4242, "SIGKILL"]);
     proc.emit("close", null);
     await expect(p).rejects.toThrow("timeout:5");
-    vi.useRealTimers();
   });
 
   it("a non-positive or non-finite explicit timeout counts as absent — the default ceiling still applies", async () => {
@@ -139,7 +140,6 @@ describe("makeSandboxedBashOperations", () => {
       proc.emit("close", null);
       await expect(p).rejects.toThrow("timeout:3");
     }
-    vi.useRealTimers();
   });
 
   it("a sub-second ceiling reports at least 1 second", async () => {
@@ -157,7 +157,6 @@ describe("makeSandboxedBashOperations", () => {
     vi.advanceTimersByTime(401);
     proc.emit("close", null);
     await expect(p).rejects.toThrow("timeout:1");
-    vi.useRealTimers();
   });
 
   it("clamps an over-2^31-1 ms limit instead of letting Node fire it after 1 ms", async () => {
@@ -175,7 +174,6 @@ describe("makeSandboxedBashOperations", () => {
     expect(kills).toContainEqual([-4242, "SIGKILL"]);
     proc.emit("close", null);
     await expect(p).rejects.toThrow("timeout:2147484");
-    vi.useRealTimers();
   });
 
   it("reports 'aborted' when the session aborts after the timer already fired", async () => {
@@ -195,7 +193,6 @@ describe("makeSandboxedBashOperations", () => {
     ac.abort();
     proc.emit("close", null);
     await expect(p).rejects.toThrow("aborted");
-    vi.useRealTimers();
   });
 
   it("settles on exit + grace when a reaped child's pipes never close (escaped descendant)", async () => {
@@ -214,7 +211,6 @@ describe("makeSandboxedBashOperations", () => {
     proc.emit("exit", null); // …but no `close` ever arrives
     vi.advanceTimersByTime(101);
     await expect(p).rejects.toThrow("timeout:1");
-    vi.useRealTimers();
   });
 
   it("a normal exit without close does not settle early (only a reaped child takes the grace path)", async () => {
@@ -230,7 +226,6 @@ describe("makeSandboxedBashOperations", () => {
     proc.emit("close", 0);
     await p;
     expect(settled).toBe(true);
-    vi.useRealTimers();
   });
 
   it("no ceiling at all when the policy has none and the agent passes no timeout", async () => {
@@ -250,7 +245,6 @@ describe("makeSandboxedBashOperations", () => {
     expect(kills.filter(([pid]) => pid === -4242)).toEqual([]);
     proc.emit("close", 0);
     await expect(p).resolves.toEqual({ exitCode: 0 });
-    vi.useRealTimers();
   });
 
   it("kills the process group on abort and rejects with 'aborted' (Pi renders 'Command aborted')", async () => {

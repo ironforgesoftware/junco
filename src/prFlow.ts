@@ -37,10 +37,23 @@ import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./re
 import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import type { SpendLedger } from "./spendLedger.js";
-import { runSpecVerification, type VerificationResult } from "./verify.js";
+import {
+  runSpecVerification,
+  makeLazySandboxedRunBlock,
+  type VerificationResult,
+  type VerifyDeps,
+} from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
+import { scanPendingPush, formatSecretFindings, type SecretScanDeps } from "./secretScan.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
-import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
+import {
+  runAgent,
+  makePiSessionFactory,
+  resolveSandbox,
+  type AgentSessionLike,
+  type ResolvedSandbox,
+  type SessionOverrides,
+} from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
 import { finalizePr, computePrStatus, type TerminalDirs } from "./finalize.js";
 import { enqueueOp, isOffline } from "./githubOutbox.js";
@@ -432,6 +445,16 @@ export interface PrFlowDeps {
   ) => () => Promise<AgentSessionLike>;
   /** Inject the critic session factory (tests control the PASS/MISSING verdict). */
   criticSessionFactory?: () => Promise<AgentSessionLike>;
+  /** Inject the sandbox resolver the `## Verification` blocks run under (#335;
+   * tests pass a fake backend that records the argv/policy it received).
+   * Defaults to agent/session.ts's resolveSandbox — the agent's own. */
+  resolveSandbox?: (
+    cfg: Config,
+    cwd: string,
+    overrides: SessionOverrides,
+  ) => Promise<ResolvedSandbox | null>;
+  /** Pre-push secret-scan seams (#337); tests inject the diff provider. */
+  secretScan?: SecretScanDeps;
   /** Terminal dirs override (tests). Defaults to queuePaths(cfg). */
   dirs?: TerminalDirs;
   /** Operator force-stop signal — soft-aborts the worker + corrective sessions
@@ -578,6 +601,22 @@ export async function runPrFlow(
     (deps.sessionFactoryFor ?? makePiSessionFactory)(flowCfg, wtPath, {
       network: task.network ?? undefined,
     });
+  // #335: the ticket's `## Verification` blocks execute whatever the session
+  // left in the worktree, so they run under the SAME backend + policy as the
+  // agent's own bash — resolved for this worktree (the session's policy never
+  // leaves the session factory) with the same per-ticket network opt-in. The
+  // runner resolves lazily and once (makeLazySandboxedRunBlock): Phase 9 may
+  // re-verify after an escalation rung, and the answer does not change. Lever
+  // off → verify.ts's direct spawn, exactly as before.
+  const verifyDeps: VerifyDeps = cfg.verifySandboxed
+    ? {
+        runBlockFn: makeLazySandboxedRunBlock(() =>
+          (deps.resolveSandbox ?? resolveSandbox)(cfg, wtPath, {
+            network: task.network ?? undefined,
+          }),
+        ),
+      }
+    : {};
   const patchSeries = parsePatchSeries(task.body);
   // final-review B1: an apply ticket can never amend an existing PR. Amend
   // mode's Phase 12 branch (below) only refreshes the PR URL — it never calls
@@ -611,14 +650,18 @@ export async function runPrFlow(
     });
     const outcome = await applyPatchSeries(cfg, wtPath, task.id, patchSeries);
     if (outcome.ok) {
-      result = outcome.result;
+      result = outcome.value;
       // Stage 4a: a clean apply — may still be overwritten below to
       // "apply_fallback" if Phase 9's verification escalation fires.
       prOutcome.mode = "apply";
-    } else if (!cfg.applyFallbackToAgent) {
+    } else if (outcome.refused || !cfg.applyFallbackToAgent) {
       // Terminal by design — see applyPatch.ts's header: a conflict is
       // deterministic, so Phase 5's transient classifier must never see it.
-      const phaseError = `apply failed: ${outcome.reason}`;
+      // A REFUSED series (#338: out-of-repo path or binary hunk, caught
+      // before `git am`) is terminal regardless of the fallback toggle:
+      // nothing was tried, and buildApplyFallbackPrompt would hand the
+      // agent an out-of-repo write as the reviewed intent to implement.
+      const phaseError = `apply failed: ${outcome.error}`;
       prOutcome.worktreePreserved = true;
       log.warn(phaseError);
       const r = emptyRunResult(phaseError);
@@ -637,14 +680,14 @@ export async function runPrFlow(
       // (Phase 9) and buildPrBody's disclosure banner (the PR is no longer
       // byte-identical to what a human approved on the GitHub route).
       log.warn(
-        `apply failed: ${outcome.reason} — falling back to the agent ` +
+        `apply failed: ${outcome.error} — falling back to the agent ` +
           "(worker.applyFallbackToAgent)",
       );
-      prOutcome.applyFallback = { kind: "apply", reason: outcome.reason };
+      prOutcome.applyFallback = { kind: "apply", reason: outcome.error };
       prOutcome.mode = "apply_fallback";
       const fallbackPrompt = buildApplyFallbackPrompt(task, patchSeries, {
         kind: "apply",
-        detail: outcome.reason,
+        detail: outcome.error,
       });
       result = await runEnveloped(
         flowCfg,
@@ -1018,7 +1061,7 @@ export async function runPrFlow(
       };
     }
     if (!skipPostSessionReview) {
-      prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+      prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
       if (prOutcome.verification.skippedReason) {
         log.info(`spec verification: skipped (${prOutcome.verification.skippedReason})`);
       } else {
@@ -1100,7 +1143,7 @@ export async function runPrFlow(
         // re-evaluation below) and re-run verification exactly once.
         newCommits = await countNewCommits(cfg, wtPath, sinceRef);
         prOutcome.commits = await listNewCommits(cfg, wtPath, sinceRef);
-        prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+        prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
         log.info(
           `spec verification (post-fallback): ${prOutcome.verification.blocksPassed}/${prOutcome.verification.blocksRun} checks passed`,
         );
@@ -1163,7 +1206,7 @@ export async function runPrFlow(
           log.info(
             `critic (post-retry): ${criticAfter.status}${criticAfter.findings ? ` (${criticAfter.findings.slice(0, 120)})` : ""}`,
           );
-          prOutcome.verification = await runSpecVerification(cfg, task, wtPath);
+          prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
         }
       }
     }
@@ -1187,6 +1230,25 @@ export async function runPrFlow(
         finalResult,
         phaseError,
       );
+    }
+
+    // Phase 10b: pre-push secret scan (#337). The push leaves the host under
+    // junco's own credential, so `sandbox.network: deny` never sees it — this
+    // is the choke point that does. Findings name path:line only; the matched
+    // text is never logged, stored, or written to the ticket record.
+    if (cfg.secretScanEnabled) {
+      const findings = await scanPendingPush(cfg, wtPath, sinceRef, deps.secretScan);
+      if (findings.length > 0) {
+        const phaseError = `secret scan blocked push: ${formatSecretFindings(findings)}`;
+        log.warn(`${phaseError} — preserving worktree, skipping push/PR`);
+        prOutcome.worktreePreserved = true;
+        return flowResult(
+          finalizePr(claimedPath, finalResult, prOutcome, { dirs, phaseError }),
+          prOutcome,
+          finalResult,
+          phaseError,
+        );
+      }
     }
 
     // Phase 11: push (to ctx.pushRemote — the ticket's fork in fork-PR mode).

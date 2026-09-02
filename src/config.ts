@@ -55,7 +55,7 @@ export function juncoHome(env: Record<string, string | undefined> = process.env)
 /** Schema default for `botAccount.configDir` — the one spelling every other
  * reference (the zod default below, `resolveBotGhConfigDir`'s own default)
  * derives from, so they can't drift apart. */
-export const DEFAULT_BOT_GH_CONFIG_DIR = "~/.junco/gh";
+const DEFAULT_BOT_GH_CONFIG_DIR = "~/.junco/gh";
 
 /**
  * Resolve the bot account's isolated gh config dir from the raw (possibly
@@ -424,6 +424,10 @@ export const ConfigSchema = z.object({
     .object({
       draftByDefault: z.boolean().default(true),
       defaultLabels: z.array(z.string()).default([]),
+      // #337: scan the diff junco is about to push for high-confidence secret
+      // shapes. The sandbox's network rule governs the AGENT's tool calls, not
+      // junco's own push — this is the choke point that sees it. On by default.
+      secretScan: z.boolean().default(true),
     })
     .default({}),
   verify: z
@@ -431,15 +435,23 @@ export const ConfigSchema = z.object({
       enabled: z.boolean().default(true),
       commandTimeout: z.number().min(1).default(60),
       blockOnFail: z.boolean().default(false),
+      // #335: verification bash runs the agent's own artifacts, so it is
+      // confined like the agent's bash. Opt out only for a suite that must
+      // leave the sandbox (verification then runs the repo's code unconfined).
+      sandboxed: z.boolean().default(true),
     })
     .default({}),
   sandbox: z
     .object({
       // On by default: agent tool execution is confined unless explicitly
-      // disabled. Fails closed if the OS backend is unavailable (junco doctor
-      // preflights it) — set enabled:false or backend:"none" to opt out.
+      // disabled. An explicit backend fails closed if unavailable (junco doctor
+      // preflights it); "auto" degrades to none unless requireBackend is set.
+      // Set enabled:false or backend:"none" to opt out.
       enabled: z.boolean().default(true),
       backend: z.enum(["auto", "seatbelt", "bwrap", "none"]).default("auto"),
+      // #344: demand the OS guarantee under "auto" — a failed probe fails the
+      // ticket closed (and doctor ✗) instead of degrading to none.
+      requireBackend: z.boolean().default(false),
       network: z.enum(["deny", "allow"]).default("deny"),
       extraDenyRead: z.array(z.string()).default([]),
       extraAllowWrite: z.array(z.string()).default([]),
@@ -735,9 +747,11 @@ export function assembleConfig(
     allowedRepoRoots: d.git.allowedRepoRoots.map(expandHome),
     draftByDefault: d.pr.draftByDefault,
     defaultLabels: d.pr.defaultLabels,
+    secretScanEnabled: d.pr.secretScan,
     verifyEnabled: d.verify.enabled,
     verifyCommandTimeout: d.verify.commandTimeout,
     verifyBlockOnFail: d.verify.blockOnFail,
+    verifySandboxed: d.verify.sandboxed,
     criticEnabled: d.critic.enabled,
     criticMaxRetries: d.critic.maxRetries,
     criticThinking: d.critic.thinking,
@@ -774,6 +788,7 @@ export function assembleConfig(
     sandbox: {
       enabled: d.sandbox.enabled,
       backend: d.sandbox.backend,
+      requireBackend: d.sandbox.requireBackend,
       network: d.sandbox.network,
       extraDenyRead: d.sandbox.extraDenyRead.map(expandHome),
       extraAllowWrite: d.sandbox.extraAllowWrite.map(expandHome),
@@ -799,9 +814,10 @@ export function loadConfig(
 }
 
 /** Validate a raw (parsed-JSON) config object against `ConfigSchema`, throwing
- * a zod error on failure. Used by `junco config set` (src/configCmd.ts) to
- * confirm a sparse mutation still produces a valid, defaultable config before
- * it's written to disk. */
+ * a zod error on failure. Used by every config.json writer via
+ * `writeConfigFile`/`updateConfigFile` (src/configWrite.ts) to confirm a
+ * sparse mutation still produces a valid, defaultable config before it's
+ * written to disk. */
 export function validateConfigObject(obj: unknown): void {
   ConfigSchema.parse(obj);
 }

@@ -13,6 +13,7 @@ import {
   openRotatingLogSink,
   openAppendLogSink,
 } from "../src/logging.js";
+import { until } from "./helpers/until.js";
 
 function capture(fn: () => void): any[] {
   const lines: any[] = [];
@@ -174,15 +175,6 @@ describe("log sink + human format", () => {
 // ---------------------------------------------------------------------------
 // openRotatingLogSink (#42) — mid-run rotation, not just at startup
 // ---------------------------------------------------------------------------
-
-/** Stream flushes are async — loop-until-condition with a bounded retry. */
-async function until(cond: () => boolean, ms = 3000): Promise<void> {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) throw new Error("condition not met in time");
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
 
 describe("openRotatingLogSink", () => {
   let dir: string;

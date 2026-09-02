@@ -3,12 +3,12 @@ import React, { useRef } from "react";
 import { render } from "ink-testing-library";
 import { Text } from "ink";
 import { useTranscript, type TranscriptApi } from "../src/tui/hooks/useTranscript.js";
-import type { DashboardClient, Result, TranscriptRead } from "../src/tui/ghClient.js";
+import type { DashboardClient, TranscriptRead } from "../src/tui/ghClient.js";
+import type { Result } from "../src/types.js";
 import { summarizeTranscript } from "../src/transcriptSummary.js";
 import { runEnd, runStart, toolStartId, turnEndFull } from "./helpers/transcriptFixtures.js";
-import { until } from "./helpers/until.js";
+import { until, wait } from "./helpers/until.js";
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
 
 const DONE = summarizeTranscript([

@@ -30,6 +30,7 @@ function cfgWith(sandbox: Partial<Config["sandbox"]>): Config {
     sandbox: {
       enabled: true,
       backend: "none",
+      requireBackend: false,
       network: "deny",
       extraDenyRead: [],
       extraAllowWrite: [],
@@ -175,6 +176,38 @@ describe("resolveSandbox", () => {
     expect(r?.policy.writableRoots).toEqual(["/sbxroot/work", "/sbxroot/scratch"]);
   });
 
+  // #346: the read-only flows (Q&A, audit, investigate) hand resolveSandbox the
+  // operator's LIVE checkout as cwd. It must come out with scratch as the only
+  // writable root, and the git-metadata lookup — which mkdir's a missing
+  // logs/ under the owning repo's .git — must not run at all.
+  it("readOnly: scratch is the only writable root and the checkout's git metadata is never looked up or created (#346)", async () => {
+    const cwd = "/sbxroot/home/x/dev/repo";
+    const gitDirs = vi.fn(async () => ({
+      gitDir: "/sbxroot/home/x/dev/repo.git/worktrees/repo",
+      commonDir: "/sbxroot/home/x/dev/repo.git",
+    }));
+    const ensureDir = vi.fn();
+    const r = await resolveSandbox(
+      cfgWith({ backend: "none" }),
+      cwd,
+      { readOnly: true },
+      {
+        ...okDeps,
+        gitDirs,
+        pathExists: () => false,
+        ensureDir,
+      },
+    );
+    const policy = r?.policy;
+    if (!policy) throw new Error("expected a sandbox policy");
+    expect(policy.writableRoots).toEqual(["/sbxroot/scratch"]);
+    expect(gitDirs).not.toHaveBeenCalled();
+    expect(ensureDir).not.toHaveBeenCalled();
+    expect(() => assertWriteAllowed(`${cwd}/.git/HEAD`, cwd, policy)).toThrow();
+    expect(() => assertWriteAllowed("src/a.ts", cwd, policy)).toThrow();
+    expect(resolveRead(`${cwd}/src/a.ts`, readRules(policy))).toBe("allow");
+  });
+
   it("per-ticket network override widens egress", async () => {
     const r = await resolveSandbox(cfgWith({}), "/work", { network: true }, okDeps);
     expect(r?.policy.network).toBe(true);
@@ -265,5 +298,79 @@ describe("resolveSandbox", () => {
       probe: async () => ({ code: 127 }),
     });
     expect(r?.backend.name).toBe("none");
+  });
+
+  // #344: the auto degrade above is a fail-open — on a Linux host without
+  // bubblewrap the DEFAULT config runs agent bash with no OS confinement while
+  // `junco status` looks healthy. sandbox.requireBackend demands the guarantee
+  // under auto without pinning bwrap vs seatbelt per host.
+  describe("sandbox.requireBackend (#344)", () => {
+    it("backend=auto fails closed (no degrade to none) when the OS backend is unavailable", async () => {
+      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        await expect(
+          resolveSandbox(
+            cfgWith({ backend: "auto", requireBackend: true }),
+            "/sbxroot/work",
+            undefined,
+            {
+              ...okDeps,
+              platform: "linux", // auto → bwrap
+              probe: async () => ({ code: 127 }), // bwrap unavailable
+            },
+          ),
+        ).rejects.toBeInstanceOf(SandboxUnavailableError);
+        // Refused outright — never the degrade warning's "still applies" reassurance.
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("the refusal names the lever that demanded it and the probe's own reason", async () => {
+      const err = await resolveSandbox(
+        cfgWith({ backend: "auto", requireBackend: true }),
+        "/sbxroot/work",
+        undefined,
+        {
+          ...okDeps,
+          platform: "linux",
+          probe: async () => ({
+            code: 1,
+            stderr: "bwrap: Creating new namespace failed: Operation not permitted",
+          }),
+        },
+      ).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(SandboxUnavailableError);
+      const msg = (err as Error).message;
+      expect(msg).toMatch(/Creating new namespace failed: Operation not permitted/);
+      expect(msg).toMatch(/sandbox\.requireBackend/);
+      // The opt-out it names is the lever itself, not disabling the sandbox
+      // wholesale — that would give up the env scrub + fs jail too.
+      expect(msg).toMatch(/requireBackend=false/);
+    });
+
+    it("is inert when the auto-selected backend is available", async () => {
+      const r = await resolveSandbox(
+        cfgWith({ backend: "auto", requireBackend: true }),
+        "/sbxroot/work",
+        undefined,
+        { ...okDeps, platform: "linux" }, // probe exits 0 → bwrap available
+      );
+      expect(r?.backend.name).toBe("bwrap");
+    });
+
+    it("is inert under backend=none (no OS isolation by design)", async () => {
+      const r = await resolveSandbox(
+        cfgWith({ backend: "none", requireBackend: true }),
+        "/sbxroot/work",
+        undefined,
+        { ...okDeps, probe: async () => ({ code: 127 }) },
+      );
+      expect(r?.backend.name).toBe("none");
+    });
   });
 });

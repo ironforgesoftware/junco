@@ -226,7 +226,10 @@ export async function prepareWorktree(
       // Amend mode: fetch the feature branch from the push remote (the
       // operator's own fork when ctx.pushRemote !== "origin"), then add
       // worktree on it.
-      await git(cfg, ["fetch", ctx.pushRemote, ctx.branchName], {
+      // Every git call below terminates its options with `--` (issue #347): a
+      // ref that ever slipped past isSafeGitRef with a leading dash is then
+      // read as a ref/path, never a flag.
+      await git(cfg, ["fetch", ctx.pushRemote, "--", ctx.branchName], {
         cwd: ctx.repo,
         timeoutMs: 180_000,
         retryNetwork: true,
@@ -236,14 +239,18 @@ export async function prepareWorktree(
       // Force-reset the local branch pointer to the push remote's tip
       // (check:false — harmless if branch doesn't exist yet; worktree add -B
       // covers it).
-      await git(cfg, ["branch", "-f", ctx.branchName, `${ctx.pushRemote}/${ctx.branchName}`], {
-        cwd: ctx.repo,
-        timeoutMs: 60_000,
-        check: false,
-      });
+      await git(
+        cfg,
+        ["branch", "-f", "--", ctx.branchName, `${ctx.pushRemote}/${ctx.branchName}`],
+        {
+          cwd: ctx.repo,
+          timeoutMs: 60_000,
+          check: false,
+        },
+      );
 
       try {
-        await git(cfg, ["worktree", "add", wtPath, ctx.branchName], {
+        await git(cfg, ["worktree", "add", "--", wtPath, ctx.branchName], {
           cwd: ctx.repo,
           timeoutMs: 120_000,
         });
@@ -261,6 +268,7 @@ export async function prepareWorktree(
               "add",
               "-B",
               ctx.branchName,
+              "--",
               wtPath,
               `${ctx.pushRemote}/${ctx.branchName}`,
             ],
@@ -281,7 +289,7 @@ export async function prepareWorktree(
     // cut from whatever `origin/<base>` we already have locally, and the caller
     // is told the base may be stale (see signals.staleBase).
     try {
-      await git(cfg, ["fetch", "origin", ctx.baseBranch], {
+      await git(cfg, ["fetch", "origin", "--", ctx.baseBranch], {
         cwd: ctx.repo,
         timeoutMs: 180_000,
         retryNetwork: true,
@@ -299,7 +307,7 @@ export async function prepareWorktree(
     try {
       await git(
         cfg,
-        ["worktree", "add", "-b", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`],
+        ["worktree", "add", "-b", ctx.branchName, "--", wtPath, `origin/${ctx.baseBranch}`],
         {
           cwd: ctx.repo,
           timeoutMs: 120_000,
@@ -314,7 +322,7 @@ export async function prepareWorktree(
         // Mirrors the amend path's -B recovery above.
         await git(
           cfg,
-          ["worktree", "add", "-B", ctx.branchName, wtPath, `origin/${ctx.baseBranch}`],
+          ["worktree", "add", "-B", ctx.branchName, "--", wtPath, `origin/${ctx.baseBranch}`],
           { cwd: ctx.repo, timeoutMs: 120_000 },
         );
       } else {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdtempSync, chmodSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runConfigCommand } from "../src/configCmd.js";
@@ -13,13 +13,14 @@ function fixture(obj: unknown): string {
   return p;
 }
 
-/** Minimal Config literal for `config init` tests — queue paths under /tmp/q. */
-function makeFakeConfig(): Config {
+/** Minimal Config literal for `config init` tests — queue paths under `root`
+ * (default /tmp/q; tests with fake mkdir/write seams never touch it). */
+function makeFakeConfig(root = "/tmp/q"): Config {
   return makeConfig(
     {
-      dataDir: "/tmp/q",
-      queueRoot: "/tmp/q/Junco",
-      worktreeRoot: "/tmp/q/worktrees",
+      dataDir: root,
+      queueRoot: join(root, "Junco"),
+      worktreeRoot: join(root, "worktrees"),
       tools: ["read"],
       criticEnabled: true,
       planLintEnabled: true,
@@ -111,6 +112,20 @@ describe("junco config", () => {
     expect(out).toContain("model.apiKey");
   });
 
+  // #343: config.json may hold a literal model.apiKey. The tmp+rename write
+  // decides the final file's mode, so a rewrite must tighten a loose one too.
+  it.skipIf(process.platform === "win32")(
+    "set rewrites the config owner-only (0600) even when it was group/other-readable (#343)",
+    () => {
+      const p = fixture({ vaultRoot: "/v" });
+      chmodSync(p, 0o644);
+      expect(runConfigCommand(["set", "worker.maxConcurrent", "3"], p, { printFn: () => {} })).toBe(
+        0,
+      );
+      expect(statSync(p).mode & 0o777).toBe(0o600);
+    },
+  );
+
   it("set warns to restart only for restart-kind levers", () => {
     const p = fixture({ vaultRoot: "/v" });
     let out = "";
@@ -146,6 +161,26 @@ describe("config init", () => {
     expect(made.length).toBeGreaterThan(0); // inbox/processing/done/failed/worktrees
     expect(out.join("")).toContain("Wrote config");
   });
+
+  // #343, real fs: the default write/mkdir seams carry the modes, and the
+  // config's parent dir IS the data root by default (~/.junco/config.json) —
+  // whoever creates it first fixes its mode, and `init` runs before the daemon.
+  it.skipIf(process.platform === "win32")(
+    "fresh (real fs): the config is 0600 and its dir + queue dirs are 0700 (#343)",
+    () => {
+      const tmp = mkdtempSync(join(tmpdir(), "cfgcmd-mode-"));
+      const root = join(tmp, ".junco");
+      const cp = join(root, "config.json");
+      const code = runConfigCommand(["init"], cp, {
+        loadConfigFn: () => makeFakeConfig(root),
+        printFn: () => {},
+      });
+      expect(code).toBe(0);
+      expect(statSync(cp).mode & 0o777).toBe(0o600);
+      expect(statSync(root).mode & 0o777).toBe(0o700);
+      expect(statSync(join(root, "Junco", "inbox")).mode & 0o777).toBe(0o700);
+    },
+  );
 
   it("existing config: never overwrites, still ensures dirs", () => {
     const written: string[] = [];

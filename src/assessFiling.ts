@@ -4,9 +4,10 @@
  * through the outbox seam (githubOutbox.ts) so offline runs converge, then
  * stamps per-finding `filed` records and keeps the batch parked (explicit
  * discard is the batch's only end-of-life). Labels are owned-only best-effort
- * DATA (external batches file label-free); dedup is author-scoped +
- * marker-based, identical for owned and unowned. This module is the seam
- * SP-2 (comment) / SP-3 (issue-context) build on.
+ * DATA (external batches file label-free); dedup is marker-based across the
+ * repo's most recent 500 issues (any author, closed included), identical for
+ * owned and unowned. This module is the seam SP-2 (comment) / SP-3
+ * (issue-context) build on.
  */
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -91,7 +92,7 @@ export async function createIssueLive(
 /** File the SELECTED findings from a parked batch, stamping per-finding filed
  * records; the batch stays parked. Owned → labelled (best-effort ensure; on
  * failure, file label-free rather than fail the issue). External →
- * label-free by construction. Author-scoped dedup skips anything already
+ * label-free by construction. Marker-based dedup skips anything already
  * filed. Offline → durable outbox op. */
 export async function fileFindings(
   cfg: Config,
