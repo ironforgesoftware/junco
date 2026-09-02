@@ -24,6 +24,7 @@ import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
 import { setupForkHarness, FORK_NWO } from "./helpers/forkHarness.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
+import { gitLogShim } from "./helpers/ghScript.js";
 import { run, cloneHarness } from "./helpers/gitHarness.js";
 
 // ---------------------------------------------------------------------------
@@ -313,6 +314,32 @@ describe("pushBranch", () => {
     // The remote tip was protected.
     expect(run(["git", "-C", remote, "log", "-1", "--format=%s", "junco/lease2"]).trim()).toBe(
       "someone else's commit",
+    );
+  }, 30000);
+
+  // Issue #347: the remote and branch go after `--`, so a ref that ever slipped
+  // past isSafeGitRef with a leading dash is read as a positional, never a flag.
+  it("terminates options before the remote and branch operands", async () => {
+    const { work } = setupGitHarness(tmpRoot);
+    const logFile = join(tmpRoot, "git-push.log");
+    const cfg: Config = {
+      ...makeConfig(work, tmpRoot),
+      gitBin: gitLogShim(tmpRoot, "git-log-push.sh", logFile),
+    };
+
+    run(["git", "-C", work, "checkout", "-b", "junco/eoo-push"]);
+    writeFileSync(join(work, "eoo.txt"), "eoo\n");
+    run(["git", "-C", work, "add", "eoo.txt"]);
+    run(["git", "-C", work, "commit", "-m", "eoo commit"]);
+
+    await pushBranch(cfg, work, "junco/eoo-push");
+    const sha = run(["git", "-C", work, "rev-parse", "junco/eoo-push"]).trim();
+    await pushBranch(cfg, work, "junco/eoo-push", undefined, "origin", sha);
+
+    const argvs = readFileSync(logFile, "utf8").trim().split("\n");
+    expect(argvs).toContain("push --set-upstream -- origin junco/eoo-push");
+    expect(argvs).toContain(
+      `push --force-with-lease=junco/eoo-push:${sha} --set-upstream -- origin junco/eoo-push`,
     );
   }, 30000);
 });

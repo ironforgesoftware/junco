@@ -6,7 +6,7 @@
  *   - countNewCommits    — rev-list --count sinceRef..HEAD
  *   - listNewCommits     — git log --format=%h%x09%s sinceRef..HEAD
  *   - commitLeftovers    — git add -A + git commit (gpgsign off, allow-empty-message)
- *   - pushBranch         — git push --set-upstream <remote> <branch> (remote defaults to origin)
+ *   - pushBranch         — git push --set-upstream -- <remote> <branch> (remote defaults to origin)
  *   - openPullRequest    — gh pr create + URL extraction (--head <fork-owner>:<branch> for forks)
  *   - derivePrTitle      — ctx.prTitle → (apply tickets: mbox Subject) → first H1 → task.id
  */
@@ -127,7 +127,9 @@ export async function pushBranch(
 ): Promise<void> {
   const args = ["push"];
   if (forceWithLeaseSha) args.push(`--force-with-lease=${branch}:${forceWithLeaseSha}`);
-  args.push("--set-upstream", remote, branch);
+  // `--` terminates options (issue #347): a ref that ever slipped past
+  // isSafeGitRef with a leading dash is then read as a ref, never a flag.
+  args.push("--set-upstream", "--", remote, branch);
   await git(cfg, args, {
     cwd: wtPath,
     timeoutMs: 180_000,
