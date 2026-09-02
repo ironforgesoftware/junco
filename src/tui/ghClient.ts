@@ -6,9 +6,10 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { Config } from "../types.js";
+import { dirname } from "node:path";
+import type { Config, Result } from "../types.js";
 import { dataTreePaths } from "../dataTree.js";
+import { cachePathFor, prCachePathFor } from "../githubCachePaths.js";
 import { transcriptPathFor } from "../slug.js";
 import { summarizeTranscript, type TranscriptSummary } from "../transcriptSummary.js";
 import { gh, git } from "../git.js";
@@ -25,8 +26,6 @@ import { listPending, readPending, discardPending, type PendingAssess } from "..
 import { fileFindings, type FileResult } from "../assessFiling.js";
 import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
 import { postDraftCore, analyzeIssueCore } from "../analyzeCmd.js";
-
-export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /** One `readTranscript` outcome. `unchanged` is the live poll's steady state
  * (stat only, no read); `missing` is ENOENT — a pre-transcript ticket, or a
@@ -46,22 +45,6 @@ interface IssueCache {
 interface PrCache {
   fetchedAt: string; // ISO
   prs: DashPr[];
-}
-
-/** `<dataDir>/github-cache/issues-<owner>__<repo>.json` — `/` in the nwo
- * would otherwise collide with the path separator. */
-export function cachePathFor(cfg: Config, nwo: string): string {
-  return join(dataTreePaths(cfg).githubCache, `issues-${nwo.replace(/\//g, "__")}.json`);
-}
-
-/** `<dataDir>/github-cache/prs-<owner>__<repo>.json` — a sibling path to
- * `cachePathFor`, kept separate (not a param on it) so issues and PRs never
- * collide in the same file. Exported only for the unwatchCmd.ts drift-pin
- * test (tests/unwatchCmd.test.ts), which asserts unwatchCmd's independently
- * duplicated naming never diverges from this one — no other caller should
- * address the PR cache directly. */
-export function prCachePathFor(cfg: Config, nwo: string): string {
-  return join(dataTreePaths(cfg).githubCache, `prs-${nwo.replace(/\//g, "__")}.json`);
 }
 
 /** Mirrors the applyAction switch's add/remove lists EXACTLY — including the

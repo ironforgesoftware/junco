@@ -63,7 +63,7 @@ export function Root({
     exit();
     return <Text color="red">✗ {wizard.error}</Text>;
   }
-  if (wizard !== null) return <WizardApp io={wizard.io} onOutcome={onOutcome} />;
+  if (wizard !== null) return <WizardApp io={wizard.value.io} onOutcome={onOutcome} />;
   // Defensive, and unreachable in practice: a FTUE cancel exits with the wizard
   // still mounted (the `wizard !== null` branch above returns first), and every
   // non-cancel outcome sets cfg before clearing wizard. This guards the

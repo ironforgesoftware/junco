@@ -1,3 +1,14 @@
+/**
+ * The repo's one "worked, or here's why it didn't" shape (#359). `T` is the
+ * success payload; a failure is always a single human-readable `error`
+ * string, so callers never have to remember whether this module spells it
+ * `reason` or `error`. `F` adds machine-readable context alongside that
+ * message (applyPatch's `refused`). A failure whose payload is itself
+ * structured — planCompiler's `errors[]`, unwatchCmd's refusal enum — stays a
+ * distinct type on purpose and must not be squeezed in here.
+ */
+export type Result<T, F = unknown> = { ok: true; value: T } | ({ ok: false; error: string } & F);
+
 /** OpenAI-completions-style compat flags (open record — any future Pi compat
  * key passes through). The named fields are the ones junco has tuned defaults
  * for; `[k: string]` keeps the schema forward-compatible. */

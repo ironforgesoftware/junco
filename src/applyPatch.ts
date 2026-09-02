@@ -17,7 +17,7 @@
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Config, RunResult, Ticket, Usage } from "./types.js";
+import type { Config, Result, RunResult, Ticket, Usage } from "./types.js";
 import { git } from "./git.js";
 import {
   stripPatchFence,
@@ -42,9 +42,7 @@ const AM_TIMEOUT_MS = 120_000;
  * below); prFlow terminates the ticket regardless of
  * `worker.applyFallbackToAgent`. `refused: false` — `git am` ran and failed,
  * the escalation ladder's case. */
-export type ApplyOutcome =
-  | { ok: true; result: RunResult }
-  | { ok: false; refused: boolean; reason: string };
+export type ApplyOutcome = Result<RunResult, { refused: boolean }>;
 
 export interface ApplyDeps extends RunTranscriptDeps {
   gitFn?: typeof git;
@@ -88,7 +86,7 @@ export async function applyPatchSeries(
   // — so a refused series leaves the worktree exactly as it found it. The
   // ticket's failure note (prFlow's phaseError) carries the reason.
   const refusal = containmentRefusal(series);
-  if (refusal !== null) return { ok: false, refused: true, reason: refusal };
+  if (refusal !== null) return { ok: false, refused: true, error: refusal };
   const gitFn = deps.gitFn ?? git;
   const now = deps.nowFn ?? ((): number => Date.now());
   const startedAt = now();
@@ -160,7 +158,7 @@ export async function applyPatchSeries(
         usage: ZERO_USAGE,
         durationMs: now() - startedAt,
       });
-      return { ok: false, refused: false, reason };
+      return { ok: false, refused: false, error: reason };
     }
     const durationMs = now() - startedAt;
     writeRunEnd(sink, {
@@ -173,7 +171,7 @@ export async function applyPatchSeries(
     });
     return {
       ok: true,
-      result: {
+      value: {
         finalText: `Applied ${patchSummary(series)}`,
         toolCalls: [],
         usage: ZERO_USAGE,
