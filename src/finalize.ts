@@ -67,7 +67,7 @@ export function finalize(
 
 /**
  * Compute the terminal status for a PR-flow run. Port of the cascade in
- * worker.py finalize_task (lines 2374-2392), extended with timeout salvage:
+ * worker.py finalize_task, extended with timeout salvage:
  *   timeout_partial      → timedOut && pushed (commits salvaged before cutoff)
  *   timeout              → timedOut && !pushed
  *   failed               → phaseError, OR (errorMessage && !abortedByGuard)

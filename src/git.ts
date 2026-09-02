@@ -1,5 +1,6 @@
 /**
- * git/gh subprocess layer — faithful port of worker.py lines 1639-1762.
+ * git/gh subprocess layer — faithful port of worker.py's git/gh subprocess
+ * helpers (its `GitOpError`, retry wrapper, and `_NETWORK_ERROR_PATTERNS`).
  *
  * Provides:
  *   - GitOpError           — typed error carrying stderr + returncode

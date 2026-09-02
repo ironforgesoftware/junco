@@ -28,7 +28,7 @@ function expandHome(p: string): string {
 }
 
 /**
- * Port of worker.py `_derive_branch_name` (lines 342-346).
+ * Port of worker.py `_derive_branch_name`.
  * Replaces runs of non-alphanumeric-non-._/- chars with a single dash,
  * strips leading/trailing dashes and slashes from the slug, then prepends
  * a prefix (ensuring it ends with "/").
@@ -42,10 +42,11 @@ export function deriveBranchName(taskId: string, prefix: string): string {
 /**
  * Guard a ticket-supplied git ref (branch_name / base_branch) before it flows
  * verbatim into `git worktree add -b` / `branch -f` / `push` / `ls-remote`.
- * Mirrors the option-injection rail push_remote enforces at repo.ts:311 — the
- * first char may not be '-' (a leading '-' reads as a git option token), and
- * the whole value is confined to the git-ref charset [A-Za-z0-9._/-] so it
- * cannot smuggle whitespace or shell metacharacters. The JSON Schema `pattern`
+ * Mirrors the option-injection rail `validateRepoContext` (repo.ts) enforces on
+ * push_remote — the first char may not be '-' (a leading '-' reads as a git
+ * option token), and the whole value is confined to the git-ref charset
+ * [A-Za-z0-9._/-] so it cannot smuggle whitespace or shell metacharacters.
+ * The JSON Schema `pattern`
  * on both fields documents the charset for dispatchers; this is the runtime
  * rail, because deriveRepoContext does not validate against the schema.
  */
@@ -54,7 +55,7 @@ export function isSafeGitRef(name: string): boolean {
 }
 
 /**
- * Port of worker.py `_as_str_list` (lines 349-356).
+ * Port of worker.py `_as_str_list`.
  * - string  → split on commas, trim, drop empties
  * - array   → map String() + trim, drop empties
  * - null/undefined → []
@@ -87,7 +88,7 @@ export interface DeriveRepoContextOpts {
 }
 
 /**
- * Port of worker.py `derive_repo_context` (lines 359-399).
+ * Port of worker.py `derive_repo_context`.
  * Returns null for Q&A tickets (no `repo:` in frontmatter).
  */
 export function deriveRepoContext(

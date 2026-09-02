@@ -415,7 +415,7 @@ export async function fetchFindingMarkers(
 
 /** Idempotently create the labels an issue-create op needs (`gh label create
  * --force` is create-or-update — same precedent as ensureLabels in
- * githubInbox.ts:320-348). Known finding labels take their color/description
+ * githubInbox.ts). Known finding labels take their color/description
  * from FINDING_LABEL_SPECS; anything else (e.g. the configured trigger label
  * under --auto-plan) gets a neutral default. No per-process memoization: a
  * replayed op may run weeks later against a repo this process never touched
@@ -595,7 +595,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
     // PR (prUrl still null — the mirror-image case of preserveFinalizeTail,
     // above) but carries a linked ticketId, the done ticket's `pr_queued`
     // marker would otherwise strand every dependent waiting on it forever:
-    // sweepDependencies (src/ticketDeps.ts:262) treats `pr_queued` as "wait",
+    // sweepDependencies (src/ticketDeps.ts) treats `pr_queued` as "wait",
     // with no cascade, no backoff, and no link back to the op that died
     // (#298). A dead-lettered op here means every retry already exhausted a
     // NON-network failure — an expired token, a deleted base branch, lost
@@ -758,9 +758,9 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
                 // Legitimately unwritten, not a sign of trouble: the ticket
                 // was moved or removed by hand since it finalized (archived,
                 // manually deleted, …) — NOT retried. `junco retry` only ever
-                // reads failed/ (src/retryCmd.ts:49), and an offline-PR
-                // ticket always finalizes to done/, so retry can never be the
-                // cause here.
+                // reads failed/ (`runRetryCommand`, src/retryCmd.ts), and an
+                // offline-PR ticket always finalizes to done/, so retry can
+                // never be the cause here.
                 log.info("outbox: done ticket not found for pr_url write-back", {
                   ticket: ticketId,
                 });

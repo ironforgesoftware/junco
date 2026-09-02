@@ -230,9 +230,9 @@ export interface RewriteDeps {
    * write below goes through `atomicWriteFile` (tmp-file via `writeFileFn`,
    * then `renameFn` onto the real path) instead of a bare `writeFileFn` call
    * — the same tmp+rename shape `rewriteConfig` (dataMigrateCmd.ts) and every
-   * OTHER writer of these exact stores already uses (reviewStore.ts:79,
-   * planSets.ts's `atomicWrite`, githubOutbox.ts:143, and this phase's own
-   * `writeWatchlist` call). A bare `writeFileFn` (== `writeFileSync` in
+   * OTHER writer of these exact stores already uses (reviewStore.ts's `write`,
+   * planSets.ts's `atomicWrite`, githubOutbox.ts's `enqueueOp`, and this
+   * phase's own `writeWatchlist` call). A bare `writeFileFn` (== `writeFileSync` in
    * production) truncates first, so a crash mid-write would corrupt a live
    * queue ticket or plan-set record — the wrong failure mode for a migration
    * whose whole premise is crash-resumability. Default in `dataMigrateCmd.ts`

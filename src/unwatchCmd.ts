@@ -228,7 +228,7 @@ function watchedPlan(cfg: Config, entry: WatchlistEntry, deps: UnwatchDeps): Unw
  * `watchedPlan`'s managed-clone arm would, keyed off the probed path rather
  * than a watchlist entry. The worktree namespace is probed for EACH candidate
  * clone path regardless of whether that clone exists on disk: repoDiscriminator
- * (worktree.ts:80-84) hashes only the resolved path STRING, never checking
+ * (worktree.ts) hashes only the resolved path STRING, never checking
  * existence, so a namespace is derivable and reachable even after its clone is
  * already gone (e.g. a prior run whose worktrees deletion failed under a held
  * advisory lock while the clone, later in runUnwatch's order, was removed).
@@ -353,7 +353,8 @@ export async function runUnwatch(
   for (const i of byKind("comment-review"))
     attempt(i, () => void removeDraft(cfg, i.detail as string, "discarded", deps));
   // 5. Worktree namespace under the advisory lock (one-directional courtesy —
-  //    the blocker check above is the liveness guarantee, worktreePruneCmd.ts:104).
+  //    the blocker check above is the liveness guarantee, same as the shared
+  //    lock in worktreePruneCmd.ts's `runWorktreePruneCommand`).
   for (const i of byKind("worktrees"))
     attempt(i, () => {
       const lock = acquireLockFn();

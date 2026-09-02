@@ -5,7 +5,7 @@ import type { SandboxPolicy } from "./agent/sandbox/policy.js";
 import { scrubEnv } from "./scrubEnv.js";
 
 // ---------------------------------------------------------------------------
-// Spec verification — port of worker.py `run_spec_verification` (line 2850)
+// Spec verification — port of worker.py `run_spec_verification`
 //
 // Runs the ticket's `## Verification` fenced bash blocks inside the worktree
 // after the agent session completes. Result is informational only.

@@ -165,7 +165,7 @@ export const seatbeltBackend: SandboxBackend = {
 // ---- Linux bubblewrap ----------------------------------------------------
 
 /** True when `abs` is `root` or lies inside it, matched on path boundaries.
- *  Same shape as precedence.ts's private `isUnder` / pathJail.ts:24-27. */
+ *  Same shape as the private `isUnder` in precedence.ts / pathJail.ts. */
 function isUnder(abs: string, root: string): boolean {
   return abs === root || abs.startsWith(root + sep);
 }

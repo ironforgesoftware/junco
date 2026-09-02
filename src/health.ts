@@ -1,6 +1,6 @@
 /**
- * Inference-endpoint startup health-check — port of worker.py omlx_reachable +
- * wait_for_omlx (lines 616-647).
+ * Inference-endpoint startup health-check — port of worker.py `omlx_reachable`
+ * + `wait_for_omlx`.
  *
  * On daemon startup junco blocks until the configured inference endpoint is
  * reachable, so the first ticket doesn't fail on a cold server (skipped for
@@ -115,7 +115,7 @@ export interface WaitForEndpointDeps {
 
 /**
  * Block until the inference endpoint is reachable or the stop-flag is set.
- * Port of worker.py wait_for_omlx (lines 629-647).
+ * Port of worker.py wait_for_omlx.
  *
  * - If cfg.startupWait is false → return immediately (no probe).
  * - Loop while !stopFlag.requested:

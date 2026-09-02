@@ -737,8 +737,9 @@ export const CHECKS: DoctorCheck[] = [
   }),
 
   // Planner model preflight — plannerModelId overrides cfg.model.id for
-  // planning-session tickets only (runOnce.ts:317); a bad override shouldn't
-  // fail doctor since ordinary Q&A/PR tickets never use it, hence warn.
+  // planning-session tickets only (the `qaModel` override in runOnce.ts's
+  // `executeClaimed`); a bad override shouldn't fail doctor since ordinary
+  // Q&A/PR tickets never use it, hence warn.
   needsConfig("planner-model", async (ctx, cfg) => {
     if (!cfg.github.plannerModelId) return [];
     const plannerId = cfg.github.plannerModelId;

@@ -1,7 +1,7 @@
 /**
  * PR-flow agent preamble builder — faithful port of worker.py:
- *   - build_prompt_with_repo_context  (lines 2084-2126)
- *   - _build_amend_preamble           (lines 2129-2154)
+ *   - build_prompt_with_repo_context
+ *   - _build_amend_preamble
  *
  * 2026-08-31: the "Working discipline" blocks absorbed the ticket-side
  * "Notes for the agent (strict)" rules (trust-the-ticket, no-scope-expansion,
@@ -34,8 +34,8 @@ export interface PrPromptOpts {
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `build_prompt_with_repo_context` (lines 2084-2126) and
- * `_build_amend_preamble` (lines 2129-2154).
+ * Port of worker.py `build_prompt_with_repo_context` and
+ * `_build_amend_preamble`.
  *
  * Builds the full prompt sent to the PR-flow agent: a repo-context preamble
  * followed by the ticket body.
@@ -67,8 +67,8 @@ export function buildPromptWithRepoContext(
 // ---------------------------------------------------------------------------
 
 /**
- * Port of the fresh-ticket preamble in `build_prompt_with_repo_context`
- * (worker.py lines 2094-2125).
+ * Port of the fresh-ticket preamble in worker.py's
+ * `build_prompt_with_repo_context`.
  */
 function _buildFreshPreamble(
   ctx: RepoContext,
@@ -76,7 +76,8 @@ function _buildFreshPreamble(
   nwo: string,
   commitLeftoversEnabled: boolean,
 ): string {
-  // Rule #3 text differs by mode (mirror worker.py lines 2094-2103).
+  // Rule #3 text differs by mode (mirror worker.py's
+  // `build_prompt_with_repo_context`).
   let ruleThree: string;
   if (commitLeftoversEnabled) {
     ruleThree =
@@ -114,7 +115,7 @@ function _buildFreshPreamble(
 }
 
 /**
- * Port of worker.py `_build_amend_preamble` (lines 2129-2154).
+ * Port of worker.py `_build_amend_preamble`.
  */
 function _buildAmendPreamble(
   ctx: RepoContext,
