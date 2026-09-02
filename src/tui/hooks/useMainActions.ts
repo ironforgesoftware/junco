@@ -52,6 +52,10 @@ export interface MainActionsInput {
   localCheap: LocalCheap | null;
   exit: () => void;
   onExit: () => void;
+  /** App's help opener (Ruling R5, spec 2026-09-02 §3.2): records WHICH
+   * surface the modal was opened from so any-key close returns there and the
+   * modal lists that surface's own keys. */
+  openHelp: () => void;
   setView: (v: View) => void;
   setRailSel: (key: string | null) => void;
   setPane: (p: Pane) => void;
@@ -110,6 +114,7 @@ export function useMainActions({
   localCheap,
   exit,
   onExit,
+  openHelp,
   setView,
   setRailSel,
   setPane,
@@ -135,7 +140,7 @@ export function useMainActions({
         exit();
         onExit();
       },
-      help: () => setView("help"),
+      help: openHelp,
       queue: () => {
         setRailSel(sysKey("queue"));
         setPane(2);
@@ -165,6 +170,7 @@ export function useMainActions({
     [
       exit,
       onExit,
+      openHelp,
       setView,
       setRailSel,
       setPane,

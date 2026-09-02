@@ -35,6 +35,44 @@ import {
 afterEach(cleanup);
 
 const okv = <T,>(value: T): Result<T> => ({ ok: true, value });
+
+/** The two footer rows (spec 2026-09-02 §3): actions above, navigate below —
+ * always the frame's last two lines (layout.ts still budgets CHROME_ROWS=3:
+ * header + these two, the toast having moved INTO the actions row). Frames
+ * carry no ANSI, so a row is read positionally and matched on its text. */
+const footerRows = (r: { lastFrame: () => string | undefined }): [string, string] => {
+  const lines = (r.lastFrame() ?? "").split("\n");
+  return [lines[lines.length - 2] ?? "", lines[lines.length - 1] ?? ""];
+};
+/** Structural chips render a padded keycap plus a label that brings its own
+ * leading space (footerSegments, spec §3.4) — ` esc  back`, two spaces. */
+const navHas = (navigate: string, key: string, label: string): boolean =>
+  new RegExp(`${key} {2}${label}`).test(navigate);
+/** The fullscreen PR overlay is up: its actions row carries the chat pill +
+ * browser and its navigate row is `esc back` ALONE — the prs LIST underneath
+ * keeps move / ⏎ detail / esc·p back there, so this discriminates the two. */
+const prOverlayOpen = (r: { lastFrame: () => string | undefined }): boolean => {
+  const [actions, navigate] = footerRows(r);
+  return (
+    actions.includes("chat") &&
+    actions.includes("browser") &&
+    navHas(navigate, "esc", "back") &&
+    !navigate.includes("move")
+  );
+};
+/** The fullscreen issue-detail overlay is up (spec 2026-09-02 D7): chat pill +
+ * browser + transcript above, ↑↓ scroll · esc back below. Pane 3's own rows
+ * never produce this combo (no "esc back" there). */
+const detailOverlayOpen = (r: { lastFrame: () => string | undefined }): boolean => {
+  const [actions, navigate] = footerRows(r);
+  return (
+    actions.includes("chat") &&
+    actions.includes("browser") &&
+    actions.includes("transcript") &&
+    navHas(navigate, "↑↓", "scroll") &&
+    navHas(navigate, "esc", "back")
+  );
+};
 const STUB_FILE_BATCH = {
   id: "stub",
   nwo: "o/r",
@@ -914,7 +952,7 @@ describe("App", () => {
     expect(readWatchlist(file).entries).toEqual([{ nwo: "alx/coral", path: "/c/coral" }]);
   });
 
-  it("? opens the help modal", async () => {
+  it("? opens the help modal, and any key returns to the main view", async () => {
     const { client } = makeClient({ "acme/api": [] });
     const r = renderApp(client, wl());
     await tick();
@@ -923,6 +961,35 @@ describe("App", () => {
     // it so the title survives even though the bottom clips.
     await until(() => (r.lastFrame() ?? "").includes("junco dashboard — keys"));
     expect(r.lastFrame()).toContain("this view"); // the derived-mnemonics section
+    expect(r.lastFrame()).toContain("investigate"); // …of the MAIN body underneath
+    r.stdin.write("x"); // any key closes
+    await until(() => !(r.lastFrame() ?? "").includes("junco dashboard — keys"));
+    expect(r.lastFrame()).toContain("repos"); // back on main, not an overlay
+  });
+
+  // Ruling R5 (spec 2026-09-02 §3.2): `?` is help from EVERY overlay, the
+  // modal lists the keys of the surface it was opened FROM, and any key
+  // returns THERE — never to main, which would eject the operator.
+  it("? opens help from the issue-detail overlay and any key returns to that overlay", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = renderApp(client, wl());
+    await until(() => (r.lastFrame() ?? "").includes("#7 Fix uploads"));
+    r.stdin.write("\t"); // focus the issues pane
+    await until(() => (r.lastFrame() ?? "").includes("import"));
+    r.stdin.write("\r"); // open the fullscreen issue detail
+    await until(() => detailOverlayOpen(r));
+    r.stdin.write("?");
+    await until(() => (r.lastFrame() ?? "").includes("junco dashboard — keys"));
+    const f = r.lastFrame() ?? "";
+    // The OVERLAY's own derived keys, listed under "this view" …
+    expect(f).toContain("browser");
+    expect(f).toContain("chat");
+    expect(f).toContain("transcript");
+    // … and NOT the main body's (which is what the modal used to always show).
+    expect(f).not.toContain("investigate");
+    r.stdin.write("x"); // any key closes
+    await until(() => !(r.lastFrame() ?? "").includes("junco dashboard — keys"));
+    await until(() => detailOverlayOpen(r)); // back to the overlay, not main
   });
 
   // Ctrl-C quits the dashboard. In production the host renders with
@@ -1247,9 +1314,7 @@ describe("App", () => {
       // column header strip (Task 9) shifts row 0 down one line vs. the
       // pre-header layout, so row 0 now sits at y=5 (was y=4). Opening the
       // overlay unmounts the row, so the retry self-terminates.
-      await fireUntil(r.stdin, click(30, 5), () =>
-        (r.lastFrame() ?? "").includes("browser · chat · esc back"),
-      );
+      await fireUntil(r.stdin, click(30, 5), () => prOverlayOpen(r));
       r.stdin.write(ESC); // back to the prs view, side card visible again
       await until(() => (r.lastFrame() ?? "").includes("pull requests"));
       // 130 cols wide → preview band starts at x=79 (1-based); the side card's
@@ -1309,9 +1374,7 @@ describe("App", () => {
       // 1-based y=6 → row 1 (line 5): focus pane 3 + select (idempotent to the fixed row).
       await fireUntil(r.stdin, click(85, 6), () => pane3BarOn(5) && !pane3BarOn(4));
       // click-again = enter → fullscreen PR overlay (unmounts the row → self-terminates).
-      await fireUntil(r.stdin, click(85, 6), () =>
-        (r.lastFrame() ?? "").includes("browser · chat · esc back"),
-      );
+      await fireUntil(r.stdin, click(85, 6), () => prOverlayOpen(r));
       r.stdin.write(ESC); // back to main; pane-3 selection intact
       await until(() => (r.lastFrame() ?? "").includes("PRs"));
       await until(() => pane3BarOn(5));
@@ -1363,7 +1426,7 @@ describe("App", () => {
       r.stdin.write("p");
       await until(() => (r.lastFrame() ?? "").includes("Some PR"));
       r.stdin.write("\r"); // open the fullscreen PR overlay from the prs view
-      await until(() => (r.lastFrame() ?? "").includes("browser · chat · esc back"));
+      await until(() => prOverlayOpen(r));
       // ↗ metadata row of the overlay card; counted with === 1 so the retry stops
       // after the first landed click.
       await fireUntil(r.stdin, click(30, 5), () => prCalls.length === 1);
@@ -2895,8 +2958,9 @@ describe("queue system row", () => {
     const r = renderApp(client, join(dir, "wl.json"));
     await until(() => (r.lastFrame() ?? "").includes("repos")); // mounted
     // The chip renders the bare label (mnemonic char colored); scope to the
-    // footer row — "queue" is ambient in the rail's system block.
-    await until(() => ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("queue"));
+    // footer's ACTIONS row — "queue" is ambient in the rail's system block,
+    // and the navigate row below carries the structural vocabulary only.
+    await until(() => footerRows(r)[0].includes("queue"));
   });
 });
 
@@ -3160,11 +3224,12 @@ describe("workspace wide mode", () => {
     await until(() => (r.lastFrame() ?? "").includes("#10")); // #10 sorts first (newer)
     r.stdin.write(ESC + "[C"); // → pane 2
     r.stdin.write(ESC + "[C"); // → pane 3
-    // Pane 2's own footer verb is gone once pane 3 has focus (footerModel.ts
-    // now owns main-view structural hints — bindings.chips carries mnemonics
-    // only, so pane 3's OLD "← issues" structural hint no longer renders
-    // here; Task 3 wires the new two-row Footer back in).
-    await until(() => !(r.lastFrame() ?? "").includes("import"));
+    // Pane 3's navigate row carries its own `← issues` (structural chips
+    // render a padded keycap plus a label with its own leading space, spec
+    // 2026-09-02 §3.4), and pane 2's `import` verb is gone from the actions
+    // row — together they say pane 3 has focus.
+    await until(() => /← {2}issues/.test(r.lastFrame() ?? ""));
+    expect(r.lastFrame() ?? "").not.toContain("import");
     r.stdin.write("j"); // move down to #11
     await tick();
     r.stdin.write("b");
@@ -3184,10 +3249,10 @@ describe("workspace wide mode", () => {
     await until(() => (r.lastFrame() ?? "").includes("#10"));
     r.stdin.write(ESC + "[C"); // → pane 2
     r.stdin.write(ESC + "[C"); // → pane 3
-    // Pane 3's OLD "← issues" structural hint no longer renders (footerModel.ts
-    // owns it now; Task 3 wires the new Footer back in) — pane 2's own footer
-    // verb disappearing is the available signal that pane 3 has focus.
-    await until(() => !(r.lastFrame() ?? "").includes("import"));
+    // Pane 3's own `← issues` navigate hint (padded keycap, spec §3.4) plus
+    // pane 2's `import` verb gone from the actions row: pane 3 has focus.
+    await until(() => /← {2}issues/.test(r.lastFrame() ?? ""));
+    expect(r.lastFrame() ?? "").not.toContain("import");
     r.stdin.write("\r"); // enter -> prDetail
     await until(() => (r.lastFrame() ?? "").includes("checks:"));
     expect(r.lastFrame()).toContain("branch:");
@@ -3212,12 +3277,9 @@ describe("workspace wide mode", () => {
     r.stdin.write(ESC + "[C"); // → focus issues pane
     await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write("\r");
-    // The detail view's exact footer (scroll · browser · chat · transcript ·
-    // esc back, spec 2026-09-02 D7) — pane 3's hint set never produces this
-    // combo (no "esc back" there).
-    await until(() =>
-      (r.lastFrame() ?? "").includes("↑/↓ scroll · browser · chat · transcript · esc back"),
-    );
+    // The detail view's exact two-row footer (spec 2026-09-02 §3/D7) — pane
+    // 3's own rows never produce this combo (no "esc back" there).
+    await until(() => detailOverlayOpen(r));
     expect(r.lastFrame()).toContain("#7 Fix uploads");
     r.stdin.write(ESC);
     await until(() => (r.lastFrame() ?? "").includes("import"));
@@ -3320,15 +3382,16 @@ describe("workspace wide mode", () => {
     await until(() => (r.lastFrame() ?? "").includes("PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write(ESC + "[C"); // → pane 2
     r.stdin.write(ESC + "[C"); // → pane 3
-    // Pane 3's OLD "← issues" structural hint no longer renders (footerModel.ts
-    // owns it now; Task 3 wires the new Footer back in) — pane 2's own footer
-    // verb disappearing is the available signal that pane 3 has focus.
-    await until(() => !(r.lastFrame() ?? "").includes("import"));
+    // Pane 3's own `← issues` navigate hint (padded keycap, spec §3.4) plus
+    // pane 2's `import` verb gone from the actions row: pane 3 has focus.
+    await until(() => /← {2}issues/.test(r.lastFrame() ?? ""));
+    expect(r.lastFrame() ?? "").not.toContain("import");
     r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
     // Pane 2's footer hint set is back — m import is the reliable marker
-    // regardless of the enter-key wording. (This alone proves the clamp: pane
-    // 3 cannot be focused once its footer verb, "import"'s absence, reverses.)
+    // regardless of the enter-key wording, and pane 3's own `← issues`
+    // navigate hint is gone with it: the clamp moved focus off pane 3.
     await until(() => (r.lastFrame() ?? "").includes("import"));
+    expect(/← {2}issues/.test(r.lastFrame() ?? "")).toBe(false);
   });
 
   // → is the advertised primary pane-movement key (l is now the quiet alias) —
@@ -3341,10 +3404,10 @@ describe("workspace wide mode", () => {
     r.stdin.write(ESC + "[C"); // → focus issues pane
     await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[C"); // → focuses pane 3
-    // Pane 3's OLD "← issues" structural hint no longer renders (footerModel.ts
-    // owns it now; Task 3 wires the new Footer back in) — pane 2's own footer
-    // verb disappearing is the available signal that pane 3 has focus.
-    await until(() => !(r.lastFrame() ?? "").includes("import"));
+    // Pane 3's own `← issues` navigate hint (padded keycap, spec §3.4) plus
+    // pane 2's `import` verb gone from the actions row: pane 3 has focus.
+    await until(() => /← {2}issues/.test(r.lastFrame() ?? ""));
+    expect(r.lastFrame() ?? "").not.toContain("import");
     r.stdin.write(ESC + "[D"); // ← back to pane 2
     await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[D"); // ← back to pane 1
@@ -3620,15 +3683,29 @@ describe("transcript view", () => {
     await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
   });
 
-  // Removed (footer redesign, Task 2 of docs/superpowers/plans/2026-09-02-
-  // footer-redesign.md): this clicked the main-view queue body's structural
-  // "enter transcript" chip, which lived in viewActions.ts's now-deleted
-  // `mainStructural`. footerModel.ts's pure model owns that hint now (see
-  // tests/footerModel.test.ts's queue navigate case) but the OLD Footer here
-  // does not render it — Task 3 wires `buildFooterRows` into Chrome.tsx's
-  // Footer and restores click coverage there (its own tuiChrome.test.tsx
-  // already covers "chips with a chipActions entry are clickable by id
-  // (pill/mnemonic) or key (structural)").
+  // Restored with Task 3's two-row Footer (Ruling R4): the queue body's
+  // navigate row renders `⏎ transcript` again, and App's structuralChipActions
+  // keys structural chips by their KEY string — which IS FooterChip.id — so
+  // the click runs the very recipe enter does.
+  // SGR press/release at 1-based wire coords (this file's mouse helper).
+  const click = (x1: number, y1: number) => `\u001b[<0;${x1};${y1}M\u001b[<0;${x1};${y1}m`;
+
+  it("clicking the ⏎ transcript footer chip opens the transcript", async () => {
+    const { client } = makeClient({ "acme/api": [rawIssue] });
+    const r = await selectRecent(client);
+    // Navigate row: the chip's ClickableBox spans its own ` ⏎  transcript`
+    // segment, so a press on the ⏎ keycap lands inside it.
+    const lines = (r.lastFrame() ?? "").split("\n");
+    const yIdx = lines.findIndex((l) => /⏎ {2}transcript/.test(l));
+    expect(yIdx).toBeGreaterThanOrEqual(0);
+    const x = (lines[yIdx] ?? "").indexOf("⏎");
+    expect(x).toBeGreaterThan(0);
+    // fireUntil: a press can race a freshly-mounted ClickableBox's registration,
+    // and this click unmounts its own target (self-terminating — see until.ts).
+    await fireUntil(r.stdin, click(x + 1, yIdx + 1), () =>
+      (r.lastFrame() ?? "").includes("transcript ▸ assess-x-1"),
+    );
+  });
 });
 
 describe("t on an issue opens its ticket transcript (#330)", () => {

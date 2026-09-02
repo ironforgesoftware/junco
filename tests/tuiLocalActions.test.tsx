@@ -6,10 +6,9 @@
 // render, so a second key issued before React commits would see a stale
 // closure. Markers: section-body content for the rail move, a body-only
 // footer verb (e.g. "flush") or the ▌ selection glyph for rail→body focus.
-// (The body footer's OLD "back" structural hint moved into footerModel.ts's
-// pure model — spec 2026-09-02 — and the OLD Footer here doesn't render it
-// until Task 3 wires the new one in; a body-specific mnemonic verb or the
-// cursor glyph is the available settled-render signal meanwhile.)
+// (The body footer's "back" hint is `← rail` on the two-row footer's navigate
+// row now — spec 2026-09-02 §3.2 — so a body-specific mnemonic verb or the
+// cursor glyph stays the sharper settled-render signal here.)
 import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
 import type { LocalCheap, LocalHeavy } from "../src/tui/localSnapshot.js";

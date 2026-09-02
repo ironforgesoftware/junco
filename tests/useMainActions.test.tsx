@@ -68,6 +68,7 @@ function makeSpies() {
     askConfirm: vi.fn(),
     openChat: vi.fn(),
     openIssueTranscript: vi.fn(),
+    openHelp: vi.fn(),
   };
 }
 
@@ -103,6 +104,7 @@ function mount(
     currentRepoKey: "acme/widgets",
     openChat: spies.openChat,
     openIssueTranscript: spies.openIssueTranscript,
+    openHelp: spies.openHelp,
     currentIssue: ISSUE,
     currentRepo: MAPPING,
     selectedPane3Pr: null,
@@ -166,6 +168,17 @@ describe("useMainActions — the main view's action table", () => {
   it("exposes exactly the main-view action ids (the refactor's invariant)", () => {
     const { api, unmount } = mount();
     expect(Object.keys(api).sort()).toEqual(ALL_IDS);
+    unmount();
+  });
+
+  // Ruling R5: help no longer calls setView("help") directly — App's openHelp
+  // records WHICH surface the modal was opened from, so any-key close returns
+  // there and the modal lists that surface's own keys.
+  it("help defers to App's openHelp, never a bare setView", () => {
+    const { api, spies, unmount } = mount();
+    api["help"]?.();
+    expect(spies.openHelp).toHaveBeenCalledTimes(1);
+    expect(spies.setView).not.toHaveBeenCalled();
     unmount();
   });
 

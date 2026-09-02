@@ -51,6 +51,10 @@ export interface ViewActionsInput {
     issue: DashIssue | null | undefined,
     from?: "main" | "detail",
   ) => void;
+  /** App's help opener (Ruling R5, spec 2026-09-02 §3.2). Every overlay's
+   * keymap carries the hidden reserved `?`, so every arm below must dispatch
+   * it — otherwise the key and the pinned `? help` chip are inert there. */
+  openHelp: () => void;
 }
 
 /** The chat draft `submit`/`edit`/`route`/`discard` act on: the open preview's
@@ -100,6 +104,7 @@ export function useViewActions({
   chatHandlers,
   detail,
   openIssueTranscript,
+  openHelp,
 }: ViewActionsInput): Record<string, () => void> {
   const reviewActions = useMemo((): Record<string, () => void> => {
     // Chat-draft verb dispatch: a no-op unless a chat draft is actually
@@ -248,6 +253,7 @@ export function useViewActions({
         return {
           browser: openDetailIssueInBrowser,
           close,
+          help: openHelp,
           // Ruling R1: `transcript` now derives on `t` here (viewActions.ts's
           // VIEW_OPTIONS.detail), so App's layer-3d dispatch reaches this
           // handler before the view cascade's own key checks ever run — this
@@ -258,10 +264,11 @@ export function useViewActions({
             openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null, "detail"),
         };
       case "prDetail":
-        return { browser: openPrDetailInBrowser, close };
+        return { browser: openPrDetailInBrowser, close, help: openHelp };
       case "repoDetail":
         return {
           close,
+          help: openHelp,
           browser: () => {
             const nwo = repoDetailTarget?.nwo;
             if (nwo !== null && nwo !== undefined) openRepoBrowser(nwo);
@@ -269,10 +276,11 @@ export function useViewActions({
           },
         };
       case "prs":
-        return { browser: openSelectedPr, close };
+        return { browser: openSelectedPr, close, help: openHelp };
       case "cmdOutput":
         return {
           close,
+          help: openHelp,
           ...(cmd && !cmd.running
             ? { reRun: () => runPaletteCommand(cmd.name, cmd.extraArgs) }
             : {}),
@@ -280,6 +288,7 @@ export function useViewActions({
       case "transcript":
         return {
           close,
+          help: openHelp,
           thinking: toggleTranscriptThinking,
           ...(transcript?.summary?.live
             ? {
@@ -293,16 +302,18 @@ export function useViewActions({
             : {}),
         };
       case "review":
-        return reviewActions;
+        return { ...reviewActions, help: openHelp };
       case "chat":
-        return chatHandlers;
+        return { ...chatHandlers, help: openHelp };
       case "palette":
       case "addRepo":
       case "config":
       case "help":
       // `main` is useMainActions' arm — App picks between the two.
       case "main":
-        return {};
+        // Their contexts are structuralOnly (empty keymap), so `help` here is
+        // unreachable by key — it is kept for the uniform arm shape.
+        return { help: openHelp };
     }
   }, [
     view,
@@ -323,5 +334,6 @@ export function useViewActions({
     chatHandlers,
     detail,
     openIssueTranscript,
+    openHelp,
   ]);
 }

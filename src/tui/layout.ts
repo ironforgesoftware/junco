@@ -1,6 +1,8 @@
 /** Pure breakpoint math for the fullscreen workspace. The chrome is exactly
- * 3 rows (header, toast, footer) — bodyRows is what panes may fill; the total
- * frame must never exceed terminal rows (Ink redraws duplicate otherwise). */
+ * 3 rows (header + the two footer rows, spec 2026-09-02 §3 — a live toast
+ * paints OVER the footer's actions row rather than claiming a row of its own)
+ * — bodyRows is what panes may fill; the total frame must never exceed
+ * terminal rows (Ink redraws duplicate otherwise). */
 export const MIN_COLS = 60;
 export const MIN_ROWS = 14;
 export const WIDE_COLS = 110;

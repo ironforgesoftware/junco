@@ -4,9 +4,14 @@ import { theme, toastColor, type ToastKind } from "../theme.js";
 import type { LayoutMode } from "../layout.js";
 import type { HealthInfo } from "../ghClient.js";
 import { fmtDurShort } from "../queueFmt.js";
+import {
+  footerSegments,
+  type FooterChip,
+  type FooterRow,
+  type FooterRows,
+} from "../footerModel.js";
 import { relTime } from "./IssueList.js";
 import { TERMINAL_DONE_STATUSES } from "../../types.js";
-import type { Chip } from "../viewActions.js";
 import { ClickableBox } from "../ClickableBox.js";
 import type { QueueStats } from "../queueStats.js";
 
@@ -213,87 +218,113 @@ export function Header({
   );
 }
 
-/** Row n-1: reserved single toast row (stable layout — blank when idle). */
-export function Toast({
-  toast,
+/** One chip's styled runs (footerModel.footerSegments is the ONE styling
+ * model the renderer and the tests share — frames carry no ANSI, so accent
+ * placement is asserted there, never from a rendered frame). */
+function SegmentText({ chip }: { chip: FooterChip }): React.JSX.Element {
+  return (
+    <Text>
+      {footerSegments(chip).map((s, j) => (
+        <Text
+          key={j}
+          color={s.pill ? theme.pillFg : s.accent ? theme.accent : undefined}
+          backgroundColor={s.pill ? theme.accent : s.keycap ? theme.keycapBg : undefined}
+          bold={s.pill || s.accent}
+          underline={s.underline}
+          dimColor={s.dim}
+        >
+          {s.text}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+/** A run of chips. One with a `chipActions` entry is clickable — pill and
+ * mnemonic chips by their mnemonic ID, structural chips by their KEY (which
+ * IS their `FooterChip.id`, footerModel.ts); the rest render inert. */
+function ChipRun({
+  chips,
+  chipActions,
 }: {
-  toast: { kind: ToastKind; text: string } | null;
+  chips: FooterChip[];
+  chipActions?: Record<string, () => void>;
 }): React.JSX.Element {
   return (
-    <Box paddingX={1} height={1}>
-      {toast ? (
-        <Text color={toastColor(toast.kind)} wrap="truncate-end">
-          {toast.text.replace(/\s*[\r\n]+\s*/g, " · ")}
+    <>
+      {chips.map((chip, i) => {
+        const run = chip.kind === "separator" ? undefined : chipActions?.[chip.id];
+        const body = <SegmentText chip={chip} />;
+        return (
+          <Box key={`${chip.id}-${i}`} flexShrink={0} marginRight={2}>
+            {run ? (
+              <ClickableBox onPress={run} hoverBg={theme.hoverBg}>
+                {body}
+              </ClickableBox>
+            ) : (
+              body
+            )}
+          </Box>
+        );
+      })}
+    </>
+  );
+}
+
+/** One footer row: dim label in a fixed-width slot, the chips, a spacer, the
+ * pinned chips. `overflow="hidden"` + `flexShrink={0}` chips = clip, never
+ * wrap — the row is informational and the two-line invariant holds. */
+function FooterLine({
+  row,
+  labelWidth,
+  chipActions,
+}: {
+  row: FooterRow;
+  labelWidth: number;
+  chipActions?: Record<string, () => void>;
+}): React.JSX.Element {
+  return (
+    <Box paddingX={1} height={1} overflow="hidden">
+      <Box width={labelWidth} flexShrink={0} marginRight={2}>
+        <Text dimColor wrap="truncate">
+          {row.label}
         </Text>
-      ) : (
-        <Text> </Text>
-      )}
+      </Box>
+      <ChipRun chips={row.chips} chipActions={chipActions} />
+      <Box flexGrow={1} />
+      <ChipRun chips={row.pinned} chipActions={chipActions} />
     </Box>
   );
 }
 
-/** Pure segment split for one chip — the mnemonic renderer's core, exported
- * for structural tests (frames strip ANSI, so accent PLACEMENT is asserted
- * here, not from rendered frames). Mnemonic chips render their label with the
- * winning char in accent (uppercased in place when guarded — the shift cue);
- * structural chips and charIndex-null mnemonics render key-first. */
-export function chipSegments(chip: Chip): { text: string; accent: boolean }[] {
-  if (chip.kind === "mnemonic" && chip.charIndex !== null) {
-    const i = chip.charIndex;
-    const ch = chip.guarded ? chip.label[i].toUpperCase() : chip.label[i];
-    return [
-      ...(i > 0 ? [{ text: chip.label.slice(0, i), accent: false }] : []),
-      { text: ch, accent: true },
-      ...(i + 1 < chip.label.length ? [{ text: chip.label.slice(i + 1), accent: false }] : []),
-    ];
-  }
-  return [
-    { text: chip.key, accent: true },
-    { text: ` ${chip.label}`, accent: false },
-  ];
-}
-
-/** Row n: the context's chips (viewActions) — mnemonic labels with the
- * derived key's character in accent, structural keys key-first. A chip with a
- * `chipActions` entry (mnemonic → by ID, structural → by KEY) is clickable;
- * the rest render inert. Overflow clips (no ellipsis) rather than truncating
- * — the row is informational and the one-line layout invariant holds. */
+/** Rows n-1 and n (spec 2026-09-02 §3): actions above, navigate below. A live
+ * toast paints over the ACTIONS row for its lifetime (useToast: 4 s or the
+ * next keystroke) — navigation is never hidden. Both labels share one slot
+ * width so the two chip runs start in the same column. */
 export function Footer({
-  chips,
+  rows,
+  toast,
   chipActions,
 }: {
-  chips: Chip[];
+  rows: FooterRows;
+  /** Non-null → replaces the ACTIONS row for as long as it lives. */
+  toast: { kind: ToastKind; text: string } | null;
+  /** Chip click handlers — pill/mnemonic by ID, structural by KEY. */
   chipActions?: Record<string, () => void>;
 }): React.JSX.Element {
-  {
-    return (
-      <Box paddingX={1} height={1} overflow="hidden">
-        {chips.map((chip, i) => {
-          const id = chip.kind === "mnemonic" ? chip.id : chip.key;
-          const run = chipActions?.[id];
-          const body = (
-            <Text>
-              {chipSegments(chip).map((seg, j) => (
-                <Text key={j} color={seg.accent ? theme.accent : undefined} dimColor={!seg.accent}>
-                  {seg.text}
-                </Text>
-              ))}
-            </Text>
-          );
-          return (
-            <Box key={`${id}-${i}`} flexShrink={0}>
-              {i > 0 ? <Text dimColor> · </Text> : null}
-              {run ? (
-                <ClickableBox onPress={run} hoverBg={theme.hoverBg}>
-                  {body}
-                </ClickableBox>
-              ) : (
-                body
-              )}
-            </Box>
-          );
-        })}
-      </Box>
-    );
-  }
+  const labelWidth = Math.max(rows.actions.label.length, rows.navigate.label.length);
+  return (
+    <Box flexDirection="column" height={2}>
+      {toast ? (
+        <Box paddingX={1} height={1} overflow="hidden">
+          <Text color={toastColor(toast.kind)} wrap="truncate-end">
+            {toast.text.replace(/\s*[\r\n]+\s*/g, " · ")}
+          </Text>
+        </Box>
+      ) : (
+        <FooterLine row={rows.actions} labelWidth={labelWidth} chipActions={chipActions} />
+      )}
+      <FooterLine row={rows.navigate} labelWidth={labelWidth} chipActions={chipActions} />
+    </Box>
+  );
 }

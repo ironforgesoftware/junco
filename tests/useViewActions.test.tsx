@@ -134,6 +134,7 @@ function makeSpies() {
     toEnd: vi.fn(),
     setReviewState: vi.fn(),
     openIssueTranscript: vi.fn(),
+    openHelp: vi.fn(),
     chatSubmit: vi.fn(async () => {}),
     chatEdit: vi.fn(async () => {}),
     chatRoute: vi.fn(async () => {}),
@@ -181,6 +182,7 @@ function mount(
     setReviewState: spies.setReviewState,
     detail: null,
     openIssueTranscript: spies.openIssueTranscript,
+    openHelp: spies.openHelp,
     chatDraftActions: {
       submit: spies.chatSubmit,
       edit: spies.chatEdit,
@@ -204,7 +206,7 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
       ["prs", "openSelectedPr"],
     ] as const) {
       const { api, spies, unmount } = mount({ view });
-      expect(ids(api)).toEqual(["browser", "close"]);
+      expect(ids(api)).toEqual(["browser", "close", "help"]);
       api["browser"]?.();
       expect(spies[spy]).toHaveBeenCalledTimes(1);
       api["close"]?.();
@@ -230,7 +232,7 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
         loading: false,
       },
     });
-    expect(ids(api)).toEqual(["browser", "close", "transcript"]);
+    expect(ids(api)).toEqual(["browser", "close", "help", "transcript"]);
     api["browser"]?.();
     expect(spies.openDetailIssueInBrowser).toHaveBeenCalledTimes(1);
     api["close"]?.();
@@ -242,7 +244,7 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("repoDetail's browser opens the frozen target, and toasts when it has no nwo", () => {
     const hit = mount({ view: "repoDetail", repoDetailTarget: REPO });
-    expect(ids(hit.api)).toEqual(["browser", "close"]);
+    expect(ids(hit.api)).toEqual(["browser", "close", "help"]);
     hit.api["browser"]?.();
     expect(hit.spies.openRepoBrowser).toHaveBeenCalledWith("acme/widgets");
     hit.unmount();
@@ -256,15 +258,15 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("cmdOutput offers reRun only for a finished command", () => {
     const running = mount({ view: "cmdOutput", cmd: { ...CMD, running: true } });
-    expect(ids(running.api)).toEqual(["close"]);
+    expect(ids(running.api)).toEqual(["close", "help"]);
     running.unmount();
 
     const none = mount({ view: "cmdOutput", cmd: null });
-    expect(ids(none.api)).toEqual(["close"]);
+    expect(ids(none.api)).toEqual(["close", "help"]);
     none.unmount();
 
     const done = mount({ view: "cmdOutput", cmd: { ...CMD, extraArgs: ["--json"] } });
-    expect(ids(done.api)).toEqual(["close", "reRun"]);
+    expect(ids(done.api)).toEqual(["close", "help", "reRun"]);
     done.api["reRun"]?.();
     expect(done.spies.runPaletteCommand).toHaveBeenCalledWith("status", ["--json"]);
     done.unmount();
@@ -272,13 +274,13 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("transcript offers follow only while the file is live, pausing at the tail", () => {
     const dead = mount({ view: "transcript", transcript: TRANSCRIPT(false) });
-    expect(ids(dead.api)).toEqual(["close", "thinking"]);
+    expect(ids(dead.api)).toEqual(["close", "help", "thinking"]);
     dead.api["thinking"]?.();
     expect(dead.spies.toggleTranscriptThinking).toHaveBeenCalledTimes(1);
     dead.unmount();
 
     const live = mount({ view: "transcript", transcript: TRANSCRIPT(true, true) });
-    expect(ids(live.api)).toEqual(["close", "follow", "thinking"]);
+    expect(ids(live.api)).toEqual(["close", "follow", "help", "thinking"]);
     live.api["follow"]?.();
     expect(live.spies.toEnd).toHaveBeenCalledTimes(1);
     expect(live.spies.setTranscriptFollow).toHaveBeenCalledWith(false);
@@ -293,17 +295,45 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("the chat view hands through useChatInput's own arm (Ruling R15)", () => {
     const { api, spies, unmount } = mount({ view: "chat" });
-    expect(ids(api)).toEqual(["close"]);
+    expect(ids(api)).toEqual(["close", "help"]);
     api["close"]!();
     expect(spies.chatClose).toHaveBeenCalledTimes(1);
     expect(spies.close).not.toHaveBeenCalled(); // NOT the shared close recipe
     unmount();
   });
 
-  it("the chromeless views expose no mnemonic actions", () => {
+  it("the chromeless views expose help alone (their contexts derive nothing else)", () => {
     for (const view of ["palette", "addRepo", "config", "help", "main"] as const) {
       const { api, unmount } = mount({ view });
-      expect(ids(api)).toEqual([]);
+      expect(ids(api)).toEqual(["help"]);
+      unmount();
+    }
+  });
+
+  // Ruling R5 (spec 2026-09-02 §3.2): `?` is help EVERYWHERE, so every arm of
+  // this hook must dispatch it — the overlays' keymaps all carry the hidden
+  // reserved `?`, and a missing handler would leave both the key and the
+  // pinned footer chip silently inert on that one view.
+  it("every view arm dispatches help through App's openHelp", () => {
+    for (const view of [
+      "detail",
+      "prDetail",
+      "repoDetail",
+      "prs",
+      "cmdOutput",
+      "transcript",
+      "review",
+      "chat",
+      "palette",
+      "addRepo",
+      "config",
+      "help",
+      "main",
+    ] as const) {
+      const { api, spies, unmount } = mount({ view });
+      expect(Object.keys(api), view).toContain("help");
+      api["help"]!();
+      expect(spies.openHelp, view).toHaveBeenCalledTimes(1);
       unmount();
     }
   });
@@ -327,7 +357,7 @@ describe("useViewActions — review", () => {
     open: { kind: "chatDraft", idx: 0 },
   };
 
-  it("exposes the eight review ids", () => {
+  it("exposes the eight review ids plus help", () => {
     const { api, unmount } = mount({ view: "review", reviewState: openBatch });
     expect(ids(api)).toEqual([
       "all",
@@ -335,6 +365,7 @@ describe("useViewActions — review", () => {
       "discard",
       "edit",
       "file",
+      "help",
       "none",
       "route",
       "submit",

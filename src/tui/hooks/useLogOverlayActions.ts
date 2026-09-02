@@ -7,6 +7,10 @@ export interface LogOverlayActionsInput {
   /** The shared close recipe — App owns it because the overlay is only one of
    * the surfaces it closes (see App's `closeSurface`). */
   close: () => void;
+  /** App's help opener (Ruling R5, spec 2026-09-02 §3.2): records WHICH
+   * surface the modal was opened from so any-key close returns there and the
+   * modal lists that surface's own keys. */
+  openHelp: () => void;
   logEntries: LogEntry[];
   logFilters: LogFilters;
   logFollow: boolean;
@@ -25,6 +29,7 @@ export interface LogOverlayActionsInput {
  */
 export function useLogOverlayActions({
   close,
+  openHelp,
   logEntries,
   logFilters,
   logFollow,
@@ -35,6 +40,9 @@ export function useLogOverlayActions({
   return useMemo(
     () => ({
       close,
+      // Ruling R5: the overlay owns ALL input while open (App's layer 3b),
+      // so `?` only reaches help if this arm carries it.
+      help: openHelp,
       follow: () => {
         // Pause lands at the tail first (toEnd) so the paused window shows
         // the newest lines, not a jump to the top.
@@ -53,6 +61,6 @@ export function useLogOverlayActions({
         setLogFilters((f) => ({ ...f, ticket: opts[(idx + 1) % opts.length] }));
       },
     }),
-    [close, logEntries, logFilters.ticket, logFollow, setLogFilters, setLogFollow, toEnd],
+    [close, openHelp, logEntries, logFilters.ticket, logFollow, setLogFilters, setLogFollow, toEnd],
   );
 }

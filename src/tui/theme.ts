@@ -11,6 +11,10 @@ export const theme = {
   warn: "yellow",
   error: "red",
   info: "cyan",
+  /** Footer structural keycaps (spec 2026-09-02 §3.4): muted fill, default fg. */
+  keycapBg: "#3b4261",
+  /** Text on the accent-filled chat pill — the dark terminal ground. */
+  pillFg: "#16161e",
 } as const;
 
 export type ToastKind = "info" | "success" | "error";

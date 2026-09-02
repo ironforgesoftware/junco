@@ -28,15 +28,15 @@ const maxLinesPerFunction = (max) => [
  * once the work named in its comment lands.
  */
 const GRANDFATHERED_FUNCTION_LINES = [
-  // `App` (1,913): #350 moved the action handlers out into src/tui/hooks/; what
+  // `App` (1,883): #350 moved the action handlers out into src/tui/hooks/; what
   // is left is the nav spine plus the render body, whose section-by-section
-  // extraction is still open under the sweep tracker #387. +87 over the 1,826
-  // it measured at after the chat draft review surface landed, for the chat
-  // VIEW spine (spec 2026-09-01 §8): the useChat/useChatInput calls, the
-  // binding-context branch (now pane-scoped, Ruling R27), the scroll key +
-  // crumbs, the rail-switch effect and its badge, and the render branch. The
-  // cascade, the verbs and the slash router live in hooks/useChatInput.ts.
-  { file: "src/tui/App.tsx", max: 1913 },
+  // extraction is still open under the sweep tracker #387. −30 from the 1,913
+  // the chat VIEW spine left it at: the footer/binding derivation (the
+  // binding-context switch, the two buildContextBindings memos and the footer
+  // rows) moved to hooks/useFooterBindings.ts (footer redesign 2026-09-02,
+  // Task 4). The cascade, the verbs and the slash router live in
+  // hooks/useChatInput.ts.
+  { file: "src/tui/App.tsx", max: 1883 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

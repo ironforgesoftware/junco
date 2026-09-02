@@ -37,8 +37,10 @@ function mount(overrides: Partial<LogOverlayActionsInput> = {}) {
   const setLogFilters = vi.fn();
   const setLogFollow = vi.fn();
   const toEnd = vi.fn();
+  const openHelp = vi.fn();
   const input: LogOverlayActionsInput = {
     close,
+    openHelp,
     logEntries: [],
     logFilters: FILTERS,
     logFollow: true,
@@ -49,13 +51,26 @@ function mount(overrides: Partial<LogOverlayActionsInput> = {}) {
   };
   let api!: Record<string, () => void>;
   const r = render(<Probe input={input} onReady={(a) => (api = a)} />);
-  return { api, spies: { close, setLogFilters, setLogFollow, toEnd }, unmount: r.unmount };
+  return {
+    api,
+    spies: { close, setLogFilters, setLogFollow, toEnd, openHelp },
+    unmount: r.unmount,
+  };
 }
 
 describe("useLogOverlayActions", () => {
-  it("exposes exactly the overlay's four action ids", () => {
+  it("exposes exactly the overlay's action ids, help included", () => {
     const { api, unmount } = mount();
-    expect(Object.keys(api).sort()).toEqual(["close", "follow", "level", "ticket"]);
+    expect(Object.keys(api).sort()).toEqual(["close", "follow", "help", "level", "ticket"]);
+    unmount();
+  });
+
+  // Ruling R5: `?` opens help from the log overlay too — the overlay owns all
+  // input while open (App's layer 3b), so its own arm has to carry the verb.
+  it("help defers to App's openHelp", () => {
+    const { api, spies, unmount } = mount();
+    api["help"]?.();
+    expect(spies.openHelp).toHaveBeenCalledTimes(1);
     unmount();
   });
 

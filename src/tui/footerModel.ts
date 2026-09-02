@@ -61,8 +61,9 @@ const GO_IDS: ReadonlySet<string> = new Set(["queue", "review", "prs"]);
  * reserved `help` (`?`) alongside `close` (`q`) now, so `main` naturally
  * yields [help, quit] (no `close` entry there) and overlays naturally yield
  * [help, close] (no `quit` entry there) from the SAME filter — no
- * synthesis needed. `?` has no dispatch handler in overlays yet (Tasks 3+4
- * carry it), so the pinned chip renders but is inert there for now. */
+ * synthesis needed. Dispatch for `?` in overlays lands in every arm of
+ * hooks/useViewActions.ts + useLogOverlayActions.ts (App's `openHelp`), so
+ * the pinned chip is live — by key and by click — everywhere it renders. */
 const PINNED_IDS = ["help", "quit", "close"];
 function fromMnemonic(d: DerivedMnemonic): FooterChip {
   return {

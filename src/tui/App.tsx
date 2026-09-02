@@ -42,7 +42,7 @@ import {
   DaemonSection,
   truncStart,
 } from "./components/sections.js";
-import { buildContextBindings, type BindingContext } from "./viewActions.js";
+import type { BindingContext } from "./viewActions.js";
 import type { AssessHistory } from "../assessHistory.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
@@ -93,6 +93,7 @@ import { useChatDrafts } from "./hooks/useChatDrafts.js";
 import { useChatInput } from "./hooks/useChatInput.js";
 import { useSuspend } from "./useSuspend.js";
 import { useMainActions, type LocalRow } from "./hooks/useMainActions.js";
+import { useFooterBindings } from "./hooks/useFooterBindings.js";
 import { summarizeUnwatchPlan } from "./unwatchSummary.js";
 // Type-only: unwatchCmd is a pure module, but the dashboard drives it through
 // the CLI (spawned), never in-process — nothing here may pull it into the bundle.
@@ -1329,68 +1330,40 @@ export function App(props: AppProps): React.JSX.Element {
   const chats = health?.chats ?? null;
   const chatBadge = useCallback((key: string) => chatBadgeFor(chats, key), [chats]);
 
-  // ── Derived-mnemonic bindings (mnemonic spec §2/§4): ONE context table
-  // drives the footer chips, the help modal, and the keyboard dispatch tail —
-  // render and input consume the same derivation and cannot drift. ──
-  const bindingContext: BindingContext = useMemo((): BindingContext => {
-    if (logOverlay) return { kind: "logOverlay" };
-    if (filtering) return { kind: "structuralOnly", view: "filtering" };
-    // A focused composer derives NOTHING (spec §8.3): the empty keymap is
-    // what keeps typed prose off the mnemonic dispatch at layer 3d.
-    if (view === "chat")
-      return composerFocused
-        ? { kind: "structuralOnly", view: "chatCompose" }
-        : { kind: "view", view: "chat" };
-    switch (view) {
-      case "help":
-      case "palette":
-      case "addRepo":
-      case "config":
-        return { kind: "structuralOnly", view };
-      case "detail":
-      case "repoDetail":
-      case "prs":
-      case "prDetail":
-      case "review":
-      case "cmdOutput":
-      case "transcript":
-        return { kind: "view", view };
-      case "main":
-        return {
-          kind: "main",
-          pane,
-          body:
-            body?.kind === "issues"
-              ? "issues"
-              : body?.kind === "section"
-                ? body.section
-                : "repoDetail",
-        };
-    }
-  }, [logOverlay, filtering, view, composerFocused, body, pane]);
-  const bindings = useMemo(
-    () => buildContextBindings(bindingContext, layout.mode),
-    [bindingContext, layout.mode],
-  );
-  // Help opens over the MAIN view only; the modal lists the bindings of the
-  // surface underneath it (the help context itself derives nothing).
-  const helpBindings = useMemo(
-    () =>
-      buildContextBindings(
-        {
-          kind: "main",
-          pane,
-          body:
-            body?.kind === "issues"
-              ? "issues"
-              : body?.kind === "section"
-                ? body.section
-                : "repoDetail",
-        },
-        layout.mode,
-      ),
-    [body, pane, layout.mode],
-  );
+  // ── Derived-mnemonic bindings + the two footer rows (mnemonic spec §2/§4,
+  // footer spec 2026-09-02 §6): ONE context table drives the footer, the help
+  // modal and the keyboard dispatch tail — render and input consume the same
+  // derivation and cannot drift. hooks/useFooterBindings.ts owns the whole
+  // derivation; App only feeds it the nav spine. ──
+  // WHERE `?` was pressed (Ruling R5, spec §3.2 — `?` is help from every
+  // overlay): the view any-key close returns to, and the context whose keys
+  // the modal lists. Both are written in `openHelp` immediately before the
+  // setView that re-renders us, so the render that first shows the modal
+  // always reads the values belonging to THIS open.
+  const helpFrom = useRef<View>("main");
+  const helpCtx = useRef<BindingContext | null>(null);
+  const {
+    bindingContext,
+    bindings,
+    helpBindings,
+    footer: footerRows,
+  } = useFooterBindings({
+    view,
+    pane,
+    body,
+    logOverlay,
+    filtering,
+    composerFocused,
+    mode: layout.mode,
+    target: crumbs[crumbs.length - 1] ?? "",
+    chatReachable: currentRepoKey !== null,
+    helpContext: helpCtx.current,
+  });
+  const openHelp = useCallback((): void => {
+    helpFrom.current = view;
+    helpCtx.current = bindingContext;
+    setView("help");
+  }, [view, bindingContext]);
 
   // The shared close recipe. WHICH surface `q`/esc closes depends on what is
   // open, so it stays here (App owns the nav spine) and is handed to both
@@ -1431,6 +1404,7 @@ export function App(props: AppProps): React.JSX.Element {
   // this composition picks between them exactly as the old switch did. ──
   const logOverlayActions = useLogOverlayActions({
     close: closeSurface,
+    openHelp,
     logEntries,
     logFilters,
     logFollow,
@@ -1441,6 +1415,7 @@ export function App(props: AppProps): React.JSX.Element {
   const viewActions = useViewActions({
     view,
     close: closeSurface,
+    openHelp,
     client,
     aliveRef,
     showToast,
@@ -1476,6 +1451,7 @@ export function App(props: AppProps): React.JSX.Element {
     currentRepoKey,
     openChat,
     openIssueTranscript,
+    openHelp,
     currentIssue,
     currentRepo,
     selectedPane3Pr,
@@ -1609,7 +1585,7 @@ export function App(props: AppProps): React.JSX.Element {
   // keyboard-only). Everything else: no-op.
   const onMouseMiss = useMemo(() => {
     if (confirm !== null) return null;
-    if (view === "help") return () => setView("main");
+    if (view === "help") return () => setView(helpFrom.current);
     if (view === "palette") return () => setView("main");
     if (view === "addRepo") return () => setView("main");
     return null;
@@ -1775,6 +1751,14 @@ export function App(props: AppProps): React.JSX.Element {
     // layer 3 — toast dismissal for every branch below the modal layers.
     dismissToast();
 
+    // layer 3a — help is any-key-close, and it sits AHEAD of the overlay and
+    // view branches: `?` opens it from the log overlay too (Ruling R5), and
+    // layer 3b below would otherwise swallow every key under the modal.
+    if (view === "help") {
+      setView(helpFrom.current); // any key closes, back where it opened
+      return;
+    }
+
     // layer 3b — the full-screen log overlay owns ALL input while open; its
     // filter/follow/scroll keys never leak to the view underneath.
     if (logOverlay) {
@@ -1792,14 +1776,12 @@ export function App(props: AppProps): React.JSX.Element {
     // layer 3d — derived-mnemonic dispatch (mnemonic spec §4). The keymap
     // never contains structural keys, and every text-owning context
     // (filtering/palette/addRepo/config) is structuralOnly with an EMPTY
-    // keymap, so this sits safely ahead of the view branches. Help stays
-    // any-key-close because its context derives nothing either.
-    if (view !== "help") {
-      const actionId = bindings.keymap.get(input);
-      if (actionId !== undefined) {
-        actionHandlers[actionId]?.();
-        return;
-      }
+    // keymap, so this sits safely ahead of the view branches. Help never
+    // reaches here — layer 3a returned already.
+    const actionId = bindings.keymap.get(input);
+    if (actionId !== undefined) {
+      actionHandlers[actionId]?.();
+      return;
     }
 
     // layer 4 ── the view cascade ──
@@ -1810,11 +1792,6 @@ export function App(props: AppProps): React.JSX.Element {
     // recipes live in hooks/useChatInput.ts; the s/e/D/r/t/f/q mnemonics have
     // already dispatched at layer 3d above.
     if (handleChatKey(input, key)) return;
-
-    if (view === "help") {
-      setView("main"); // any key closes
-      return;
-    }
 
     if (view === "repoDetail") {
       if (key.escape) return void setView("main");
@@ -2373,7 +2350,7 @@ export function App(props: AppProps): React.JSX.Element {
         />
       }
       toast={toast}
-      chips={bindings.chips}
+      footer={footerRows}
       chipActions={chipActions}
       modal={modal}
       modalAlign={view === "help" ? "top" : "center"}

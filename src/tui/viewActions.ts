@@ -141,10 +141,10 @@ const BODY_VERBS: Record<MainBody, MnemonicOption[]> = {
 
 /** Every overlay carries a hidden reserved q → close (esc stays structural)
  * and, per Ruling R5 (spec 2026-09-02 §3.2 — `?` is help everywhere except
- * the help modal itself), a hidden reserved `?` → help. Dispatch for `?` in
- * overlays is NOT wired here — Tasks 3+4 carry it — so the key is inert for
- * now; this table entry only makes the footer's pinned "? help" chip real
- * instead of a footerModel.ts-side fabrication. */
+ * the help modal itself), a hidden reserved `?` → help. This table entry is
+ * what makes the footer's pinned "? help" chip real instead of a
+ * footerModel.ts-side fabrication; the handler behind it is `openHelp`, which
+ * every arm of hooks/useViewActions.ts exposes under that id. */
 const OVERLAY_RESERVED: ReadonlyMap<string, string> = new Map([
   ["close", "q"],
   ["help", "?"],

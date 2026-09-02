@@ -35,6 +35,14 @@ function StoreTap({ tap }: { tap: { store: MouseStore | null } }): null {
 const lineOf = (frame: string, needle: string): number =>
   frame.split("\n").findIndex((l) => l.includes(needle));
 
+// The footer is two rows now (spec 2026-09-02 §3): mnemonic chips (the verbs)
+// live on the ACTIONS row, structural ones (⏎ / ← / ↑↓ …) on the NAVIGATE row
+// below it. Both are always the frame's last two lines — layout.ts still
+// budgets CHROME_ROWS=3, the toast having moved into the actions row.
+const actionsY = (frame: string): number => frame.split("\n").length - 2;
+const navigateY = (frame: string): number => frame.split("\n").length - 1;
+const rowAt = (frame: string, y: number): string => frame.split("\n")[y] ?? "";
+
 describe("mouse row/wheel on the issues surface", () => {
   it("clicking an issue row selects it; clicking again opens the detail", async () => {
     const r = renderApp(); // fixture seeds ≥2 issues
@@ -265,32 +273,76 @@ describe("review view: mouse", () => {
 describe("footer chips: mouse", () => {
   it("footer chip: clicking the 'queue' mnemonic jumps to the queue row and focuses its body", async () => {
     const r = renderApp();
-    // Mount lands on pane 1 (rail), whose chip row carries the bare "queue"
+    // Mount lands on pane 1 (rail), whose ACTIONS row carries the bare "queue"
     // label (mnemonic char colored — invisible in stripped frames).
-    await until(() => ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("queue"));
+    await until(() => rowAt(r.lastFrame() ?? "", actionsY(r.lastFrame() ?? "")).includes("queue"));
     const f = r.lastFrame() ?? "";
-    const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("queue");
-    // fireUntil: a press racing the region registry re-sends; the t action is
+    const y = actionsY(f);
+    const x = rowAt(f, y).indexOf("queue");
+    // fireUntil: a press racing the region registry re-sends; the action is
     // idempotent (re-selecting the queue row is a no-op).
-    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("running"));
-    // The chip parked the cursor on the queue system row + focused its body.
-    // Clicking the OLD "back" structural chip to return to the rail is Task
-    // 3's to restore (see docs/superpowers/plans dated 2026-09-02, footer
-    // redesign): footerModel.ts now owns that hint (design spec section 3.2)
-    // and the OLD Footer here no longer renders — or makes clickable — any
-    // main-view structural chip until the new Footer is wired in.
+    await fireUntil(r.stdin, press(x, y), () => (r.lastFrame() ?? "").includes("running"));
+    // The chip parked the cursor on the queue system row + focused its body,
+    // whose navigate row is the queue vocabulary (⏎ transcript · ← rail).
+    await until(() =>
+      /⏎ {2}transcript/.test(rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""))),
+    );
   });
 
-  // Removed (footer redesign Task 2): clicked pane 3's structural "enter
-  // detail" chip, which lived in viewActions.ts's now-deleted mainStructural.
-  // footerModel.ts's pure model owns that hint now (tests/footerModel.test.ts
-  // pins pane 3's structural enter/detail pairing), and the same navigation
-  // is still covered via the keyboard in tests/tuiApp.test.tsx's "enter in
-  // pane 3 opens the prDetail overlay" test — but the CLICK is only
-  // restorable once Task 3 wires buildFooterRows into Chrome.tsx's Footer
-  // (its own tuiChrome.test.tsx already covers clicking a chipActions entry
-  // by id or key).
+  // Restored with Task 3's two-row Footer (Ruling R4): the navigate row
+  // renders pane 3's structural `⏎ detail` again, and App's
+  // structuralChipActions keys structural chips by their KEY string — which IS
+  // FooterChip.id — so the click runs the very recipe enter does.
+  it("pane 3 focused: the '⏎ detail' chip opens the PR overlay, not the issue detail", async () => {
+    // One junco PR for the selected repo so pane 3 has a selected row.
+    const pr = {
+      number: 100,
+      title: "Some PR",
+      url: "https://github.com/acme/api/pull/100",
+      headRefName: "junco/some-slug",
+      baseRefName: "main",
+      isDraft: false,
+      state: "OPEN",
+      reviewDecision: null,
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+      checks: { pass: 1, fail: 0, pending: 0, total: 1 },
+      additions: 10,
+      deletions: 2,
+      changedFiles: 3,
+      createdAt: "2026-07-05T10:00:00Z",
+      updatedAt: "2026-07-06T10:00:00Z",
+      mergedAt: null,
+      author: "junco-bot",
+      labels: [],
+      nwo: "acme/api",
+    };
+    const client = {
+      ...stubClient,
+      listPrs: async (nwo: string) => okv({ prs: nwo === "acme/api" ? [pr] : [], staleAt: null }),
+    };
+    const r = renderApp({ client });
+    await until(() => (r.lastFrame() ?? "").includes("#100")); // PR row loaded in pane 3
+    r.stdin.write("\u001b[C"); // → pane 2
+    r.stdin.write("\u001b[C"); // → pane 3 (wide layout)
+    // Pane 3's rows: `⏎ detail` on the navigate row (pane 1 has it too, but
+    // pane 1's ACTIONS row carries "add repo" and pane 3's never does; pane 2
+    // says `⏎ preview` instead), so the pair identifies pane 3 exactly.
+    await until(() => {
+      const f = r.lastFrame() ?? "";
+      return (
+        !rowAt(f, actionsY(f)).includes("add repo") && /⏎ {2}detail/.test(rowAt(f, navigateY(f)))
+      );
+    });
+    const f = r.lastFrame() ?? "";
+    const y = navigateY(f);
+    const x = rowAt(f, y).search(/⏎ {2}detail/);
+    // Landing opens the PR overlay (unmounts the chip row's main-view set, so
+    // the retry self-terminates); the issue-detail overlay would say
+    // "preview · #1" instead — assert the PR one specifically.
+    await fireUntil(r.stdin, press(x, y), () => (r.lastFrame() ?? "").includes("pr · #100"));
+    expect(r.lastFrame() ?? "").not.toContain("preview · #");
+  });
 
   it("pane 1 (mount default): the 'o browser' chip opens the REPO, never the selected issue", async () => {
     let repoOpens = 0;
@@ -309,9 +361,9 @@ describe("footer chips: mouse", () => {
     const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("repos"));
     const f = r.lastFrame() ?? "";
-    const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("browser"); // pane-1 chip row at mount
-    await fireUntil(r.stdin, press(x, footerY), () => repoOpens === 1); // counted-once = idempotent-safe
+    const y = actionsY(f);
+    const x = rowAt(f, y).indexOf("browser"); // pane-1 actions row at mount
+    await fireUntil(r.stdin, press(x, y), () => repoOpens === 1); // counted-once = idempotent-safe
     expect(repoOpens).toBe(1);
     expect(issueOpens).toBe(0); // the old flat map would have opened the issue here
   });
@@ -330,9 +382,9 @@ describe("footer chips: mouse", () => {
     r.stdin.write("l"); // pane 2 — the only chip row carrying "investigate"
     await until(() => (r.lastFrame() ?? "").includes("investigate"));
     const f = r.lastFrame() ?? "";
-    const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("investigate");
-    await fireUntil(r.stdin, press(x, footerY), () => analyzeCalls === 1); // counted-once = idempotent-safe
+    const y = actionsY(f);
+    const x = rowAt(f, y).indexOf("investigate");
+    await fireUntil(r.stdin, press(x, y), () => analyzeCalls === 1); // counted-once = idempotent-safe
     expect(analyzeCalls).toBe(1);
     // The keyboard recipe's success toast lands once the stubbed promise
     // resolves — same copy, proving the chip ran the verbatim branch.
