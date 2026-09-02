@@ -46,6 +46,8 @@ import { outboxDepth, flushOutbox, type FlushResult } from "./githubOutbox.js";
 import { sweepDependencies } from "./ticketDeps.js";
 import { detectSplitQueue, type SplitQueueFinding } from "./splitQueue.js";
 import { ChatManager } from "./chat/chatManager.js";
+import { makeTurnHook } from "./chat/chatDrafts.js";
+import { draftsParkedFor } from "./chat/draftStore.js";
 import { makeChatRoutes } from "./chat/chatRoutes.js";
 import type { ChatSessionDeps } from "./chat/chatSession.js";
 
@@ -841,6 +843,8 @@ export async function mainLoop(
       gate,
       spend,
       session: deps.chatSessionDeps,
+      onTurnComplete: makeTurnHook(activeCfg),
+      draftsParkedFor: (slug) => draftsParkedFor(activeCfg(), slug),
     });
 
   // Health endpoint (optional). A start failure must NOT crash the daemon — we

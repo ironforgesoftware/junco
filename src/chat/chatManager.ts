@@ -55,13 +55,15 @@ export interface ChatManagerDeps {
   spend: Pick<SpendLedger, "recordUsd" | "todayUsd" | "nextMidnightMs">;
   resolveCwd?: typeof resolveChatCwd;
   session?: ChatSessionDeps;
-  /** Task 11 (draft parking) attaches here; best-effort — a throw never fails
-   *  the turn the operator just ran. */
+  /** Draft parking (chatDrafts.ts) attaches here; best-effort — a throw never
+   *  fails the turn the operator just ran. A returned `followUp` is the ONE
+   *  automatic lint retry (spec §6.3): prompt() sends it back with
+   *  `source: "auto_lint"`, and only ever off an `operator` turn. */
   onTurnComplete?: (
     session: ChatSession,
     result: ChatTurnResult,
     source: "operator" | "auto_lint",
-  ) => Promise<void>;
+  ) => Promise<{ followUp?: string } | void>;
   draftsParkedFor?: (slug: string) => number;
   abortGraceMs?: number;
   now?: () => number;
@@ -190,14 +192,22 @@ export class ChatManager {
       const cls = classifyProviderFailure(result.errorMessage);
       if (GATE_CLASSES.has(cls)) this.deps.gate.reportFailure(cls, result.errorMessage);
     }
+    let followUp: string | undefined;
     if (this.deps.onTurnComplete) {
       try {
-        await this.deps.onTurnComplete(session, result, source);
+        const r = await this.deps.onTurnComplete(session, result, source);
+        followUp = r && "followUp" in r ? r.followUp : undefined;
       } catch (e) {
         log.warn("chat onTurnComplete threw; ignoring", {
           error: e instanceof Error ? e.message : String(e),
         });
       }
+    }
+    // Spec §6.3: exactly one automatic lint follow-up, never chained — the
+    // `operator` guard is what makes that hold no matter what the hook returns
+    // off the retry turn.
+    if (followUp !== undefined && source === "operator") {
+      await this.prompt(key, followUp, { source: "auto_lint" });
     }
     return { ok: true, value: { mode: "prompt" } };
   }

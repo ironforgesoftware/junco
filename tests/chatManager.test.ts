@@ -264,6 +264,22 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     expect(typeof note.ts).toBe("string");
   });
 
+  it("sends the hook's followUp once, as source auto_lint, and never chains a second one", async () => {
+    const seen: string[] = [];
+    const { m } = setup(
+      {
+        onTurnComplete: async (_s, _r, src) => {
+          seen.push(src);
+          return src === "operator" ? { followUp: "fix the lint" } : undefined;
+        },
+      },
+      [chatScriptText("first"), chatScriptText("second")],
+    );
+    await m.prompt("acme/api", "hello");
+    expect(seen).toEqual(["operator", "auto_lint"]);
+    expect(m.health().turns).toBe(2);
+  });
+
   it("drain aborts every streaming session and ends every subscriber", async () => {
     const { m } = setup({}, [{ events: [], delayMs: 10_000 }]);
     const ends: string[] = [];
