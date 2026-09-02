@@ -11,6 +11,7 @@ import { lintTicket, formatViolations, type LintViolation } from "../planLint.js
 import { decideRoute, type PreflightDeps, type RouteDecision } from "../submitPreflight.js";
 import { parsePlanSet } from "../planCompiler.js";
 import type { ReviewStoreDeps } from "../reviewStore.js";
+import { slugifyId } from "../slug.js";
 import type { ChatManagerDeps } from "./chatManager.js";
 import type { ChatSession } from "./chatSession.js";
 import { extractDrafts, type ExtractedDraft } from "./fenceExtract.js";
@@ -102,7 +103,19 @@ async function lintFiles(
       );
       route = await routeFn(cfg, t.frontmatter, routeDeps);
     }
-    files.push({ name: f.name, content: f.content, lint, route, droppedKeys: f.droppedKeys });
+    // Slugify ONCE, here: the stored name IS the on-disk name. The extracted
+    // name is `<model-authored frontmatter id>.md`, so `id: fix login bug`
+    // arrives as "fix login bug.md" — draftStore's own slugify would then
+    // write a path the JSON does not name (and two ids differing only in
+    // slug-collapsed characters would collide onto one file). draftFilePath
+    // keeps its slugify as defence; on these names it is a no-op.
+    files.push({
+      name: slugifyId(f.name),
+      content: f.content,
+      lint,
+      route,
+      droppedKeys: f.droppedKeys,
+    });
   }
   return files;
 }
@@ -168,7 +181,11 @@ export function makeTurnHook(
   cfg: () => Config,
   deps: ParkDeps = {},
 ): NonNullable<ChatManagerDeps["onTurnComplete"]> {
-  const pendingRetry = new Map<string, string>(); // slug → failed draft id awaiting its retry
+  // slug → EVERY failed draft id from that turn. One turn can emit several
+  // failing fences (a junco-ticket AND a junco-plan), and the retry replaces
+  // all of them — remembering only the first would strand the rest as phantom
+  // lint_failed cards.
+  const pendingRetry = new Map<string, string[]>();
   return async (session, result, source) => {
     if (result.mode !== "prompt" || result.status !== "ok") return;
     const c = cfg();
@@ -183,7 +200,7 @@ export function makeTurnHook(
     if (source === "auto_lint" && previous !== undefined) {
       // The rejected first attempt is REMOVED, not archived: it was never a
       // card the operator saw, and its retry is on disk now.
-      removeChatDraft(c, previous);
+      for (const id of previous) removeChatDraft(c, id);
       pendingRetry.delete(session.slug);
     }
     for (const d of parked)
@@ -197,7 +214,10 @@ export function makeTurnHook(
       });
     const followUp = lintFollowUp(parked);
     if (followUp !== null && source === "operator") {
-      pendingRetry.set(session.slug, parked.find((d) => d.lintFailed)!.id);
+      pendingRetry.set(
+        session.slug,
+        parked.filter((d) => d.lintFailed).map((d) => d.id),
+      );
       return { followUp };
     }
     return;

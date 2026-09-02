@@ -68,6 +68,11 @@ export function chatDraftsDir(cfg: Config): string {
 export function draftFilesDir(cfg: Config, draftId: string): string {
   return join(chatDraftsDir(cfg), slugifyId(draftId));
 }
+/** Defence in depth: chatDrafts.ts already slugifies `DraftFile.name` at park
+ * time, so the stored name IS this path's last component and the slug here is
+ * a no-op (slugifyId is idempotent). It stays because this function is the
+ * only place a name reaches the filesystem, and a caller that builds a
+ * PendingDraft by hand must not be able to escape the drafts dir. */
 export function draftFilePath(cfg: Config, draftId: string, name: string): string {
   return join(draftFilesDir(cfg, draftId), slugifyId(name));
 }
@@ -84,8 +89,9 @@ export function readChatDraft(
   return store.read(chatDraftsDir(cfg), id, deps);
 }
 
-/** JSON + the files beside it. The files land FIRST: a confirm that reads the
- * JSON can then assume every `files[].name` is already on disk. */
+/** JSON + the files beside it. The files land FIRST, and `files[].name` is
+ * already slug-safe (chatDrafts.ts), so a confirm that reads the JSON can take
+ * `draftFilePath(cfg, id, name)` as the exact byte-identical path on disk. */
 export function writeChatDraft(
   cfg: Config,
   draft: PendingDraft,

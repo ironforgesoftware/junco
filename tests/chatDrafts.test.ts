@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { lintFollowUp, makeTurnHook, parkDrafts } from "../src/chat/chatDrafts.js";
 import { extractDrafts } from "../src/chat/fenceExtract.js";
-import { draftFilePath, listChatDrafts } from "../src/chat/draftStore.js";
+import { draftFilePath, draftFilesDir, listChatDrafts } from "../src/chat/draftStore.js";
 import { ChatSession } from "../src/chat/chatSession.js";
 import type { SessionManagerMode } from "../src/agent/session.js";
 import { makeConfig } from "./helpers/config.js";
@@ -77,6 +77,42 @@ describe("parkDrafts (spec 2026-09-01 §6.2)", () => {
     expect(b!.lintFailed).toBe(true);
     expect(b!.files[0]!.lint.some((v) => v.severity === "error")).toBe(true);
   });
+  it("the stored files[].name IS the on-disk name: slugified once, at park time", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const [d] = await parkDrafts(
+      cfg,
+      sess,
+      extractDrafts("````junco-ticket\n---\nid: fix login bug\n---\n" + CLEAN_BODY + "\n````", ctx),
+      { routeFn: routeInbox },
+    );
+    expect(d!.files[0]!.name).toBe("fix-login-bug.md");
+    // The JSON's name and the written path are the same string — a confirm can
+    // join it onto draftFilesDir and hit the file.
+    expect(existsSync(join(draftFilesDir(cfg, d!.id), "fix-login-bug.md"))).toBe(true);
+    expect(existsSync(draftFilePath(cfg, d!.id, d!.files[0]!.name))).toBe(true);
+    expect(readFileSync(join(draftFilesDir(cfg, d!.id), d!.files[0]!.name), "utf8")).toBe(
+      d!.files[0]!.content,
+    );
+  });
+
+  it("a traversal id cannot escape the draft's files dir", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const [d] = await parkDrafts(
+      cfg,
+      sess,
+      extractDrafts("````junco-ticket\n---\nid: ../../x\n---\n" + CLEAN_BODY + "\n````", ctx),
+      { routeFn: routeInbox },
+    );
+    const name = d!.files[0]!.name;
+    expect(name).not.toContain("/");
+    const written = draftFilePath(cfg, d!.id, name);
+    expect(existsSync(written)).toBe(true);
+    const dir = realpathSync(draftFilesDir(cfg, d!.id));
+    expect(realpathSync(written).startsWith(dir + sep)).toBe(true);
+  });
+
   it("a set's unknown depends_on is a WARNING, never a block; extraction problems are errors", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-park-"));
     const cfg = cfgAt(root);
@@ -223,6 +259,75 @@ describe("lintFollowUp + makeTurnHook (spec 2026-09-01 §6.3)", () => {
       .map((l) => JSON.parse(l) as { type: string; status: string })
       .filter((x) => x.type === "junco_chat_draft");
     expect(recs.map((x) => x.status)).toEqual(["lint_failed", "parked"]);
+  });
+
+  it("a turn with TWO failing fences forgets both on the retry — no phantom card", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const base = cfgAt(root);
+    const cfg = { ...base, planSets: { ...base.planSets, enabled: true } };
+    const fakeSm = async (mode: SessionManagerMode) =>
+      "create" in mode
+        ? { manager: {}, file: join(mode.create.dir, "sdk") }
+        : { manager: {}, file: mode.open.file };
+    const session = new ChatSession(
+      {
+        cfg,
+        key: "acme/api",
+        kind: "watched",
+        cwd: "/repo",
+        nwo: "acme/api",
+        dir: join(root, "data", "chats", "acme__api"),
+      },
+      { makeSessionManager: fakeSm, sessionFactoryFor: () => fakeChatSession([]) },
+    );
+    await session.ensureMeta();
+    const hook = makeTurnHook(() => cfg, { routeFn: routeInbox });
+    const zero = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
+    const run = (text: string, source: "operator" | "auto_lint") =>
+      hook(
+        session,
+        {
+          mode: "prompt",
+          status: "ok",
+          abortReason: null,
+          errorMessage: null,
+          usage: zero,
+          durationMs: 1,
+          finalText: text,
+          allText: text,
+        },
+        source,
+      );
+
+    const badTicket =
+      "````junco-ticket\n---\nid: bad\n---\n# Bad\n\n## Steps\n\n### Step 1 — run the tests\n\n1. cd src && npm test\n````";
+    const badPlan = "```junco-plan\nversion: 1\ntasks: []\n```";
+    const goodTicket = "````junco-ticket\n---\nid: good\n---\n" + CLEAN_BODY + "\n````";
+    const goodPlan = [
+      "```junco-plan",
+      "version: 1",
+      "tasks:",
+      "  - id: seed",
+      "    title: Seed the changelog",
+      "    description: Create the changelog file at the repo root.",
+      "    acceptance:",
+      "      - CHANGELOG.md exists at the repo root.",
+      "```",
+    ].join("\n");
+
+    const r1 = await run(`${badTicket}\n\n${badPlan}`, "operator");
+    expect(r1 && "followUp" in r1 && typeof r1.followUp).toBe("string");
+    const firstIds = listChatDrafts(cfg).map((d) => d.id);
+    expect(firstIds).toHaveLength(2);
+    expect(listChatDrafts(cfg).every((d) => d.lintFailed)).toBe(true);
+
+    await run(`${goodTicket}\n\n${goodPlan}`, "auto_lint");
+    const after = listChatDrafts(cfg);
+    expect(after).toHaveLength(2);
+    expect(after.every((d) => !d.lintFailed)).toBe(true);
+    // Neither original survived — the SECOND one is the phantom card the
+    // single-id map used to strand.
+    for (const id of firstIds) expect(after.map((d) => d.id)).not.toContain(id);
   });
 
   it("a still-failing retry parks lintFailed and returns no further followUp", async () => {
