@@ -9,6 +9,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
+import { bumpRender } from "../renderCount.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { Scrollbar } from "./primitives/Scrollbar.js";
 import { clampScroll, maxScroll } from "../window.js";
@@ -74,6 +75,7 @@ export function bodyWindow(
 export const TranscriptBody = React.memo(function TranscriptBody(
   p: TranscriptBodyProps,
 ): React.JSX.Element {
+  bumpRender("TranscriptBody");
   const { start, end, anchorId } = bodyWindow(p);
   p.onScrollMax?.(maxScroll(p.rows.length, p.visible));
   return (

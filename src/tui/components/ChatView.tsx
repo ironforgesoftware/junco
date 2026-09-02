@@ -93,7 +93,13 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
       for (const l of wrapText(state.liveText, textWidth)) out.push({ text: l });
     return out;
   }, [state.summary, state.showThinking, state.expanded, state.liveText, textWidth]);
-  const anchors = state.summary === null ? [] : anchorIds(state.summary);
+  // Memoized: a fresh array every render would defeat TranscriptBody's
+  // React.memo on almost every ChatView re-render (e.g. a composer
+  // keystroke, which touches state.composer but not state.summary).
+  const anchors = useMemo(
+    () => (state.summary === null ? [] : anchorIds(state.summary)),
+    [state.summary],
+  );
   // Reserved: borders ×2, header, footer, composer.
   const visible = Math.max(1, p.height - 4 - COMPOSER_ROWS);
   const { start, end } = bodyWindow({
