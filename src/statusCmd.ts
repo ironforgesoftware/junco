@@ -16,6 +16,7 @@ import { listHistory } from "./assessHistory.js";
 import { checkForUpdate, type UpdateInfo } from "./updateCheck.js";
 import { readTaskHistory } from "./taskHistory.js";
 import { listWaiting } from "./ticketDeps.js";
+import type { ChatHealth } from "./chat/chatManager.js";
 
 export interface StatusDeps {
   fetchFn?: typeof fetch;
@@ -80,6 +81,10 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
 
   let daemonLine: string;
   let detailLines: string[] = [];
+  // Chat (spec 2026-09-01 §9): only known once /health answers; null when the
+  // fetch fails/throws below (older daemon, or daemon simply not running) —
+  // same "print nothing we can't back up" rule as the gate/bridge lines.
+  let chatHealth: ChatHealth | null = null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? 1500);
   try {
@@ -90,12 +95,14 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
     const body = (await resp.json()) as {
       ready: boolean;
       gate?: { state: string; reason: string | null } | null;
+      chats?: ChatHealth | null;
       metrics: Record<string, unknown> & {
         currentTickets?: string[];
         currentTicket?: string | null;
         pendingRestartFields?: string[];
       };
     };
+    chatHealth = body.chats ?? null;
     const m = body.metrics;
     daemonLine = `running (pid ${m.pid}, up ${fmtUptime(Number(m.uptimeSeconds ?? 0))})`;
     const current = (m.currentTickets ?? (m.currentTicket ? [m.currentTicket] : [])) as string[];
@@ -223,6 +230,22 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
   const drafts = draftCount(cfg);
   if (drafts > 0) {
     print(`investigate review: ${drafts} pending (junco investigate review)\n`);
+  }
+  // Chat (spec 2026-09-01 §9): one line per live session; "disabled" when
+  // off; nothing at all when /health didn't answer or carries no chats field.
+  if (chatHealth != null) {
+    if (!chatHealth.enabled) print(`chat:      disabled\n`);
+    for (const s of chatHealth.sessions) {
+      const bits = [
+        s.key,
+        s.streaming ? "streaming" : "idle",
+        `${s.turns} turn${s.turns === 1 ? "" : "s"}`,
+      ];
+      if (s.draftsParked > 0) {
+        bits.push(`${s.draftsParked} draft${s.draftsParked === 1 ? "" : "s"}`);
+      }
+      print(`chat:      ${bits.join(" · ")}\n`);
+    }
   }
   // npm update nudge (spec 2026-07-16) — best-effort; silent unless newer.
   const update = await (deps.checkUpdateFn ?? ((c: Config) => checkForUpdate(c)))(cfg);

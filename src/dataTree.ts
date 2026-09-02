@@ -57,6 +57,8 @@ const LAYOUTS = {
     history: HISTORY_SUBDIR,
     transcripts: "transcripts",
     plans: "plans",
+    chats: "chats",
+    chatDrafts: "chat-drafts",
     githubCache: "github-cache",
     updateCheck: UPDATE_CHECK_FILENAME,
     spend: "spend.json",
@@ -71,6 +73,8 @@ const LAYOUTS = {
     history: "data/history",
     transcripts: "data/transcripts",
     plans: "data/plans",
+    chats: "data/chats",
+    chatDrafts: "data/chat-drafts",
     githubCache: "cache/github-cache",
     updateCheck: "cache/update-check.json",
     spend: "data/spend.json",
@@ -93,6 +97,8 @@ export interface DataTreePaths {
   history: string; // per-task finalize records (tasks-YYYY-MM.jsonl shards)
   transcripts: string;
   plans: string;
+  chats: string; // per-repo chat sessions: <slug>/{meta.json,transcript.jsonl,<sdk session>} (spec 2026-09-01)
+  chatDrafts: string; // parked chat drafts (makeReviewStore) + submitted/ discarded/ archives
   skills: string; // <root>/skills symlink mount -> packaged skills/ (skillLinks.ts owns it)
   watchlistFile: string;
   updateCheckFile: string; // npm update-check cache (spec 2026-07-16)
@@ -170,6 +176,8 @@ export function dataTreePaths(cfg: Config): DataTreePaths {
     history: join(r, L.history),
     transcripts: join(r, L.transcripts),
     plans: join(r, L.plans),
+    chats: join(r, L.chats),
+    chatDrafts: join(r, L.chatDrafts),
     skills: join(r, "skills"),
     watchlistFile: join(r, WATCHLIST_FILENAME),
     updateCheckFile: join(r, L.updateCheck),
@@ -344,6 +352,10 @@ export function sandboxDenyPaths(
         p.plans,
         p.history,
         p.assessHistory,
+        // Chat session store (SDK session files hold the whole conversation)
+        // and parked drafts — never agent-readable (spec 2026-09-01 §1.1).
+        p.chats,
+        p.chatDrafts,
         p.logsDir,
         // Re-denied inside the cache/ allow-back (v2). Under flat both sit
         // directly at the root with no allow-back over them, so these two are
@@ -449,6 +461,11 @@ export function ensureDataTree(cfg: Config, deps: EnsureDataTreeDeps = {}): void
     p.history,
     p.transcripts,
     p.plans,
+    // Chat (spec 2026-09-01 §1.1): both are deny targets, so both are eager —
+    // the same bwrap "absent deny is skipped" reason githubCache is above.
+    p.chats,
+    join(p.chatDrafts, "submitted"),
+    join(p.chatDrafts, "discarded"),
     p.logsDir, // v2: <root>/logs — flat: join(root, ".") normalizes to root, a mkdir no-op
   ];
   for (const d of dirs) mkdirFn(d);

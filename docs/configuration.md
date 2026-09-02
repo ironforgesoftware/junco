@@ -322,6 +322,47 @@ On a hit the push is refused: the ticket fails, the worktree is **preserved** fo
 }
 ```
 
+## Chat
+
+`chat` configures the dashboard's per-repo chat with the coding agent (press `t` on a repo
+row) — a file-backed Pi session that lives in the **daemon**, not the dashboard process, so it
+survives both a dashboard quit and a daemon restart.
+
+| Key                       | Default | Reload  | Effect                                                                                                                                    |
+| ------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `chat.enabled`            | `true`  | live    | Serve `/chat/*` on the health server and accept new chat turns; existing session state on disk is untouched when off.                     |
+| `chat.modelId`            | unset   | restart | Model id override for chat turns (same resolution machinery as `model.id`); unset falls back to `github.plannerModelId`, then `model.id`. |
+| `chat.thinkingLevel`      | unset   | restart | Thinking level for chat turns; unset falls back to `model.thinkingLevel`.                                                                 |
+| `chat.turnTimeoutMinutes` | unset   | restart | Per-turn timeout for a chat prompt; unset falls back to `worker.defaultTimeoutMinutes` (30).                                              |
+
+```json
+{
+  "chat": {
+    "enabled": true
+  }
+}
+```
+
+Session state lives under the [unified data root](#unified-data-root): one directory per repo
+at `<dataDir>/data/chats/<slug>/` (`meta.json`, the transcript, and the SDK's own session
+file), and parked drafts at `<dataDir>/data/chat-drafts/` — the same `makeReviewStore` idiom
+`audit`/`investigate` findings use. A chat session's tools are the same read-only subset a Q&A
+ticket gets — the hard rule against widening that default applies here too. The chat only ever
+drafts work — it never performs it.
+
+`/chat/*` is **loopback-only regardless of `healthHost`** and rejects any request carrying an
+`Origin` header — there is no additional auth to configure. See [Operations § Health &
+observability](operations.md#health--observability) for the route table. Note the flip side of
+that rule: if `healthHost` is a LAN address rather than a loopback one, even the dashboard on the
+same machine reaches the daemon over that address, so its remote address is not loopback and
+every `/chat/*` request is answered `403` (the pane reads "daemon down"). Keep `healthHost` on
+loopback if you want the chat.
+
+Chat spend is not separate: every completed turn is recorded against the same daily ledger a
+ticket session uses, so `worker.dailyBudgetUsd` (above) caps chat and tickets together, and a
+chat prompt is blocked by the same provider gate a ticket claim would be — see [Operations §
+Provider gate](operations.md#provider-gate).
+
 ## Verification sandbox
 
 `verify.sandboxed` (default `true`) runs a ticket's `## Verification` bash blocks under the same execution sandbox as the agent's own `bash` tool — the ticket's backend and policy (Seatbelt on macOS, bubblewrap on Linux; network per `sandbox.network` and the ticket's `network:` opt-in; writes limited to the worktree, its scratch dir, the linked worktree's git metadata, and `sandbox.extraAllowWrite`; the built-in secret paths denied). The blocks matter because they execute whatever the agent left in the worktree — a `package.json` `scripts.test`, a Makefile target, a `conftest.py`, a test runner's global setup — and the environment scrub alone cannot keep that code away from what lives on disk (`~/.ssh`, the bot account's `gh` credential, every other checkout on the host). Set it to `false` only for a suite that genuinely must leave the sandbox (an integration test that talks to a real service, say), and understand what the opt-out means: **verification runs your repo's code unconfined**, as the daemon user, with the network and the whole filesystem available to it. Prefer the per-ticket `network: true` opt-in when egress is all that's missing. Inert when `sandbox.enabled` is `false` (there is no sandbox to run under), and a live-reload lever.

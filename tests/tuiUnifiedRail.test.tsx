@@ -166,6 +166,16 @@ describe("UnifiedRail", () => {
     expect(line).toContain("▌");
   });
 
+  it("the chat badge renders on its own repo row only (spec 2026-09-01 §8.6)", () => {
+    const f =
+      render(
+        <UnifiedRail {...base} chatBadge={(key) => (key === "acme/api" ? "● 2▣" : null)} />,
+      ).lastFrame() ?? "";
+    const line = f.split("\n").find((l) => l.includes("acme/api")) ?? "";
+    expect(line).toContain("● 2▣");
+    expect(f.split("\n").find((l) => l.includes("scratch")) ?? "").not.toContain("▣");
+  });
+
   it("issue-count badges and assess column render on watched nwo rows", () => {
     const f =
       render(

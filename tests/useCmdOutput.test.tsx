@@ -61,6 +61,32 @@ describe("useCmdOutput", () => {
     r.unmount();
   });
 
+  it("showCmdResult lands a completed result in the cmdOutput view with re-run intact", async () => {
+    const runCliFn = vi.fn(async () => ({ code: 0, output: "", timedOut: false }));
+    const setView = vi.fn();
+    let api!: ReturnType<typeof useCmdOutput>;
+    const r = render(<Probe runCliFn={runCliFn} setView={setView} onReady={(a) => (api = a)} />);
+    api.showCmdResult("submit", ["--as-issue", "/x.md"], {
+      code: 1,
+      output: "refused\n",
+      timedOut: false,
+    });
+    // Gate on the COMMITTED state, not just the (synchronous) setView call —
+    // `api` is re-handed on render, so asserting before the commit reads stale.
+    await until(() => api.cmd?.exitCode === 1);
+    expect(setView.mock.calls.some((c) => c[0] === "cmdOutput")).toBe(true);
+    expect(api.cmd).toMatchObject({
+      title: "junco submit --as-issue /x.md",
+      running: false,
+      exitCode: 1,
+      output: "refused\n",
+      name: "submit",
+      extraArgs: ["--as-issue", "/x.md"],
+    });
+    expect(runCliFn).not.toHaveBeenCalled();
+    r.unmount();
+  });
+
   it("stale-guard: a first run's late resolution does NOT clobber a second (newer) run's state", async () => {
     let resolveFirst!: (r: CliRunResult) => void;
     let resolveSecond!: (r: CliRunResult) => void;

@@ -211,6 +211,55 @@ describe("review view: mouse", () => {
     if (!clickedLine.includes("▌"))
       throw new Error(`finding cursor did not follow the click: ${clickedLine}`);
   });
+
+  // The chat-draft row is the third list (spec 2026-09-01 §8.6); the mouse
+  // recipe must stay identical to the key one (App's reviewRowPress).
+  it("review: click a chat draft row twice to open its preview", async () => {
+    const chatDraft = {
+      id: "acme__api-20260901-1",
+      key: "acme/api",
+      slug: "acme__api",
+      kind: "ticket" as const,
+      files: [
+        {
+          name: "add-cache.md",
+          content: "Cache the index.",
+          lint: [],
+          route: null,
+          droppedKeys: [],
+        },
+      ],
+      cwd: "/repos/acme/api",
+      nwo: "acme/api",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      lintFailed: false,
+      blocked: null,
+      routeOverride: "auto" as const,
+      commandArgs: null,
+    };
+    const client = {
+      ...stubClient,
+      listReview: async () => okv([batch1]),
+      listChatDrafts: async () => okv([chatDraft]),
+    };
+    const r = renderApp({ client });
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("add-cache"));
+    const x = 5;
+    const y = lineOf(r.lastFrame() ?? "", "add-cache");
+    // First press moves the cursor off the batch onto the chat draft row.
+    await fireUntil(
+      r.stdin,
+      press(x, y),
+      () => (r.lastFrame() ?? "").split("\n")[y]?.includes("▌") ?? false,
+    );
+    // Second press opens the preview (which unmounts the list — self-terminating).
+    await fireUntil(r.stdin, press(x, y), () =>
+      (r.lastFrame() ?? "").includes("s submit · e edit · r route"),
+    );
+    expect(r.lastFrame()).toContain("Cache the index.");
+  });
 });
 
 describe("footer chips: mouse", () => {

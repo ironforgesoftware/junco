@@ -9,7 +9,7 @@ import { outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
 import { recordRun } from "../src/assessHistory.js";
-import { WATCHLIST_FILENAME } from "../src/dataTree.js";
+import { dataTreePaths, WATCHLIST_FILENAME } from "../src/dataTree.js";
 import { SKILL_DIR_NAME } from "../src/skillLinks.js";
 import type { Config } from "../src/types.js";
 import type { ResolvedModelInfo } from "../src/agent/session.js";
@@ -47,6 +47,10 @@ const okConfig = {
   // Empty by default — no harness dirs configured, so the 2d skill-links
   // check only ever probes the <dataDir>/skills mount for these fixtures.
   skills: { harnessDirs: [] },
+  // Disabled by default (spec 2026-09-01 §9) — every pre-existing test's
+  // verdict stays untouched by the "chat" check below; the check's own
+  // describe block overrides this to exercise the warn/ok branches.
+  chat: { enabled: false, modelId: null, thinkingLevel: null, turnTimeoutMinutes: null },
 } as unknown as Config;
 
 /** okConfig with the bot account enabled under an isolated GH_CONFIG_DIR. */
@@ -634,6 +638,48 @@ describe("runDoctor", () => {
       }),
     );
     expect(lines.join("")).not.toMatch(/health bind/);
+  });
+});
+
+describe("runDoctor chat check (spec 2026-09-01 §9)", () => {
+  it("chat disabled (okConfig default) → no chat row at all", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toMatch(/\bchat\b/);
+  });
+
+  it("chat enabled, health server off → warns that chat needs it", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      chat: { enabled: true, modelId: null, thinkingLevel: null, turnTimeoutMinutes: null },
+      healthEnabled: false,
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0); // warn-level only — never fails doctor
+    expect(lines.join("")).toMatch(/⚠ chat/);
+    expect(lines.join("")).toMatch(/observability\.healthEnabled/);
+  });
+
+  it("chat enabled, health server on → ok, names the chats dir", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      chat: { enabled: true, modelId: null, thinkingLevel: null, turnTimeoutMinutes: null },
+      healthEnabled: true,
+      healthHost: "127.0.0.1", // loopback — keeps the health-bind check silent
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+    );
+    expect(code).toBe(0);
+    expect(lines.join("")).toMatch(/✓ chat/);
+    expect(lines.join("")).toContain(dataTreePaths(cfg).chats);
   });
 });
 

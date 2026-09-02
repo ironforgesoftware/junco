@@ -63,12 +63,14 @@ describe("summarizeUnwatchPlan", () => {
         { kind: "worktrees", path: "/w/ns" },
         { kind: "inbox-ticket", path: "/q/a.md" },
         { kind: "clone", path: "/c" },
+        { kind: "chat-session", path: "/chats/acme__api" },
+        { kind: "chat-draft", path: "/chat-drafts/d1.json", detail: "d1" },
       ],
     };
     expect(summarizeUnwatchPlan(all)).toBe(
       "Will delete: managed clone · 1 queued ticket(s) · worktrees · 1 outbox op(s) · " +
         "2 pending audit batch(es) · 1 pending comment draft(s) · audit history · mirror · " +
-        "github cache Continue?",
+        "github cache · chat session · 1 pending chat draft(s) Continue?",
     );
   });
 });

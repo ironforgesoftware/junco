@@ -818,6 +818,42 @@ export const LEVERS: Lever[] = [
     description: "Layer-2 compiler cap on tasks per plan set (reserved).",
   },
 
+  // --- chat.* ---
+  {
+    path: "chat.enabled",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "live",
+    description: "Enable the dashboard chat (/chat/* routes on the health server).",
+  },
+  {
+    path: "chat.modelId",
+    type: "string",
+    default: undefined,
+    editable: true,
+    reload: "restart",
+    description:
+      "Chat model id override (same endpoint); unset → github.plannerModelId, then model.id.",
+  },
+  {
+    path: "chat.thinkingLevel",
+    type: "string",
+    default: undefined,
+    editable: true,
+    reload: "restart",
+    description: "Chat thinking level; unset → model.thinkingLevel.",
+  },
+  {
+    path: "chat.turnTimeoutMinutes",
+    type: "number",
+    default: undefined,
+    min: 1,
+    editable: true,
+    reload: "restart",
+    description: "Per-turn chat timeout; unset → worker.defaultTimeoutMinutes.",
+  },
+
   // --- assess.* ---
   {
     path: "assess.maxIssuesPerRun",

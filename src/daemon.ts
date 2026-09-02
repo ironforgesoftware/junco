@@ -48,6 +48,11 @@ import type { TicketReporter } from "./reporter.js";
 import { outboxDepth, flushOutbox, type FlushResult } from "./githubOutbox.js";
 import { sweepDependencies } from "./ticketDeps.js";
 import { detectSplitQueue, type SplitQueueFinding } from "./splitQueue.js";
+import { ChatManager } from "./chat/chatManager.js";
+import { makeTurnHook } from "./chat/chatDrafts.js";
+import { draftsParkedFor } from "./chat/draftStore.js";
+import { makeChatRoutes } from "./chat/chatRoutes.js";
+import type { ChatSessionDeps } from "./chat/chatSession.js";
 
 // ---------------------------------------------------------------------------
 // StopFlag
@@ -331,6 +336,14 @@ export interface MainLoopDeps {
    * finally so the last snapshot is durable even when the loop throws. A
    * write failure never surfaces here — metricsWriter.ts swallows it. */
   metricsWriter?: Pick<MetricsWriter, "write" | "flush">;
+  /** Route builder seam (tests assert the Host allowlist wiring, R12). */
+  makeChatRoutesFn?: typeof makeChatRoutes;
+  /** Dashboard chat (spec 2026-09-01). Absent → mainLoop builds a ChatManager
+   *  over the same gate/spend/activeCfg closures the poll loop uses. Tests
+   *  inject a fake to assert wiring + drain order. */
+  chatManager?: ChatManager;
+  /** Seams for the ChatManager mainLoop builds (fake session factory, fs). */
+  chatSessionDeps?: ChatSessionDeps;
 }
 
 /**
@@ -823,6 +836,20 @@ export async function mainLoop(
     once: Boolean(opts.once),
   });
 
+  // Dashboard chat (spec 2026-09-01 §2.4): idle-cost-free until the first
+  // attach/prompt. Same gate/spend/activeCfg the poll loop uses, so a chat
+  // turn is gated and billed exactly like a ticket claim.
+  const chat =
+    deps.chatManager ??
+    new ChatManager({
+      cfg: activeCfg,
+      gate,
+      spend,
+      session: deps.chatSessionDeps,
+      onTurnComplete: makeTurnHook(activeCfg),
+      draftsParkedFor: (slug) => draftsParkedFor(activeCfg(), slug),
+    });
+
   // Health endpoint (optional). A start failure must NOT crash the daemon — we
   // log a warning and continue headless. The server closes after the loop ends.
   let health: HealthServerHandle | null = null;
@@ -838,6 +865,11 @@ export async function mainLoop(
           todayUsd: spend.todayUsd(),
           dailyBudgetUsd: activeCfg().dailyBudgetUsd,
         }),
+        // allowedHost: the Host allowlist half of the /chat/* boundary (spec
+        // §5.3, R12) admits the configured health host besides the loopback
+        // names, so a dashboard pointed at healthHost is never refused.
+        chat: (deps.makeChatRoutesFn ?? makeChatRoutes)(chat, { allowedHost: cfg.healthHost }),
+        chatStatus: () => chat.health(),
       });
       log.info("health endpoint listening", { url: health.url });
     } catch (e) {
@@ -895,6 +927,16 @@ export async function mainLoop(
       }
     }
   } finally {
+    // Chat drains BEFORE the health server closes (spec 2026-09-01 §2.4):
+    // every streaming turn is soft-aborted and stamped daemon_stopped, and
+    // every SSE subscriber gets its terminal event while the socket is up.
+    try {
+      await chat.drain();
+    } catch (e) {
+      log.warn("chat drain failed; continuing shutdown", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
     // Always tear the health server down, even if the loop throws. It stays up
     // for the whole in-flight task during a graceful shutdown (close runs after
     // the loop exits), but a mid-loop throw must not leak the bound port to an

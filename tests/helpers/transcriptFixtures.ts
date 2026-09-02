@@ -13,6 +13,13 @@
  * from the citations in `src/agent/guardManager.ts`).
  */
 import type {
+  ChatDraftRecord,
+  ChatPromptRecord,
+  ChatSessionResetRecord,
+  ChatTurnAbortedRecord,
+  ChatTurnEndRecord,
+  ChatTurnRejectedRecord,
+  ChatTurnStartRecord,
   GuardDecisionRecord,
   MetaRecord,
   RunEndRecord,
@@ -64,10 +71,12 @@ export const toolEndId = (id: string, name: string, text: string, isError = fals
   });
 
 /** A complete assistant turn_end — thinking/text/toolCall content blocks plus
- * the turn's toolResults, the exact SDK shape the transcript viewer reduces. */
+ * the turn's toolResults, the exact SDK shape the transcript viewer reduces.
+ * `null` (as well as omitted) suppresses a block — some chat fixtures pass
+ * `thinking: null` explicitly to mean "no thinking on this turn". */
 export const turnEndFull = (o: {
-  thinking?: string;
-  text?: string;
+  thinking?: string | null;
+  text?: string | null;
   calls?: { id: string; name: string; args: unknown; result?: string; isError?: boolean }[];
   usage?: { input: number; output: number };
 }): string =>
@@ -76,8 +85,8 @@ export const turnEndFull = (o: {
     message: {
       role: "assistant",
       content: [
-        ...(o.thinking !== undefined ? [{ type: "thinking", thinking: o.thinking }] : []),
-        ...(o.text !== undefined ? [{ type: "text", text: o.text }] : []),
+        ...(o.thinking != null ? [{ type: "thinking", thinking: o.thinking }] : []),
+        ...(o.text != null ? [{ type: "text", text: o.text }] : []),
         ...(o.calls ?? []).map((c) => ({
           type: "toolCall",
           id: c.id,
@@ -148,7 +157,94 @@ export const guardDecision = (overrides: Partial<GuardDecisionRecord> = {}): str
     ...overrides,
   } satisfies GuardDecisionRecord);
 
+// -- chat records (spec 2026-09-01 §1.3) -------------------------------------
+
+export const chatPrompt = (over: Partial<ChatPromptRecord> = {}): string =>
+  j({
+    type: "junco_chat_prompt",
+    text: "why is the build slow?",
+    mode: "prompt",
+    source: "operator",
+    ts: TS,
+    ...over,
+  } satisfies ChatPromptRecord);
+export const chatTurnStart = (over: Partial<ChatTurnStartRecord> = {}): string =>
+  j({
+    type: "junco_chat_turn_start",
+    modelId: "local/m1",
+    tools: ["read", "grep"],
+    timeoutMs: 60_000,
+    ts: TS,
+    ...over,
+  } satisfies ChatTurnStartRecord);
+export const chatTurnEnd = (over: Partial<ChatTurnEndRecord> = {}): string =>
+  j({
+    type: "junco_chat_turn_end",
+    status: "ok",
+    errorClass: null,
+    errorMessage: null,
+    usage: { input: 3, output: 4, cacheRead: 0, total: 7, costUsd: 0.01 },
+    durationMs: 1500,
+    ts: TS,
+    ...over,
+  } satisfies ChatTurnEndRecord);
+export const chatTurnAborted = (over: Partial<ChatTurnAbortedRecord> = {}): string =>
+  j({
+    type: "junco_chat_turn_aborted",
+    reason: "operator",
+    ts: TS,
+    ...over,
+  } satisfies ChatTurnAbortedRecord);
+export const chatTurnRejected = (over: Partial<ChatTurnRejectedRecord> = {}): string =>
+  j({
+    type: "junco_chat_turn_rejected",
+    reason: "rate limited",
+    until: "2026-09-01T18:00:00.000Z",
+    ts: TS,
+    ...over,
+  } satisfies ChatTurnRejectedRecord);
+export const chatDraft = (over: Partial<ChatDraftRecord> = {}): string =>
+  j({
+    type: "junco_chat_draft",
+    draftId: "acme__api-20260901-120000-1",
+    kind: "ticket",
+    status: "parked",
+    ids: ["add-cache"],
+    destination: null,
+    ts: TS,
+    ...over,
+  } satisfies ChatDraftRecord);
+export const chatReset = (over: Partial<ChatSessionResetRecord> = {}): string =>
+  j({
+    type: "junco_chat_session_reset",
+    reason: "corrupt",
+    ts: TS,
+    ...over,
+  } satisfies ChatSessionResetRecord);
+export const compactionStart = (): string => j({ type: "compaction_start", reason: "threshold" });
+export const compactionEnd = (): string =>
+  j({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false });
+
 // -- composite streams -------------------------------------------------------
+
+/** One complete v2 run: meta, frame, a tool call streamed then confirmed by
+ * turn_end — the "existing ticket transcripts render byte-identically"
+ * fixture shared by tests/transcriptSummary.test.ts and
+ * tests/transcriptRender.test.ts (spec 2026-09-01 §1.3's chat work must not
+ * change a single byte of this). */
+export function v2RunLines(): string[] {
+  const CALL = { id: "c1", name: "find", args: { pattern: "*" }, result: "a\nb" };
+  return [
+    metaLine(),
+    runStart({ flow: "assess", modelId: "local/m1", ts: "2026-08-29T01:02:47.000Z" }),
+    agentStart(),
+    toolStartId("c1", "find", { pattern: "*" }),
+    toolEndId("c1", "find", "a\nb"),
+    turnEndFull({ thinking: "hmm", text: "done", calls: [CALL], usage: { input: 10, output: 5 } }),
+    agentEnd(),
+    runEnd({ stopReason: "stop", durationMs: 1234 }),
+  ];
+}
 
 /**
  * `repeats` turns that each run the SAME `bash` call. `ToolCallLoopGuard`'s

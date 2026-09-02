@@ -51,6 +51,11 @@ export interface SdkToolFactories {
     cwd: string;
     agentDir: string;
     noExtensions?: boolean;
+    noSkills?: boolean;
+    noPromptTemplates?: boolean;
+    noThemes?: boolean;
+    noContextFiles?: boolean;
+    appendSystemPromptOverride?: (base: string[]) => string[];
   }) => unknown;
 }
 
@@ -61,6 +66,12 @@ export interface BuildSandboxOpts {
   policy: SandboxPolicy;
   home: string;
   bashDeps?: BashOpsDeps;
+  /** Chat (spec 2026-09-01 §6.5): appended to pi's default system prompt via
+   *  the loader's `appendSystemPromptOverride`. When set, the loader also
+   *  freezes skills/prompt-templates/themes/context-files (noExtensions is
+   *  already unconditional) — a reload then does nothing but resolve the
+   *  prompt, so the SDK's normal ambient discovery never runs. */
+  appendSystemPrompt?: string;
 }
 
 export interface BuildSandboxResult {
@@ -126,7 +137,7 @@ export function buildSandbox(
   factories: SdkToolFactories,
   opts: BuildSandboxOpts,
 ): BuildSandboxResult {
-  const { cwd, toolNames, backend, policy, home, bashDeps } = opts;
+  const { cwd, toolNames, backend, policy, home, bashDeps, appendSystemPrompt } = opts;
   // One lock per session: bash runs exclusive, fs-ops shared, so no bash
   // execution ever overlaps an fs-op's check→syscall window and a compromised
   // agent cannot win a symlink-swap race against the in-process path jail (#159).
@@ -147,6 +158,15 @@ export function buildSandbox(
     cwd,
     agentDir: join(home, ".pi", "agent"),
     noExtensions: true,
+    ...(appendSystemPrompt
+      ? {
+          noSkills: true,
+          noPromptTemplates: true,
+          noThemes: true,
+          noContextFiles: true,
+          appendSystemPromptOverride: () => [appendSystemPrompt],
+        }
+      : {}),
   });
   return { customTools, resourceLoader };
 }

@@ -241,6 +241,31 @@ function lastFencedBlockRange(
   return last;
 }
 
+/** Every COMPLETE ```<fenceTag> block, raw (frontmatter kept — the dashboard
+ * chat allowlists it itself, spec 2026-09-01 §6.1), in document order. Same
+ * opener/closer rules as lastFencedBlockRange. */
+export function allFencedBlocks(text: string, fenceTag: string): string[] {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const openRe = new RegExp("^(`{3,})" + fenceTag + "\\s*$");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = openRe.exec(lines[i]);
+    if (!m) continue;
+    const closeRe = new RegExp("^`{" + m[1].length + ",}\\s*$");
+    let close = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (closeRe.test(lines[j])) {
+        close = j;
+        break;
+      }
+    }
+    if (close === -1) continue;
+    out.push(lines.slice(i + 1, close).join("\n"));
+    i = close;
+  }
+  return out;
+}
+
 /** Pull the LAST complete ```<fenceTag> block out of `text` (planner finalText
  * or a plan comment — same format both places). Any frontmatter block inside
  * the fence is stripped: frontmatter is machine-owned, model output and issue

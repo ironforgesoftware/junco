@@ -432,6 +432,35 @@ describe("healthServer", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Chat status (/health) — dashboard chat (spec 2026-09-01 §5)
+  // -------------------------------------------------------------------------
+
+  it("/health carries `chats` from chatStatus, and /chat/* is 404 without a chat handler", async () => {
+    handle = await startHealthServer({
+      port: 0,
+      metrics: makeFakeMetrics(),
+      chatStatus: () => ({
+        enabled: true,
+        sessions: [],
+        turns: 0,
+        costUsd: 0,
+        tokensIn: 0,
+        tokensOut: 0,
+      }),
+    });
+    const body = (await (await fetch(`${handle.url}/health`)).json()) as { chats?: unknown };
+    expect(body.chats).toEqual({
+      enabled: true,
+      sessions: [],
+      turns: 0,
+      costUsd: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+    });
+    expect((await fetch(`${handle.url}/chat/status?key=k`)).status).toBe(404);
+  });
+
+  // -------------------------------------------------------------------------
   // Unknown path / wrong method
   // -------------------------------------------------------------------------
 
@@ -481,6 +510,25 @@ describe("healthServer", () => {
     // The server keeps serving after the error.
     const resp = await fetch(`${handle.url}/live`);
     expect(resp.status).toBe(200);
+  });
+
+  it("an unexpected handler throw answers 500 AND is logged with the path", async () => {
+    const logged: string[] = [];
+    handle = await startHealthServer({
+      port: 0,
+      metrics: {
+        snapshot: () => {
+          throw new Error("metrics exploded");
+        },
+      },
+      logFn: (m) => logged.push(m),
+    });
+    const resp = await fetch(`${handle.url}/health`);
+    expect(resp.status).toBe(500);
+    expect(await resp.json()).toEqual({ error: "internal" });
+    // A silent 500 is unactionable: the operator sees a dead endpoint and the
+    // daemon says nothing about why.
+    expect(logged.some((m) => m.includes("/health") && m.includes("metrics exploded"))).toBe(true);
   });
 
   it("close() is idempotent — second call resolves without throwing", async () => {

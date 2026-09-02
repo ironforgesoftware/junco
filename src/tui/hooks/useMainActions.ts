@@ -35,6 +35,15 @@ export interface MainActionsInput {
   sysSection: SystemSection | null;
   selectedRow: RailRow | undefined;
   currentNwo: string | undefined;
+  /** The selected row's chat session key (chatKey.ts); null on a system row. */
+  currentRepoKey: string | null;
+  /** useChat's opener — `t` on a repo row starts/attaches its session. */
+  openChat: (key: string) => void;
+  /** `t` on an ISSUE row (#330) — the other half of the shared key. */
+  openIssueTranscript: (
+    nwo: string | null | undefined,
+    issue: DashIssue | null | undefined,
+  ) => void;
   currentIssue: DashIssue | undefined;
   /** The watched mapping behind the selected issues row — the external gate. */
   currentRepo: WatchedMapping | undefined;
@@ -91,6 +100,9 @@ export function useMainActions({
   sysSection,
   selectedRow,
   currentNwo,
+  currentRepoKey,
+  openChat,
+  openIssueTranscript,
   currentIssue,
   currentRepo,
   selectedPane3Pr,
@@ -202,10 +214,31 @@ export function useMainActions({
         }
         void openBrowser();
       },
+      // `t` on a repo row (spec 2026-09-01 §8.1): attach the chat to the
+      // selected row's key and hand it the focus — the composer is focused
+      // from mount, so the chat pane must be the focused pane. Its twin is
+      // `transcript` below: the two share the derived `t`, and viewActions'
+      // `bodyVerbs` is what decides which of them the pane offers (R27), so
+      // neither handler needs a pane branch of its own.
+      chat: () => {
+        if (currentRepoKey === null) return void showToast("info", "no repo selected");
+        openChat(currentRepoKey);
+        setView("chat");
+        setPane(2);
+      },
+      // `t` on an ISSUE row (#330): the transcript of the ticket the bridge
+      // built for it. Only the issues LIST derives this verb.
+      transcript: () => openIssueTranscript(currentNwo, currentIssue),
     }),
     [
       forceLocalRefresh,
       currentNwo,
+      currentIssue,
+      currentRepoKey,
+      openChat,
+      openIssueTranscript,
+      setView,
+      setPane,
       githubSetRefreshing,
       githubRefreshAll,
       selectedRow,

@@ -10,6 +10,7 @@ import type { WizardOutcome } from "../wizard/io.js";
 import type { WizardIoResult } from "../wizard.js";
 import { App } from "./App.js";
 import { WizardApp } from "./wizard/WizardApp.js";
+import { SuspendProvider } from "./useSuspend.js";
 
 export interface RootProps {
   configPath: string;
@@ -69,12 +70,18 @@ export function Root({
   // non-cancel outcome sets cfg before clearing wizard. This guards the
   // Config | null type so App is never handed a null config.
   if (cfg === null) return <Text> </Text>;
+  // SuspendProvider: the chat draft `e` verb hands the real terminal to
+  // $EDITOR through useSuspend (spec 2026-09-01 §8.6). Without a provider the
+  // hook degrades to pause/resume, which would leave Ink painting over the
+  // editor; WizardApp mounts its own for the gh device-flow login.
   return (
-    <App
-      {...buildAppProps(cfg)}
-      onRequestWizard={() => {
-        setWizard(makeWizardIo());
-      }}
-    />
+    <SuspendProvider>
+      <App
+        {...buildAppProps(cfg)}
+        onRequestWizard={() => {
+          setWizard(makeWizardIo());
+        }}
+      />
+    </SuspendProvider>
   );
 }

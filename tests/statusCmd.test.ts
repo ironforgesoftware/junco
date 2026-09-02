@@ -678,4 +678,154 @@ describe("runStatusCommand", () => {
     // Output was not truncated at queue: — a later section still printed.
     expect(text).toMatch(/stats: {5}/);
   });
+
+  // Chat (spec 2026-09-01 §9) — one line per live session; "disabled" when off.
+  function baseMetrics(): Record<string, unknown> {
+    return {
+      pid: 42,
+      uptimeSeconds: 1,
+      currentTickets: [],
+      tasksProcessed: 0,
+      tasksSucceeded: 0,
+      tasksFailed: 0,
+      totalTokensIn: 0,
+      totalTokensOut: 0,
+      lastTaskStatus: null,
+      lastTaskAt: null,
+    };
+  }
+
+  it("shows a chat: line per streaming/idle session, with a draft count when parked", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: baseMetrics(),
+        chats: {
+          enabled: true,
+          sessions: [
+            {
+              key: "acme/api",
+              slug: "acme__api",
+              streaming: true,
+              turns: 3,
+              lastActivityAt: null,
+              draftsParked: 2,
+            },
+          ],
+          turns: 3,
+          costUsd: 0.5,
+          tokensIn: 1,
+          tokensOut: 2,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(out.join("")).toContain("chat:      acme/api · streaming · 3 turns · 2 drafts\n");
+  });
+
+  it("omits the count suffix for a singular turn/draft and shows idle when not streaming", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: baseMetrics(),
+        chats: {
+          enabled: true,
+          sessions: [
+            {
+              key: "acme/api",
+              slug: "acme__api",
+              streaming: false,
+              turns: 1,
+              lastActivityAt: null,
+              draftsParked: 1,
+            },
+          ],
+          turns: 1,
+          costUsd: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(out.join("")).toContain("chat:      acme/api · idle · 1 turn · 1 draft\n");
+  });
+
+  it("omits the draft suffix entirely when nothing is parked (draftsParked: 0)", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: baseMetrics(),
+        chats: {
+          enabled: true,
+          sessions: [
+            {
+              key: "acme/api",
+              slug: "acme__api",
+              streaming: true,
+              turns: 3,
+              lastActivityAt: null,
+              draftsParked: 0,
+            },
+          ],
+          turns: 3,
+          costUsd: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(out.join("")).toContain("chat:      acme/api · streaming · 3 turns\n");
+    expect(out.join("")).not.toMatch(/draft/);
+  });
+
+  it("no chat: line when chats.sessions is empty (enabled, nothing running)", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: baseMetrics(),
+        chats: { enabled: true, sessions: [], turns: 0, costUsd: 0, tokensIn: 0, tokensOut: 0 },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(out.join("")).not.toMatch(/chat:/);
+  });
+
+  it("shows 'chat: disabled' when chats.enabled is false", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "ok",
+        ready: true,
+        metrics: baseMetrics(),
+        chats: { enabled: false, sessions: [], turns: 0, costUsd: 0, tokensIn: 0, tokensOut: 0 },
+      }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(out.join("")).toContain("chat:      disabled\n");
+  });
+
+  it("no chat: line at all when /health carries no chats field (older daemon)", async () => {
+    const fetchFn = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "ok", ready: true, metrics: baseMetrics() }),
+    })) as unknown as typeof fetch;
+    await runStatusCommand(cfg, { fetchFn, printFn: print, lockHolderFn: () => 42 });
+    expect(out.join("")).not.toMatch(/chat:/);
+  });
 });

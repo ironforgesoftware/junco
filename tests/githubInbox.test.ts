@@ -14,6 +14,7 @@ import {
   extractPlanBody,
   extractPlanSetBody,
   extractPatchBody,
+  allFencedBlocks,
   ticketMarkers,
   buildPlanComment,
   buildExecutionTicket,
@@ -1914,5 +1915,30 @@ describe("parseRepoInput", () => {
     expect(parseRepoInput("not a repo")).toBeNull();
     expect(parseRepoInput("https://gitlab.com/a/b")).toBeNull();
     expect(parseRepoInput("")).toBeNull();
+  });
+});
+
+describe("allFencedBlocks", () => {
+  it("returns every complete block of the tag, raw, in document order; ignores unterminated ones", () => {
+    const text = [
+      "intro",
+      "```junco-ticket",
+      "---",
+      "id: a",
+      "---",
+      "# A",
+      "```",
+      "between",
+      "````junco-ticket",
+      "# B with ```inner```",
+      "````",
+      "```junco-ticket",
+      "# unterminated",
+    ].join("\n");
+    expect(allFencedBlocks(text, "junco-ticket")).toEqual([
+      "---\nid: a\n---\n# A",
+      "# B with ```inner```",
+    ]);
+    expect(allFencedBlocks(text, "junco-plan")).toEqual([]);
   });
 });

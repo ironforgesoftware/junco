@@ -3,6 +3,7 @@ import { render } from "ink-testing-library";
 import React from "react";
 import { ReviewView, type ReviewState } from "../src/tui/components/ReviewView.js";
 import type { PendingComment } from "../src/commentReview.js";
+import type { PendingDraft } from "../src/chat/draftStore.js";
 
 const BATCH = {
   id: "assess-x-1",
@@ -66,12 +67,43 @@ const LONG_DRAFT: PendingComment = {
   draft: Array.from({ length: 10 }, (_, i) => `line-${i}`).join("\n"),
 };
 
+// A parked chat draft (spec 2026-09-01 §6.2) — the review view's third list.
+const CHAT_DRAFT: PendingDraft = {
+  id: "acme__api-20260901-1",
+  key: "acme/api",
+  slug: "acme__api",
+  kind: "ticket",
+  files: [
+    {
+      name: "add-cache.md",
+      content: "---\nid: add-cache\n---\nCache the index.",
+      lint: [],
+      route: {
+        destination: "inbox",
+        reasons: ["repo is not bridge-watched"],
+        watchedNwo: null,
+        carriedTimeout: 45,
+        discarded: ["tools"],
+      },
+      droppedKeys: ["tools", "network"],
+    },
+  ],
+  cwd: "/repos/acme/api",
+  nwo: "acme/api",
+  createdAt: "2026-07-09T00:00:00.000Z",
+  lintFailed: false,
+  blocked: null,
+  routeOverride: "auto",
+  commandArgs: null,
+};
+
 function state(over: Partial<ReviewState>): ReviewState {
   return {
     loading: false,
     error: null,
     batches: [BATCH as never],
     drafts: [],
+    chatDrafts: [],
     cursor: 0,
     open: null,
     ...over,
@@ -266,6 +298,136 @@ describe("ReviewView", () => {
     const frame =
       render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
     expect(frame).toMatch(/dup 1h ago/);
+  });
+});
+
+describe("ReviewView — chat drafts (spec 2026-09-01 §8.6)", () => {
+  it("lists a chat draft row after the batches and comment drafts, with its route verdict", () => {
+    const s = state({ batches: [BATCH as never], drafts: [DRAFT], chatDrafts: [CHAT_DRAFT] });
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={20} focused now={NOW} />).lastFrame() ?? "";
+    const lines = frame.split("\n").filter((l) => l.trim().length > 0);
+    expect(lines[0]).toContain("o/r"); // batch first
+    expect(lines[1]).toContain("o/r#5"); // then the comment draft
+    expect(lines[2]).toContain("acme/api");
+    expect(lines[2]).toContain("ticket");
+    expect(lines[2]).toContain("add-cache");
+    expect(lines[2]).toContain("inbox"); // the route verdict, not a badge
+  });
+
+  it("a lintFailed row shows lint ✗ in place of the verdict; an override shows itself", () => {
+    const failed = { ...CHAT_DRAFT, lintFailed: true };
+    const f1 =
+      render(
+        <ReviewView
+          state={state({ batches: [], chatDrafts: [failed] })}
+          scroll={0}
+          height={20}
+          focused
+          now={NOW}
+        />,
+      ).lastFrame() ?? "";
+    expect(f1).toContain("lint ✗");
+    expect(f1).not.toContain("inbox");
+
+    const forced = { ...CHAT_DRAFT, routeOverride: "issue" as const };
+    const f2 =
+      render(
+        <ReviewView
+          state={state({ batches: [], chatDrafts: [forced] })}
+          scroll={0}
+          height={20}
+          focused
+          now={NOW}
+        />,
+      ).lastFrame() ?? "";
+    expect(f2).toContain("issue!");
+  });
+
+  it("a command draft's row reads 'command' (audit/investigate never route)", () => {
+    const audit: PendingDraft = {
+      ...CHAT_DRAFT,
+      kind: "audit",
+      commandArgs: ["audit", "acme/api"],
+      files: [{ name: "audit.md", content: "", lint: [], route: null, droppedKeys: [] }],
+    };
+    const frame =
+      render(
+        <ReviewView
+          state={state({ batches: [], chatDrafts: [audit] })}
+          scroll={0}
+          height={20}
+          focused
+          now={NOW}
+        />,
+      ).lastFrame() ?? "";
+    expect(frame).toContain("command");
+  });
+
+  it("preview mode renders the header, verdict, dropped keys, lint rows, content and footer", () => {
+    const withLint: PendingDraft = {
+      ...CHAT_DRAFT,
+      files: [
+        {
+          ...CHAT_DRAFT.files[0],
+          lint: [{ rule: "no_repo", severity: "error", message: "repo: is required" }],
+        },
+      ],
+    };
+    const s = state({ batches: [], chatDrafts: [withLint], open: { kind: "chatDraft", idx: 0 } });
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={30} focused now={NOW} />).lastFrame() ?? "";
+    expect(frame).toContain("acme/api");
+    expect(frame).toContain("· ticket · route: inbox");
+    expect(frame).toContain("── add-cache.md ──");
+    expect(frame).toContain("destination: inbox");
+    expect(frame).toContain("reason: repo is not bridge-watched");
+    expect(frame).toContain("carried: timeout_minutes=45");
+    expect(frame).toContain("would discard: tools");
+    expect(frame).toContain("dropped: tools, network");
+    expect(frame).toContain("[error] no_repo: repo: is required");
+    expect(frame).toContain("Cache the index.");
+    expect(frame).toContain("s submit · e edit · r route · D discard · esc back");
+  });
+
+  it("preview mode omits the verdict block for a command draft, which ignores an override", () => {
+    const audit: PendingDraft = {
+      ...CHAT_DRAFT,
+      kind: "audit",
+      routeOverride: "issue",
+      commandArgs: ["audit", "acme/api"],
+      files: [{ name: "audit.md", content: "sweep it", lint: [], route: null, droppedKeys: [] }],
+    };
+    const s = state({ batches: [], chatDrafts: [audit], open: { kind: "chatDraft", idx: 0 } });
+    const frame =
+      render(<ReviewView state={s} scroll={0} height={30} focused now={NOW} />).lastFrame() ?? "";
+    // routeOverride: "issue" on an audit is meaningless — submitArgv runs the
+    // parked commandArgs — so the header keeps saying "command".
+    expect(frame).toContain("· audit · route: command");
+    expect(frame).toContain("sweep it");
+    expect(frame).not.toContain("destination:");
+  });
+
+  it("preview scroll is top-anchored, and a vanished draft says so instead of blanking", () => {
+    const long: PendingDraft = {
+      ...CHAT_DRAFT,
+      files: [
+        {
+          ...CHAT_DRAFT.files[0],
+          content: Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n"),
+        },
+      ],
+    };
+    const s = state({ batches: [], chatDrafts: [long], open: { kind: "chatDraft", idx: 0 } });
+    const first =
+      render(<ReviewView state={s} scroll={0} height={10} focused now={NOW} />).lastFrame() ?? "";
+    const scrolled =
+      render(<ReviewView state={s} scroll={1} height={10} focused now={NOW} />).lastFrame() ?? "";
+    expect(first).not.toBe(scrolled);
+    const gone = state({ batches: [], chatDrafts: [], open: { kind: "chatDraft", idx: 0 } });
+    expect(
+      render(<ReviewView state={gone} scroll={0} height={10} focused now={NOW} />).lastFrame(),
+    ).toContain("draft gone");
   });
 });
 

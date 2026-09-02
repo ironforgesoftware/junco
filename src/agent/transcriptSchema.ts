@@ -9,6 +9,7 @@
  */
 import type { Usage } from "../types.js";
 import type { GuardManagerOptions } from "./guardManager.js";
+import type { ProviderFailureClass } from "../providerFailure.js";
 
 export const TRANSCRIPT_VERSION = 2;
 
@@ -20,7 +21,8 @@ export type FlowKind =
   | "pr_apply_fallback"
   | "apply"
   | "assess"
-  | "analyze";
+  | "analyze"
+  | "chat";
 
 export interface MetaRecord {
   type: "junco_meta";
@@ -63,7 +65,95 @@ export interface GuardDecisionRecord {
   ts: string;
 }
 
-export type JuncoRecord = MetaRecord | RunStartRecord | RunEndRecord | GuardDecisionRecord;
+// ---------------------------------------------------------------------------
+// Chat records (spec 2026-09-01 §1.3). A chat transcript opens with the same
+// junco_meta (ticketId = the session slug); turns are framed by
+// junco_chat_turn_start/_end/_aborted the way runs are by junco_run_start/_end.
+// ---------------------------------------------------------------------------
+
+export type DraftKind =
+  | "ticket"
+  | "amend"
+  | "apply"
+  | "audit"
+  | "investigate"
+  | "ticketSet"
+  | "planSet";
+
+export interface ChatPromptRecord {
+  type: "junco_chat_prompt";
+  text: string;
+  /** steer = arrived while a turn was streaming (SDK steer()). */
+  mode: "prompt" | "steer";
+  /** auto_lint = the one automatic lint follow-up (spec §6.3). */
+  source: "operator" | "auto_lint";
+  ts: string;
+}
+export interface ChatTurnStartRecord {
+  type: "junco_chat_turn_start";
+  modelId: string;
+  tools: string[];
+  timeoutMs: number;
+  ts: string;
+}
+export interface ChatTurnEndRecord {
+  type: "junco_chat_turn_end";
+  status: "ok" | "error";
+  errorClass: ProviderFailureClass | null;
+  errorMessage: string | null;
+  usage: Usage;
+  durationMs: number;
+  ts: string;
+}
+export interface ChatTurnAbortedRecord {
+  type: "junco_chat_turn_aborted";
+  reason: "timeout" | "operator" | "daemon_stopped" | "crash";
+  ts: string;
+}
+export interface ChatTurnRejectedRecord {
+  type: "junco_chat_turn_rejected";
+  /** gate.status().reason or the budget line. */
+  reason: string;
+  /** ISO, from GateStatus.until; null for latches. */
+  until: string | null;
+  ts: string;
+}
+export interface ChatDraftRecord {
+  type: "junco_chat_draft";
+  draftId: string;
+  kind: DraftKind;
+  status: "parked" | "lint_failed" | "submitted" | "discarded";
+  /** Ticket ids / audit-investigate ids once known. */
+  ids: string[];
+  /** null until submitted; "command" for audit/investigate. */
+  destination: "inbox" | "issue" | "command" | null;
+  ts: string;
+}
+export interface ChatSessionResetRecord {
+  type: "junco_chat_session_reset";
+  reason: "corrupt" | "missing" | "operator_new";
+  ts: string;
+}
+export interface ChatTranscriptDegradedRecord {
+  type: "junco_chat_transcript_degraded";
+  ts: string;
+}
+export type ChatRecord =
+  | ChatPromptRecord
+  | ChatTurnStartRecord
+  | ChatTurnEndRecord
+  | ChatTurnAbortedRecord
+  | ChatTurnRejectedRecord
+  | ChatDraftRecord
+  | ChatSessionResetRecord
+  | ChatTranscriptDegradedRecord;
+
+export type JuncoRecord =
+  | MetaRecord
+  | RunStartRecord
+  | RunEndRecord
+  | GuardDecisionRecord
+  | ChatRecord;
 
 export type ParsedLine =
   | { kind: "junco"; record: JuncoRecord }

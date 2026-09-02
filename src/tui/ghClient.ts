@@ -26,6 +26,13 @@ import { listPending, readPending, discardPending, type PendingAssess } from "..
 import { fileFindings, type FileResult } from "../assessFiling.js";
 import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
 import { postDraftCore, analyzeIssueCore } from "../analyzeCmd.js";
+import type { ChatHealth } from "../chat/chatManager.js";
+import type { PendingDraft } from "../chat/draftStore.js";
+import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
+import type { ChatSubscribeHandlers } from "./chatClient.js";
+import { chatClientMethods } from "./chatClientMethods.js";
+import type { decideRoute } from "../submitPreflight.js";
+import { bracketHost } from "../healthServer.js";
 
 /** One `readTranscript` outcome. `unchanged` is the live poll's steady state
  * (stat only, no read); `missing` is ENOENT — a pre-transcript ticket, or a
@@ -103,6 +110,8 @@ export interface HealthInfo {
   lastTaskAt: string | null;
   totalTokensOut: number | null;
   bridgeErrors: number | null;
+  /** /health.chats — null when the daemon is down or predates chat. */
+  chats?: ChatHealth | null;
 }
 
 export interface DashboardClient {
@@ -186,6 +195,39 @@ export interface DashboardClient {
    * pass the size from the previous read and an unchanged file costs one
    * stat. Resolves `transcriptPathFor(dataTreePaths(cfg).transcripts, id)`. */
   readTranscript(id: string, prevSize: number | null): Promise<Result<TranscriptRead>>;
+  /** Operator ↔ agent chat (spec 2026-09-01 §7): SSE subscribe + the POST
+   * verbs, thin over src/tui/chatClient.ts's transport. `subscribe` never
+   * fails — connection state (including a disabled/unreachable daemon)
+   * surfaces through `on.status`/`on.end`, not a Result. */
+  chat: {
+    subscribe(key: string, since: number | null, on: ChatSubscribeHandlers): () => void;
+    prompt(key: string, text: string): Promise<Result<{ mode: "prompt" | "steer" | "rejected" }>>;
+    abort(key: string): Promise<Result<{ aborted: boolean }>>;
+    fresh(key: string): Promise<Result<null>>;
+    note(key: string, record: Omit<ChatDraftRecord, "ts">): Promise<Result<null>>;
+  };
+  /** Parked chat drafts (Task 11's draftStore) awaiting human confirmation —
+   * the chat analogue of listReview/listCommentDrafts. */
+  listChatDrafts(): Promise<Result<PendingDraft[]>>;
+  /** One file beside a parked draft's JSON (`draftFilePath`). */
+  readChatDraftFile(id: string, name: string): Promise<Result<string>>;
+  /** Re-read a parked draft's files from disk after an `$EDITOR` pass, re-lint
+   * and re-route each one, rewrite the JSON, and hand back the updated draft
+   * (spec 2026-09-01 §6.6). */
+  relintChatDraft(id: string): Promise<Result<PendingDraft>>;
+  /** Rewrite a parked draft's JSON + files — a route override or edited
+   * content from the review surface. */
+  updateChatDraft(draft: PendingDraft): Promise<Result<null>>;
+  /** Discard a parked chat draft without submitting it. */
+  discardChatDraft(id: string): Promise<Result<null>>;
+  /** Archive a parked chat draft as submitted, once its route has run. */
+  archiveSubmittedChatDraft(id: string): Promise<Result<null>>;
+  /** Compact PR context (title/body/reviews/comments) for the chat's system
+   * prompt when the session's cwd is a PR branch. */
+  prContext(nwo: string, n: number): Promise<Result<string>>;
+  /** Compact issue context (title/body/comments), the issue analogue of
+   * `prContext`. */
+  issueContext(nwo: string, n: number): Promise<Result<string>>;
   health(): Promise<HealthInfo>;
 }
 
@@ -223,12 +265,72 @@ export interface GhClientDeps {
   postDraftFn?: typeof postDraftCore;
   discardDraftFn?: typeof removeDraft;
   analyzeCoreFn?: typeof analyzeIssueCore;
+  /** relintChatDraft's routing seam (chatClientMethods.ts) — the real
+   * decideRoute probes git/fs for the watchlist verdict. */
+  decideRouteFn?: typeof decideRoute;
 }
 
 /** Deliberately shorter than git.ts's GH_TIMEOUT_MS: this client backs an
  * INTERACTIVE pane, where a stuck call must give the dashboard a failed row to
  * repaint long before the daemon's one-minute budget would return. */
 const GH_TIMEOUT = 30_000;
+
+/** The daemon's `/health` snapshot, or an all-null "down" reading when health
+ * is disabled, unreachable, or answers non-2xx. Module-level rather than a
+ * closure inside makeGhDashboardClient: it needs only `cfg` and the fetch seam,
+ * and it belongs to none of that factory's three `gh` domains (#387). */
+async function fetchHealth(cfg: Config, fetchFn: typeof fetch): Promise<HealthInfo> {
+  const down: HealthInfo = {
+    up: false,
+    uptimeSeconds: null,
+    lastBridgeSweepAt: null,
+    ticketsBridged: null,
+    tasksProcessed: null,
+    tasksSucceeded: null,
+    tasksFailed: null,
+    lastTaskStatus: null,
+    lastTaskAt: null,
+    totalTokensOut: null,
+    bridgeErrors: null,
+    chats: null,
+  };
+  if (!cfg.healthEnabled) return down;
+  try {
+    const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`);
+    if (!resp.ok) return down;
+    const j = (await resp.json()) as {
+      metrics?: {
+        uptimeSeconds?: number;
+        lastBridgeSweepAt?: string | null;
+        ticketsBridged?: number;
+        tasksProcessed?: number;
+        tasksSucceeded?: number;
+        tasksFailed?: number;
+        lastTaskStatus?: string | null;
+        lastTaskAt?: string | null;
+        totalTokensOut?: number;
+        bridgeErrors?: number;
+      };
+      chats?: ChatHealth | null;
+    };
+    return {
+      up: true,
+      uptimeSeconds: j.metrics?.uptimeSeconds ?? null,
+      lastBridgeSweepAt: j.metrics?.lastBridgeSweepAt ?? null,
+      ticketsBridged: j.metrics?.ticketsBridged ?? null,
+      tasksProcessed: j.metrics?.tasksProcessed ?? null,
+      tasksSucceeded: j.metrics?.tasksSucceeded ?? null,
+      tasksFailed: j.metrics?.tasksFailed ?? null,
+      lastTaskStatus: j.metrics?.lastTaskStatus ?? null,
+      lastTaskAt: j.metrics?.lastTaskAt ?? null,
+      totalTokensOut: j.metrics?.totalTokensOut ?? null,
+      bridgeErrors: j.metrics?.bridgeErrors ?? null,
+      chats: j.chats ?? null,
+    };
+  } catch {
+    return down;
+  }
+}
 
 export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): DashboardClient {
   const ghFn = deps.ghFn ?? gh;
@@ -242,6 +344,9 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
   const trigger = cfg.github.triggerLabel;
   const ll = lifecycleLabels(trigger);
   let viewer: string | null = null;
+  // Chat's own base URL (spec 2026-09-01 §7): same host:port as fetchHealth's
+  // /health probe, bracketed for an IPv6 healthHost.
+  const healthBase = `http://${bracketHost(cfg.healthHost)}:${cfg.healthPort}`;
 
   const attempt = async <T>(fn: () => Promise<T>): Promise<Result<T>> => {
     try {
@@ -311,6 +416,15 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
   };
 
   return {
+    ...chatClientMethods(cfg, {
+      attempt,
+      ghFn,
+      readFileFn,
+      fetchFn,
+      healthBase,
+      ghTimeoutMs: GH_TIMEOUT,
+      decideRouteFn: deps.decideRouteFn,
+    }),
     listIssues(nwo) {
       return attempt(async () => {
         try {
@@ -672,54 +786,6 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
       });
     },
 
-    async health() {
-      const down: HealthInfo = {
-        up: false,
-        uptimeSeconds: null,
-        lastBridgeSweepAt: null,
-        ticketsBridged: null,
-        tasksProcessed: null,
-        tasksSucceeded: null,
-        tasksFailed: null,
-        lastTaskStatus: null,
-        lastTaskAt: null,
-        totalTokensOut: null,
-        bridgeErrors: null,
-      };
-      if (!cfg.healthEnabled) return down;
-      try {
-        const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`);
-        if (!resp.ok) return down;
-        const j = (await resp.json()) as {
-          metrics?: {
-            uptimeSeconds?: number;
-            lastBridgeSweepAt?: string | null;
-            ticketsBridged?: number;
-            tasksProcessed?: number;
-            tasksSucceeded?: number;
-            tasksFailed?: number;
-            lastTaskStatus?: string | null;
-            lastTaskAt?: string | null;
-            totalTokensOut?: number;
-            bridgeErrors?: number;
-          };
-        };
-        return {
-          up: true,
-          uptimeSeconds: j.metrics?.uptimeSeconds ?? null,
-          lastBridgeSweepAt: j.metrics?.lastBridgeSweepAt ?? null,
-          ticketsBridged: j.metrics?.ticketsBridged ?? null,
-          tasksProcessed: j.metrics?.tasksProcessed ?? null,
-          tasksSucceeded: j.metrics?.tasksSucceeded ?? null,
-          tasksFailed: j.metrics?.tasksFailed ?? null,
-          lastTaskStatus: j.metrics?.lastTaskStatus ?? null,
-          lastTaskAt: j.metrics?.lastTaskAt ?? null,
-          totalTokensOut: j.metrics?.totalTokensOut ?? null,
-          bridgeErrors: j.metrics?.bridgeErrors ?? null,
-        };
-      } catch {
-        return down;
-      }
-    },
+    health: () => fetchHealth(cfg, fetchFn),
   };
 }

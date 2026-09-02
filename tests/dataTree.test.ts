@@ -141,6 +141,15 @@ describe("dataTreePaths", () => {
     );
     expect(v2.skills).toBe(join("/sbxroot/home/.junco", "skills"));
   });
+
+  it("exposes chats and chatDrafts in both layouts (spec 2026-09-01 §1.1)", () => {
+    const flat = dataTreePaths(makeConfig({ dataDir: "/sbxroot/data" }));
+    expect(flat.chats).toBe("/sbxroot/data/chats");
+    expect(flat.chatDrafts).toBe("/sbxroot/data/chat-drafts");
+    const v2 = dataTreePaths(makeConfig({ dataDir: "/sbxroot/home/.junco", dataLayout: "v2" }));
+    expect(v2.chats).toBe("/sbxroot/home/.junco/data/chats");
+    expect(v2.chatDrafts).toBe("/sbxroot/home/.junco/data/chat-drafts");
+  });
 });
 
 /** The same tree in both layouts, plus the agent's cwd inside it. `flat` is the
@@ -526,6 +535,20 @@ describe("sandboxDenyPaths", () => {
       expect(() => agentReadRules(cfg, f.cwd)).not.toThrow();
     }
   });
+
+  it("denies the chat session store and parked drafts by name in both layouts", () => {
+    for (const dataLayout of ["flat", "v2"] as const) {
+      const cfg = makeConfig({
+        dataDir: "/sbxroot/data",
+        queueRoot: "/sbxroot/data/queue",
+        dataLayout,
+      });
+      const p = dataTreePaths(cfg);
+      const { dirs } = sandboxDenyPaths(cfg);
+      expect(dirs).toContain(p.chats);
+      expect(dirs).toContain(p.chatDrafts);
+    }
+  });
 });
 
 describe("ensureDataTree", () => {
@@ -608,6 +631,22 @@ describe("ensureDataTree", () => {
         }),
       ),
     ).toContain("/sbxroot/home/.junco/cache/github-cache");
+  });
+
+  it("materializes chats and the chat-drafts archives eagerly (deny targets, never lazy)", () => {
+    const made: string[] = [];
+    const deps = {
+      mkdirFn: (d: string) => made.push(d),
+      existsFn: () => false,
+      writeFn: () => {},
+    };
+    ensureDataTree(
+      makeConfig({ dataDir: "/sbxroot/data", queueRoot: "/sbxroot/data/queue" }),
+      deps,
+    );
+    expect(made).toContain("/sbxroot/data/chats");
+    expect(made).toContain("/sbxroot/data/chat-drafts/submitted");
+    expect(made).toContain("/sbxroot/data/chat-drafts/discarded");
   });
 
   // The general form of I-1, so the next deny that moves inside an allow-back

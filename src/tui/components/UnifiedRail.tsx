@@ -32,6 +32,10 @@ export interface UnifiedRailProps {
   issueCounts: (nwo: string) => Partial<Record<IssueLifecycle, number>>;
   /** Per-repo assess history; null → never assessed (#193). */
   assess: (nwo: string) => AssessHistory | null;
+  /** Ambient chat signal for a repo row, keyed by `repo.key` — `●` while a
+   * turn streams, `N▣` for parked drafts (spec 2026-09-01 §8.6, from
+   * /health.chats). null → nothing to show. */
+  chatBadge?: (key: string) => string | null;
   width: number;
   height: number;
   /** Polled wall clock for the assess age column — NOT a live clock. */
@@ -64,6 +68,7 @@ export const UnifiedRail = React.memo(function UnifiedRail({
   heavy,
   issueCounts,
   assess,
+  chatBadge,
   width,
   height,
   now,
@@ -101,6 +106,7 @@ export const UnifiedRail = React.memo(function UnifiedRail({
                 .map((s) => `${issueCounts(repo.nwo ?? "")[s]}${stateMeta(s).glyph}`)
                 .join(" ")
             : "";
+        const chatB = chatBadge?.(repo.key) ?? "";
         const label =
           repo.nwo !== null && repo.watched ? repo.nwo : truncStart(repo.path, width - 10);
         const tag = repo.fromConfig ? " (cfg)" : repo.watched ? "" : ` ${SOURCE_TAG[repo.source]}`;
@@ -125,6 +131,14 @@ export const UnifiedRail = React.memo(function UnifiedRail({
                 {tag}
                 {badges ? `  ${badges}` : ""}
               </Text>
+            </Box>
+            {/* Pinned, like the assess column: the rail is a fixed 26 cells
+                wide (layout.ts RAIL_WIDTH), which leaves ~13 for the label
+                box — so inside it this 2-to-5-cell signal would truncate away
+                on any nwo of ordinary length, i.e. essentially always. The
+                label truncates instead; the slot costs nothing when empty. */}
+            <Box flexShrink={0}>
+              <Text>{chatB ? ` ${chatB}` : ""}</Text>
             </Box>
             {/* Pinned: the assess column must never be the thing that truncates.
                 Local-only rows have no assess history — the slot renders blank

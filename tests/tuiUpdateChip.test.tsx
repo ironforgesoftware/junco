@@ -43,7 +43,7 @@ describe("HelpModal update line", () => {
     pane: 1 as const,
     mode: "wide" as const,
     trigger: "junco",
-    bindings: buildContextBindings({ kind: "main", body: "queue" }, 1, "wide"),
+    bindings: buildContextBindings({ kind: "main", body: "queue", pane: 1 }, "wide"),
   };
 
   it("names junco update when an update is available", async () => {

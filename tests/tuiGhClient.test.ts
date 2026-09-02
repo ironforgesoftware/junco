@@ -16,6 +16,12 @@ import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 import { transcriptPathFor } from "../src/slug.js";
 import { dataTreePaths } from "../src/dataTree.js";
 import { runEnd, runStart, turnEndFull } from "./helpers/transcriptFixtures.js";
+import {
+  writeChatDraft,
+  listChatDrafts,
+  draftFilePath,
+  type PendingDraft,
+} from "../src/chat/draftStore.js";
 
 const cfg = {
   ghBin: "gh",
@@ -39,6 +45,9 @@ const cfg = {
   // fileReview traverses the REAL withFileAsAuth by default — "me" is its
   // side-effect-free short-circuit, so the fixture must carry the field.
   assess: { fileAs: "me" },
+  // relintChatDraft runs the shared draft lint, which reads maxTasks for a
+  // plan set (src/chat/draftLint.ts).
+  planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
 } as unknown as Config;
 
 /** botAccount.enabled=true — ensureBotAccess's non-short-circuit paths need
@@ -544,6 +553,7 @@ describe("health", () => {
       lastTaskAt: "2026-07-06T09:55:00Z",
       totalTokensOut: 45000,
       bridgeErrors: 1,
+      chats: null,
     });
     const fetchBad = (async () => {
       throw new Error("ECONNREFUSED");
@@ -563,7 +573,25 @@ describe("health", () => {
       lastTaskAt: null,
       totalTokensOut: null,
       bridgeErrors: null,
+      chats: null,
     });
+  });
+
+  it("health() passes /health.chats through (spec 2026-09-01 §4)", async () => {
+    const chats = {
+      enabled: true,
+      sessions: [],
+      turns: 2,
+      costUsd: 0.5,
+      tokensIn: 10,
+      tokensOut: 20,
+    };
+    const fetchChats = (async () => ({
+      ok: true,
+      json: async () => ({ ready: true, metrics: {}, chats }),
+    })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn: fetchChats });
+    expect((await c.health()).chats).toEqual(chats);
   });
 });
 
@@ -1266,5 +1294,429 @@ describe("readTranscript", () => {
       },
     });
     expect(await c.readTranscript("t-1", null)).toEqual({ ok: false, error: "EACCES: denied" });
+  });
+});
+
+describe("chat", () => {
+  const draftBase: PendingDraft = {
+    id: "chat-acme-1-1",
+    key: "acme/api",
+    slug: "chat-acme-1",
+    kind: "ticket",
+    files: [{ name: "ticket.md", content: "body", lint: [], route: null, droppedKeys: [] }],
+    cwd: "/repos/acme/api",
+    nwo: "acme/api",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    lintFailed: false,
+    blocked: null,
+    routeOverride: "auto",
+    commandArgs: null,
+  };
+  const NOTE_RECORD = {
+    type: "junco_chat_draft" as const,
+    draftId: "d-1",
+    kind: "ticket" as const,
+    status: "parked" as const,
+    ids: [],
+    destination: null,
+  };
+
+  it("prContext/issueContext fetch through gh and render a compact block", async () => {
+    const f = fakes();
+    f.ghFn = (async (_cfg, args) => {
+      if (args[0] === "pr")
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            title: "Add cache",
+            body: "why",
+            reviews: [{ author: { login: "bob" }, state: "CHANGES_REQUESTED", body: "no" }],
+            comments: [{ author: { login: "amy" }, body: "hm" }],
+          }),
+          stderr: "",
+        };
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          title: "Bug",
+          body: "it breaks",
+          comments: [{ author: { login: "amy" }, body: "me too" }],
+        }),
+        stderr: "",
+      };
+    }) as typeof f.ghFn;
+    const c = makeGhDashboardClient(cfg, f);
+    const pr = await c.prContext("acme/api", 42);
+    expect(pr.ok && pr.value).toContain("PR #42: Add cache");
+    expect(pr.ok && pr.value).toContain("bob (CHANGES_REQUESTED): no");
+    const issue = await c.issueContext("acme/api", 7);
+    expect(issue.ok && issue.value).toContain("Issue #7: Bug");
+    expect(issue.ok && issue.value).toContain("amy: me too");
+  });
+
+  it("prContext defaults a missing author/state and skips a bodyless review or comment", async () => {
+    const f = fakes();
+    f.ghFn = (async () => ({
+      code: 0,
+      stdout: JSON.stringify({
+        title: "Add cache",
+        body: "why",
+        reviews: [{ body: "" }, { body: "no author or state" }],
+        comments: [
+          { body: "" },
+          { body: "hi, no author" },
+          { author: { login: "amy" }, body: "hi" },
+        ],
+      }),
+      stderr: "",
+    })) as typeof f.ghFn;
+    const c = makeGhDashboardClient(cfg, f);
+    const r = await c.prContext("acme/api", 9);
+    expect(r).toEqual({
+      ok: true,
+      value:
+        "PR #9: Add cache\n\nwhy\n\n? (COMMENTED): no author or state\n?: hi, no author\namy: hi",
+    });
+  });
+
+  it("issueContext defaults a missing comment author and skips a bodyless comment", async () => {
+    const f = fakes();
+    f.ghFn = (async () => ({
+      code: 0,
+      stdout: JSON.stringify({
+        title: "Bug",
+        body: "it breaks",
+        comments: [
+          { body: "" },
+          { body: "no author" },
+          { author: { login: "amy" }, body: "me too" },
+        ],
+      }),
+      stderr: "",
+    })) as typeof f.ghFn;
+    const c = makeGhDashboardClient(cfg, f);
+    const r = await c.issueContext("acme/api", 9);
+    expect(r).toEqual({
+      ok: true,
+      value: "Issue #9: Bug\n\nit breaks\n\n?: no author\namy: me too",
+    });
+  });
+
+  it("prContext/issueContext fall back to empty defaults for a minimal gh payload", async () => {
+    const f = fakes();
+    f.ghFn = (async () => ({ code: 0, stdout: "{}", stderr: "" })) as typeof f.ghFn;
+    const c = makeGhDashboardClient(cfg, f);
+    expect(await c.prContext("acme/api", 9)).toEqual({ ok: true, value: "PR #9:" });
+    expect(await c.issueContext("acme/api", 9)).toEqual({ ok: true, value: "Issue #9:" });
+  });
+
+  it("chat draft passthroughs read the draft store", async () => {
+    const c = makeGhDashboardClient(cfg, fakes());
+    const list = await c.listChatDrafts();
+    expect(list).toEqual({ ok: true, value: [] });
+  });
+
+  it("readChatDraftFile reads the file at the draft's on-disk path", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftfile-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.readChatDraftFile(draftBase.id, "ticket.md");
+    expect(r).toEqual({ ok: true, value: "body" });
+  });
+
+  it("updateChatDraft rewrites the draft JSON via writeChatDraft", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftupdate-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.updateChatDraft(draftBase);
+    expect(r).toEqual({ ok: true, value: null });
+    expect(listChatDrafts(c2).map((d) => d.id)).toEqual([draftBase.id]);
+  });
+
+  it("updateChatDraft re-reads the file bodies from disk, never writing a stale snapshot (R25)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftstale-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    const path = draftFilePath(c2, draftBase.id, "ticket.md");
+    writeFileSync(path, "edited in $EDITOR\n", "utf8");
+    const c = makeGhDashboardClient(c2, fakes());
+    // The review list's snapshot still carries the pre-edit body — a route
+    // press must not resurrect it.
+    const r = await c.updateChatDraft({ ...draftBase, routeOverride: "issue" });
+    expect(r).toEqual({ ok: true, value: null });
+    expect(readFileSync(path, "utf8")).toBe("edited in $EDITOR\n");
+    const stored = listChatDrafts(c2)[0]!;
+    expect(stored.files[0]!.content).toBe("edited in $EDITOR\n");
+    expect(stored.routeOverride).toBe("issue");
+  });
+
+  it("discardChatDraft archives the draft as discarded, removing it from the pending list", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftdiscard-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.discardChatDraft(draftBase.id);
+    expect(r).toEqual({ ok: true, value: null });
+    expect(listChatDrafts(c2)).toEqual([]);
+  });
+
+  it("archiveSubmittedChatDraft archives the draft as submitted, removing it from the pending list", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftsubmit-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.archiveSubmittedChatDraft(draftBase.id);
+    expect(r).toEqual({ ok: true, value: null });
+    expect(listChatDrafts(c2)).toEqual([]);
+  });
+
+  it("relintChatDraft re-reads the edited file, re-lints, re-routes and rewrites the JSON", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftrelint-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    // The operator's $EDITOR pass: a body the linter rejects.
+    writeFileSync(
+      draftFilePath(c2, draftBase.id, "ticket.md"),
+      "---\nid: t\n---\nStep 1: TBD\n",
+      "utf8",
+    );
+    const routed: unknown[] = [];
+    const c = makeGhDashboardClient(c2, {
+      ...fakes(),
+      decideRouteFn: async (_cfg, fm) => {
+        routed.push(fm);
+        return {
+          destination: "issue" as const,
+          reasons: ["repo is bridge-watched"],
+          watchedNwo: "acme/api",
+          carriedTimeout: null,
+          discarded: [],
+        };
+      },
+    });
+    const r = await c.relintChatDraft(draftBase.id);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.files[0]!.content).toContain("Step 1: TBD");
+    expect(r.value.files[0]!.lint.map((v) => v.rule)).toContain("no_forbidden_phrases");
+    expect(r.value.files[0]!.route?.destination).toBe("issue");
+    expect(r.value.lintFailed).toBe(true);
+    expect(routed).toHaveLength(1);
+    // Rewritten on disk, not just returned.
+    expect(listChatDrafts(c2)[0]!.lintFailed).toBe(true);
+  });
+
+  it("relintChatDraft clears lintFailed once the edit passes, and never lints a command draft", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftrelint2-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, { ...draftBase, lintFailed: true });
+    writeFileSync(
+      draftFilePath(c2, draftBase.id, "ticket.md"),
+      "---\nid: t\n---\nA clean body.\n",
+      "utf8",
+    );
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.relintChatDraft(draftBase.id);
+    expect(r).toMatchObject({ ok: true, value: { lintFailed: false } });
+
+    // audit/investigate/planSet carry no ticket: content is refreshed, lint and
+    // route are left exactly as parked (no routeFn call at all).
+    const audit: PendingDraft = { ...draftBase, id: "chat-acme-1-2", kind: "audit" };
+    writeChatDraft(c2, audit);
+    writeFileSync(draftFilePath(c2, audit.id, "ticket.md"), "sweep it\n", "utf8");
+    const routed: unknown[] = [];
+    const c3 = makeGhDashboardClient(c2, {
+      ...fakes(),
+      decideRouteFn: async () => {
+        routed.push(1);
+        throw new Error("unreachable");
+      },
+    });
+    const r2 = await c3.relintChatDraft(audit.id);
+    expect(r2).toMatchObject({
+      ok: true,
+      value: { lintFailed: false, files: [{ content: "sweep it\n", lint: [], route: null }] },
+    });
+    expect(routed).toEqual([]);
+  });
+
+  // A plan set's lint is the compiler's own parse, and relint must re-run it
+  // (R26) — otherwise a lint-failed plan is a dead end: `s` refuses, `e` can
+  // never clear it, only `D` gets out.
+  const GOOD_PLAN = [
+    "```junco-plan",
+    "version: 1",
+    "tasks:",
+    "  - id: seed",
+    "    title: Seed the changelog",
+    "    description: Create the changelog file at the repo root.",
+    "    acceptance:",
+    "      - CHANGELOG.md exists at the repo root.",
+    "```",
+    "",
+  ].join("\n");
+  const BAD_PLAN = "```junco-plan\nversion: 1\ntasks: []\n```\n";
+
+  it("relintChatDraft re-runs the plan-set compiler: a fixed plan clears lintFailed", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-relintplan-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    const plan: PendingDraft = {
+      ...draftBase,
+      id: "chat-plan-1",
+      kind: "planSet",
+      lintFailed: true,
+      files: [
+        {
+          name: "plan.md",
+          content: BAD_PLAN,
+          lint: [{ rule: "plan_set", severity: "error", message: "tasks: must be non-empty" }],
+          route: null,
+          droppedKeys: [],
+        },
+      ],
+    };
+    writeChatDraft(c2, plan);
+    const c = makeGhDashboardClient(c2, fakes());
+    // Still broken on disk → still failing.
+    const before = await c.relintChatDraft(plan.id);
+    expect(before).toMatchObject({ ok: true, value: { lintFailed: true } });
+    // The operator's edit fixes it → the verdict clears and the draft is
+    // submittable again.
+    writeFileSync(draftFilePath(c2, plan.id, "plan.md"), GOOD_PLAN, "utf8");
+    const after = await c.relintChatDraft(plan.id);
+    expect(after).toMatchObject({ ok: true, value: { lintFailed: false } });
+    if (!after.ok) return;
+    expect(after.value.files[0]!.lint).toEqual([]);
+    expect(after.value.files[0]!.route).toBeNull(); // a plan set never routes
+    expect(listChatDrafts(c2)[0]!.lintFailed).toBe(false);
+  });
+
+  it("relintChatDraft fails a plan set whose edit broke it, or deleted the fence", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-relintplan2-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    const plan: PendingDraft = {
+      ...draftBase,
+      id: "chat-plan-2",
+      kind: "planSet",
+      files: [{ name: "plan.md", content: GOOD_PLAN, lint: [], route: null, droppedKeys: [] }],
+    };
+    writeChatDraft(c2, plan);
+    const c = makeGhDashboardClient(c2, fakes());
+    writeFileSync(draftFilePath(c2, plan.id, "plan.md"), BAD_PLAN, "utf8");
+    const broken = await c.relintChatDraft(plan.id);
+    expect(broken).toMatchObject({ ok: true, value: { lintFailed: true } });
+    if (!broken.ok) return;
+    expect(broken.value.files[0]!.lint.map((v) => v.rule)).toEqual(["plan_set"]);
+    // An edit that dropped the fence is what `junco submit --plan` refuses.
+    writeFileSync(draftFilePath(c2, plan.id, "plan.md"), "version: 1\ntasks: []\n", "utf8");
+    const noFence = await c.relintChatDraft(plan.id);
+    expect(noFence).toMatchObject({ ok: true, value: { lintFailed: true } });
+    if (!noFence.ok) return;
+    expect(noFence.value.files[0]!.lint[0]!.message).toBe("no junco-plan fence found");
+  });
+
+  it("relintChatDraft fails loudly for an unknown or unreadable draft id", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftrelint3-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    const c = makeGhDashboardClient(c2, fakes());
+    expect(await c.relintChatDraft("nope")).toEqual({ ok: false, error: "no chat draft 'nope'" });
+    // A truncated/tampered JSON is the store's own error, surfaced verbatim.
+    writeChatDraft(c2, draftBase);
+    writeFileSync(join(dataTreePaths(c2).chatDrafts, `${draftBase.id}.json`), "{ nope", "utf8");
+    const r = await c.relintChatDraft(draftBase.id);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("not valid JSON");
+  });
+
+  it("chat.prompt success returns the daemon's mode", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ mode: "steer" }), { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.prompt("k", "hi")).toEqual({ ok: true, value: { mode: "steer" } });
+  });
+
+  it("chat.prompt non-2xx surfaces the daemon's error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "chat_disabled" }), {
+        status: 503,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.prompt("k", "hi");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("chat_disabled");
+  });
+
+  it("chat.abort success (202) reports aborted:true", async () => {
+    const fetchFn = (async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.abort("k")).toEqual({ ok: true, value: { aborted: true } });
+  });
+
+  it("chat.abort no-op (204) reports aborted:false", async () => {
+    const fetchFn = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.abort("k")).toEqual({ ok: true, value: { aborted: false } });
+  });
+
+  it("chat.abort non-2xx surfaces the daemon's error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "unknown_key" }), {
+        status: 404,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.abort("k");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("unknown_key");
+  });
+
+  it("chat.abort with a non-JSON error body falls back to a generic message", async () => {
+    const fetchFn = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.abort("k");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("chat request failed (500)");
+  });
+
+  it("chat.fresh success returns null", async () => {
+    const fetchFn = (async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.fresh("k")).toEqual({ ok: true, value: null });
+  });
+
+  it("chat.fresh non-2xx surfaces the daemon's error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "no_checkout" }), {
+        status: 409,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.fresh("k");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("no_checkout");
+  });
+
+  it("chat.note success returns null", async () => {
+    const fetchFn = (async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.note("k", NOTE_RECORD)).toEqual({ ok: true, value: null });
+  });
+
+  it("chat.note non-2xx surfaces the daemon's error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "chat_disabled" }), {
+        status: 503,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.note("k", NOTE_RECORD);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("chat_disabled");
+  });
+
+  it("chat.subscribe wires the daemon healthBase through to subscribeChat", () => {
+    const c = makeGhDashboardClient(cfg, fakes());
+    const stop = c.chat.subscribe("k", null, { record: () => {}, status: () => {}, end: () => {} });
+    expect(typeof stop).toBe("function");
+    stop();
   });
 });
