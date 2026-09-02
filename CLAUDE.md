@@ -13,11 +13,12 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 | Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                        |
 | All tests | `npm test` (vitest, ~3,100 tests, ~25s)                                                              |
 | One file  | `npx vitest run tests/<name>.test.ts`                                                                |
+| E2E       | `npm run test:e2e` (needs `dist/`; spawns the built CLI in a sandboxed HOME against a scripted model stub; not part of `npm test`) |
 | Coverage  | `npx vitest run --coverage` (floor pinned by `vitest.config.ts` thresholds; CI job `coverage`)       |
 | Lint      | `npm run lint` (type-aware via `tsconfig.eslint.json`, which is what covers `tests/`)                |
 | Typecheck | `npm run typecheck` (tsc over src/ + tests/ via `tsconfig.eslint.json` — vitest does not type-check) |
 | Format    | `npm run format` / `npm run format:check` (prettier, 100 cols)                                       |
-| Full gate | `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test`             |
+| Full gate | `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run test:e2e` |
 
 Run the full gate before claiming work done; CI (`.github/workflows/quality-gate.yml`) runs it on PRs and pushes to main across ubuntu/macos × node 22.19/24, plus a packaged-CLI smoke test; the aggregate `quality-gate` check is required to merge.
 
@@ -45,6 +46,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 - Ink/TUI tests: never assert one fixed `setTimeout` tick after a state change — slow CI runners race React's commit (this flaked a release gate). Loop-until-condition with a bounded retry, then assert.
 - `src/tui/**` runs `eslint-plugin-react-hooks` with **both** rules (`rules-of-hooks`, `exhaustive-deps`) at **error** — a hook with an incomplete dep array fails `npm run lint` (part of the gate). Fix the deps (stabilize the source: memoize the value/callback the hook closes over) — do NOT `eslint-disable` to get past it. App owns the nav spine (`view`/`pane`/`railSel` + derived `currentNwo`/`sysSection`) and passes it into the domain hooks in `src/tui/hooks/` as read-only inputs; domain E (`localCheap`/`localHeavy`) stays inline in App on purpose (a `sysSection ← localHeavy` render cycle blocks a clean hook — see #262).
 - Sandbox (`agent/sandbox/`) tests: `buildPolicy`/path-jail `canonicalize()` **realpaths** real paths, so `/tmp` and `/var` collapse to `/private/...` on macOS. Use synthetic non-existent paths (`/sbxroot/...`) in unit tests so canonicalization is a no-op; the platform-gated `sandbox.integration.test.ts` exercises real Seatbelt/bwrap enforcement and skips when the backend binary is absent.
+- E2E (`tests/e2e/*.e2e.ts`, spec `docs/superpowers/specs/2026-09-01-e2e-testing-design.md`): scenarios spawn the BUILT `dist/cli.js` — rebuild first or you test stale code (the suite refuses to build for you). The model stub is fail-fast: `exhausted === true` means the CLI asked for more turns than scripted (the critic needs its own `JUNCO_VERIFY: PASS` turn on any non-empty diff). A hang means the CLI never reached the stub — read the diagnostics dump (stderr tail, `gh.log`, queue state); `JUNCO_E2E_KEEP=1` retains the sandbox. The fake `gh` has no catch-all on purpose: `fake-gh: unhandled: <args>` names the case to add to `defaultGhCases`.
 
 ## The repo doubles as the maintainer's live runtime — do not disturb
 
