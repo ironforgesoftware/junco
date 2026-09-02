@@ -62,6 +62,9 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       f: "file",
       D: "discard",
       q: "close",
+      s: "submit",
+      e: "edit",
+      r: "route",
     });
     expect(km({ kind: "view", view: "transcript" })).toEqual({
       t: "thinking",

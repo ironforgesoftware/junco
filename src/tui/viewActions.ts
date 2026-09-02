@@ -122,6 +122,12 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     { id: "file", label: "file" },
     { id: "discard", label: "discard", guarded: true },
     CLOSE,
+    // Chat-draft verbs (spec 2026-09-01 §8.6), APPENDED so the four above keep
+    // the keys their pinned test asserts; these derive s / e / r. `discard`
+    // (D) already exists and serves the chat draft too.
+    { id: "submit", label: "submit" },
+    { id: "edit", label: "edit" },
+    { id: "route", label: "route" },
   ],
   cmdOutput: [{ id: "reRun", label: "re-run" }, CLOSE],
   transcript: [{ id: "thinking", label: "thinking" }, { id: "follow", label: "follow" }, CLOSE],

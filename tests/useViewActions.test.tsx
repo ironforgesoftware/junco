@@ -11,6 +11,7 @@ import type { CmdState } from "../src/tui/hooks/useCmdOutput.js";
 import type { UnifiedRepo } from "../src/tui/railModel.js";
 import type { PendingAssess } from "../src/assessReview.js";
 import type { PendingComment } from "../src/commentReview.js";
+import type { PendingDraft } from "../src/chat/draftStore.js";
 import { until } from "./helpers/until.js";
 
 const BATCH: PendingAssess = {
@@ -54,11 +55,27 @@ const DRAFT: PendingComment = {
   footer: true,
 };
 
+const CHAT_DRAFT: PendingDraft = {
+  id: "acme__widgets-20260901-1",
+  key: "acme/widgets",
+  slug: "acme__widgets",
+  kind: "ticket",
+  files: [{ name: "add-cache.md", content: "", lint: [], route: null, droppedKeys: [] }],
+  cwd: "/repos/acme/widgets",
+  nwo: "acme/widgets",
+  createdAt: "2026-09-01T00:00:00.000Z",
+  lintFailed: false,
+  blocked: null,
+  routeOverride: "auto",
+  commandArgs: null,
+};
+
 const EMPTY_REVIEW: ReviewState = {
   loading: false,
   error: null,
   batches: [],
   drafts: [],
+  chatDrafts: [],
   cursor: 0,
   open: null,
 };
@@ -114,6 +131,10 @@ function makeSpies() {
     setTranscriptFollow: vi.fn(),
     toEnd: vi.fn(),
     setReviewState: vi.fn(),
+    chatSubmit: vi.fn(async () => {}),
+    chatEdit: vi.fn(async () => {}),
+    chatRoute: vi.fn(async () => {}),
+    chatDiscard: vi.fn(async () => {}),
   };
 }
 
@@ -154,6 +175,12 @@ function mount(
     toEnd: spies.toEnd,
     reviewState: EMPTY_REVIEW,
     setReviewState: spies.setReviewState,
+    chatDraftActions: {
+      submit: spies.chatSubmit,
+      edit: spies.chatEdit,
+      route: spies.chatRoute,
+      discard: spies.chatDiscard,
+    },
     ...rest,
   };
   let api!: Record<string, () => void>;
@@ -252,9 +279,24 @@ describe("useViewActions — review", () => {
     open: { kind: "draft", draftIdx: 0 },
   };
 
-  it("exposes the five review ids", () => {
+  const openChatDraft: ReviewState = {
+    ...EMPTY_REVIEW,
+    chatDrafts: [CHAT_DRAFT],
+    open: { kind: "chatDraft", idx: 0 },
+  };
+
+  it("exposes the eight review ids", () => {
     const { api, unmount } = mount({ view: "review", reviewState: openBatch });
-    expect(ids(api)).toEqual(["all", "close", "discard", "file", "none"]);
+    expect(ids(api)).toEqual([
+      "all",
+      "close",
+      "discard",
+      "edit",
+      "file",
+      "none",
+      "route",
+      "submit",
+    ]);
     unmount();
   });
 
@@ -352,6 +394,63 @@ describe("useViewActions — review", () => {
     api["file"]?.();
     await until(() => spies.showToast.mock.calls.some((c) => c[0] === "error" && c[1] === "boom"));
     expect(spies.setReviewState).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("submit / edit / route act on the OPEN chat draft", () => {
+    const { api, spies, unmount } = mount({ view: "review", reviewState: openChatDraft });
+    api["submit"]?.();
+    api["edit"]?.();
+    api["route"]?.();
+    expect(spies.chatSubmit).toHaveBeenCalledWith(CHAT_DRAFT);
+    expect(spies.chatEdit).toHaveBeenCalledWith(CHAT_DRAFT);
+    expect(spies.chatRoute).toHaveBeenCalledWith(CHAT_DRAFT);
+    unmount();
+  });
+
+  it("submit / edit / route act on the chat draft under the CURSOR in list mode", () => {
+    const listMode: ReviewState = {
+      ...EMPTY_REVIEW,
+      batches: [BATCH],
+      drafts: [DRAFT],
+      chatDrafts: [CHAT_DRAFT],
+      cursor: 2, // past the batch and the comment draft
+    };
+    const { api, spies, unmount } = mount({ view: "review", reviewState: listMode });
+    api["submit"]?.();
+    expect(spies.chatSubmit).toHaveBeenCalledWith(CHAT_DRAFT);
+    unmount();
+  });
+
+  it("discard routes to the chat verb when a chat draft is selected, and to the batch/draft verb otherwise", () => {
+    const chat = mount({ view: "review", reviewState: openChatDraft });
+    chat.api["discard"]?.();
+    expect(chat.spies.chatDiscard).toHaveBeenCalledWith(CHAT_DRAFT);
+    chat.unmount();
+
+    const discardReview = vi.fn(async () => ({ ok: true as const, value: null }));
+    const batch = mount({
+      view: "review",
+      reviewState: openBatch,
+      client: { discardReview } as unknown as Partial<DashboardClient>,
+    });
+    batch.api["discard"]?.();
+    expect(batch.spies.chatDiscard).not.toHaveBeenCalled();
+    expect(discardReview).toHaveBeenCalledWith(BATCH.id);
+    batch.unmount();
+  });
+
+  it("submit / edit / route are inert when the cursor is not on a chat draft", () => {
+    const { api, spies, unmount } = mount({
+      view: "review",
+      reviewState: { ...EMPTY_REVIEW, batches: [BATCH], chatDrafts: [CHAT_DRAFT], cursor: 0 },
+    });
+    api["submit"]?.();
+    api["edit"]?.();
+    api["route"]?.();
+    expect(spies.chatSubmit).not.toHaveBeenCalled();
+    expect(spies.chatEdit).not.toHaveBeenCalled();
+    expect(spies.chatRoute).not.toHaveBeenCalled();
     unmount();
   });
 });

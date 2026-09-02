@@ -16,7 +16,12 @@ import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 import { transcriptPathFor } from "../src/slug.js";
 import { dataTreePaths } from "../src/dataTree.js";
 import { runEnd, runStart, turnEndFull } from "./helpers/transcriptFixtures.js";
-import { writeChatDraft, listChatDrafts, type PendingDraft } from "../src/chat/draftStore.js";
+import {
+  writeChatDraft,
+  listChatDrafts,
+  draftFilePath,
+  type PendingDraft,
+} from "../src/chat/draftStore.js";
 
 const cfg = {
   ghBin: "gh",
@@ -1444,6 +1449,90 @@ describe("chat", () => {
     const r = await c.archiveSubmittedChatDraft(draftBase.id);
     expect(r).toEqual({ ok: true, value: null });
     expect(listChatDrafts(c2)).toEqual([]);
+  });
+
+  it("relintChatDraft re-reads the edited file, re-lints, re-routes and rewrites the JSON", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftrelint-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    // The operator's $EDITOR pass: a body the linter rejects.
+    writeFileSync(
+      draftFilePath(c2, draftBase.id, "ticket.md"),
+      "---\nid: t\n---\nStep 1: TBD\n",
+      "utf8",
+    );
+    const routed: unknown[] = [];
+    const c = makeGhDashboardClient(c2, {
+      ...fakes(),
+      decideRouteFn: async (_cfg, fm) => {
+        routed.push(fm);
+        return {
+          destination: "issue" as const,
+          reasons: ["repo is bridge-watched"],
+          watchedNwo: "acme/api",
+          carriedTimeout: null,
+          discarded: [],
+        };
+      },
+    });
+    const r = await c.relintChatDraft(draftBase.id);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.files[0]!.content).toContain("Step 1: TBD");
+    expect(r.value.files[0]!.lint.map((v) => v.rule)).toContain("no_forbidden_phrases");
+    expect(r.value.files[0]!.route?.destination).toBe("issue");
+    expect(r.value.lintFailed).toBe(true);
+    expect(routed).toHaveLength(1);
+    // Rewritten on disk, not just returned.
+    expect(listChatDrafts(c2)[0]!.lintFailed).toBe(true);
+  });
+
+  it("relintChatDraft clears lintFailed once the edit passes, and never lints a command draft", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftrelint2-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, { ...draftBase, lintFailed: true });
+    writeFileSync(
+      draftFilePath(c2, draftBase.id, "ticket.md"),
+      "---\nid: t\n---\nA clean body.\n",
+      "utf8",
+    );
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.relintChatDraft(draftBase.id);
+    expect(r).toMatchObject({ ok: true, value: { lintFailed: false } });
+
+    // audit/investigate/planSet carry no ticket: content is refreshed, lint and
+    // route are left exactly as parked (no routeFn call at all).
+    const audit: PendingDraft = { ...draftBase, id: "chat-acme-1-2", kind: "audit" };
+    writeChatDraft(c2, audit);
+    writeFileSync(draftFilePath(c2, audit.id, "ticket.md"), "sweep it\n", "utf8");
+    const routed: unknown[] = [];
+    const c3 = makeGhDashboardClient(c2, {
+      ...fakes(),
+      decideRouteFn: async () => {
+        routed.push(1);
+        throw new Error("unreachable");
+      },
+    });
+    const r2 = await c3.relintChatDraft(audit.id);
+    expect(r2).toMatchObject({
+      ok: true,
+      value: { lintFailed: false, files: [{ content: "sweep it\n", lint: [], route: null }] },
+    });
+    expect(routed).toEqual([]);
+  });
+
+  it("relintChatDraft fails loudly for an unknown or unreadable draft id", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftrelint3-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    const c = makeGhDashboardClient(c2, fakes());
+    expect(await c.relintChatDraft("nope")).toEqual({ ok: false, error: "no chat draft 'nope'" });
+    // A truncated/tampered JSON is the store's own error, surfaced verbatim.
+    writeChatDraft(c2, draftBase);
+    writeFileSync(join(dataTreePaths(c2).chatDrafts, `${draftBase.id}.json`), "{ nope", "utf8");
+    const r = await c.relintChatDraft(draftBase.id);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("not valid JSON");
   });
 
   it("chat.prompt success returns the daemon's mode", async () => {

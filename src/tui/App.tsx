@@ -14,6 +14,7 @@ import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState } from "./state.js";
 import { githubTicketId, lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
+import { spawn } from "node:child_process";
 import type { GithubRepoMapping } from "../types.js";
 import type { UpdateInfo } from "../updateCheck.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
@@ -86,6 +87,8 @@ import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useGithubData } from "./hooks/useGithubData.js";
 import { useLogOverlayActions } from "./hooks/useLogOverlayActions.js";
 import { useViewActions } from "./hooks/useViewActions.js";
+import { useChatDrafts } from "./hooks/useChatDrafts.js";
+import { useSuspend } from "./useSuspend.js";
 import { useMainActions, type LocalRow } from "./hooks/useMainActions.js";
 import { summarizeUnwatchPlan } from "./unwatchSummary.js";
 // Type-only: unwatchCmd is a pure module, but the dashboard drives it through
@@ -109,6 +112,13 @@ export interface AppProps {
    * useLogTail. Resolved by dashboardCmd where cfg is in scope; read only while
    * the logs surface is on screen. */
   logPath: string;
+  /** A parked chat draft's file on disk (`draftStore.draftFilePath`, cfg
+   * pre-bound like `clonesDir`/`logPath` above): the path `e` opens in the
+   * editor and the byte-identical path `s` hands the CLI. */
+  draftFilePathFn: (id: string, name: string) => string;
+  /** `$EDITOR` spawn for the chat draft `e` verb, injectable so tests never
+   * open an editor (spec 2026-09-01 §8.6). Default: `defaultEditFile`. */
+  editFileFn?: (path: string) => Promise<void>;
   /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
    * tests pass large values. */
   refreshPollMs?: number;
@@ -245,6 +255,18 @@ function optimisticLabels(action: DashAction, labels: string[], trigger: string)
   return [...set];
 }
 
+/** The default `editFileFn`: hand the terminal to $EDITOR (stdio inherited)
+ * for one file and resolve when it exits. Always called from inside
+ * useSuspend, which has already blanked Ink and dropped raw mode. A non-zero
+ * editor exit is still a resolve — the operator may have quit deliberately;
+ * the re-lint that follows reads whatever is on disk either way. */
+const defaultEditFile = (path: string): Promise<void> =>
+  new Promise((resolve_, reject) => {
+    const child = spawn(process.env.EDITOR ?? "vi", [path], { stdio: "inherit" });
+    child.on("exit", () => resolve_());
+    child.on("error", reject);
+  });
+
 /** Equality key for the cheap local snapshot: the daemon section renders
  * uptime in whole minutes (sections' fmtDur), so a poll that only advanced
  * the seconds must not repaint. Everything else compares as-is. */
@@ -359,7 +381,21 @@ export function App(props: AppProps): React.JSX.Element {
     watchlistError,
     askConfirm,
   });
-  const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
+  const { cmd, cmdElapsed, runPaletteCommand, showCmdResult } = useCmdOutput(runCliFn, setView);
+  const suspend = useSuspend();
+  const chatDraftActions = useChatDrafts({
+    client,
+    runCliFn,
+    showCmdResult,
+    editFileFn: props.editFileFn ?? defaultEditFile,
+    suspend,
+    showToast,
+    aliveRef,
+    // The chat pane's own reload joins this in Task 19; the review list is
+    // what shows the draft today, and a submit/discard drops its row.
+    onChanged: loadReview,
+    draftFilePath: props.draftFilePathFn,
+  });
   const {
     paletteFilter,
     paletteSel,
@@ -476,6 +512,8 @@ export function App(props: AppProps): React.JSX.Element {
     if (logOverlay) return "logOverlay";
     if (view === "review" && reviewState.open?.kind === "draft")
       return `draft:${reviewState.open.draftIdx}`;
+    if (view === "review" && reviewState.open?.kind === "chatDraft")
+      return `chatDraft:${reviewState.open.idx}`;
     if (view === "cmdOutput" && cmd) return `cmd:${cmd.token}`;
     // `transcript:<id>` — t/expand keep the offset (the clamp absorbs shrink).
     if (view === "transcript" && transcript) return `transcript:${transcript.id}`;
@@ -1331,6 +1369,7 @@ export function App(props: AppProps): React.JSX.Element {
     toEnd,
     reviewState,
     setReviewState,
+    chatDraftActions,
   });
   const mainActions = useMainActions({
     client,
@@ -1778,6 +1817,13 @@ export function App(props: AppProps): React.JSX.Element {
         if (key.return) return void actionHandlers["file"]?.();
         return;
       }
+      // Chat-draft preview mode: scroll + back (the verbs are keymap-derived).
+      if (rs.open && rs.open.kind === "chatDraft") {
+        if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
+        if (input === "k" || key.upArrow) return void scrollBy(-1);
+        if (input === "j" || key.downArrow) return void scrollBy(1);
+        return;
+      }
       // Assess checklist mode.
       if (rs.open && rs.open.kind === "batch") {
         const batch = rs.batches[rs.open.batchIdx];
@@ -1824,7 +1870,10 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "j" || key.downArrow) {
         return void setReviewState((s) => ({
           ...s,
-          cursor: Math.min(Math.max(0, s.batches.length + s.drafts.length - 1), s.cursor + 1),
+          cursor: Math.min(
+            Math.max(0, s.batches.length + s.drafts.length + s.chatDrafts.length - 1),
+            s.cursor + 1,
+          ),
         }));
       }
       if (key.return) {
@@ -1847,6 +1896,9 @@ export function App(props: AppProps): React.JSX.Element {
             };
           }
           const draftIdx = s.cursor - s.batches.length;
+          const chatIdx = draftIdx - s.drafts.length;
+          if (chatIdx >= 0)
+            return s.chatDrafts[chatIdx] ? { ...s, open: { kind: "chatDraft", idx: chatIdx } } : s;
           if (!s.drafts[draftIdx]) return s;
           return { ...s, open: { kind: "draft", draftIdx } };
         });
@@ -1989,6 +2041,9 @@ export function App(props: AppProps): React.JSX.Element {
         };
       }
       const draftIdx = idx - s.batches.length;
+      const chatIdx = draftIdx - s.drafts.length;
+      if (chatIdx >= 0)
+        return s.chatDrafts[chatIdx] ? { ...s, open: { kind: "chatDraft", idx: chatIdx } } : s;
       if (!s.drafts[draftIdx]) return s;
       return { ...s, open: { kind: "draft", draftIdx } };
     });

@@ -32,6 +32,7 @@ export function useCmdOutput(
   cmd: CmdState | null;
   cmdElapsed: number;
   runPaletteCommand: (name: string, extraArgs: string[]) => void;
+  showCmdResult: (name: string, extraArgs: string[], r: CliRunResult) => void;
 } {
   const [cmd, setCmd] = useState<CmdState | null>(null);
   const [cmdElapsed, setCmdElapsed] = useState(0);
@@ -71,5 +72,27 @@ export function useCmdOutput(
     [runCliFn, setView],
   );
 
-  return { cmd, cmdElapsed, runPaletteCommand };
+  /** Land an already-completed result (a chat-draft submit that failed, spec
+   * 2026-09-01 §6.6) in the cmdOutput view. name/extraArgs are kept so `r`
+   * re-runs the same invocation — the token is bumped like a real run's so a
+   * still-in-flight palette command can never overwrite it on resolution. */
+  const showCmdResult = useCallback(
+    (name: string, extraArgs: string[], r: CliRunResult): void => {
+      const token = ++cmdTokenRef.current;
+      setCmd({
+        title: ["junco", name, ...extraArgs].join(" "),
+        running: false,
+        output: r.output,
+        exitCode: r.code,
+        timedOut: r.timedOut,
+        name,
+        extraArgs,
+        token,
+      });
+      setView("cmdOutput");
+    },
+    [setView],
+  );
+
+  return { cmd, cmdElapsed, runPaletteCommand, showCmdResult };
 }

@@ -31,6 +31,7 @@ import type { PendingDraft } from "../chat/draftStore.js";
 import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
 import type { ChatSubscribeHandlers } from "./chatClient.js";
 import { chatClientMethods } from "./chatClientMethods.js";
+import type { decideRoute } from "../submitPreflight.js";
 import { bracketHost } from "../healthServer.js";
 
 /** One `readTranscript` outcome. `unchanged` is the live poll's steady state
@@ -210,6 +211,10 @@ export interface DashboardClient {
   listChatDrafts(): Promise<Result<PendingDraft[]>>;
   /** One file beside a parked draft's JSON (`draftFilePath`). */
   readChatDraftFile(id: string, name: string): Promise<Result<string>>;
+  /** Re-read a parked draft's files from disk after an `$EDITOR` pass, re-lint
+   * and re-route each one, rewrite the JSON, and hand back the updated draft
+   * (spec 2026-09-01 §6.6). */
+  relintChatDraft(id: string): Promise<Result<PendingDraft>>;
   /** Rewrite a parked draft's JSON + files — a route override or edited
    * content from the review surface. */
   updateChatDraft(draft: PendingDraft): Promise<Result<null>>;
@@ -260,6 +265,9 @@ export interface GhClientDeps {
   postDraftFn?: typeof postDraftCore;
   discardDraftFn?: typeof removeDraft;
   analyzeCoreFn?: typeof analyzeIssueCore;
+  /** relintChatDraft's routing seam (chatClientMethods.ts) — the real
+   * decideRoute probes git/fs for the watchlist verdict. */
+  decideRouteFn?: typeof decideRoute;
 }
 
 /** Deliberately shorter than git.ts's GH_TIMEOUT_MS: this client backs an
@@ -415,6 +423,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
       fetchFn,
       healthBase,
       ghTimeoutMs: GH_TIMEOUT,
+      decideRouteFn: deps.decideRouteFn,
     }),
     listIssues(nwo) {
       return attempt(async () => {

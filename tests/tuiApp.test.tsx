@@ -44,6 +44,20 @@ const STUB_FILE_BATCH = {
   createdAt: "2026-07-09T00:00:00.000Z",
   findings: [],
 };
+const CHAT_DRAFT_STUB = {
+  id: "stub",
+  key: "acme/api",
+  slug: "acme__api",
+  kind: "ticket" as const,
+  files: [],
+  cwd: "/x",
+  nwo: "acme/api",
+  createdAt: "2026-09-01T00:00:00.000Z",
+  lintFailed: false,
+  blocked: null,
+  routeOverride: "auto" as const,
+  commandArgs: null,
+};
 const CLONES_DIR = "/x/state/repos";
 const ESC = String.fromCharCode(27);
 
@@ -232,6 +246,7 @@ function makeClient(
     },
     listChatDrafts: async () => okv([]),
     readChatDraftFile: async () => okv(""),
+    relintChatDraft: async (id: string) => okv({ ...CHAT_DRAFT_STUB, id }),
     updateChatDraft: async () => okv(null),
     discardChatDraft: async () => okv(null),
     archiveSubmittedChatDraft: async () => okv(null),
@@ -310,6 +325,7 @@ function makeSeqClient(sequence: DashIssue[][]) {
     },
     listChatDrafts: async () => okv([]),
     readChatDraftFile: async () => okv(""),
+    relintChatDraft: async (id: string) => okv({ ...CHAT_DRAFT_STUB, id }),
     updateChatDraft: async () => okv(null),
     discardChatDraft: async () => okv(null),
     archiveSubmittedChatDraft: async () => okv(null),
@@ -391,6 +407,7 @@ function makePrSeqClient(sequence: DashPr[][]) {
     },
     listChatDrafts: async () => okv([]),
     readChatDraftFile: async () => okv(""),
+    relintChatDraft: async (id: string) => okv({ ...CHAT_DRAFT_STUB, id }),
     updateChatDraft: async () => okv(null),
     discardChatDraft: async () => okv(null),
     archiveSubmittedChatDraft: async () => okv(null),
@@ -449,6 +466,7 @@ function renderApp(
   assessHistoryFn: () => Promise<AssessHistory[]> = async () => [],
   localCheapFn: () => Promise<LocalCheap> = async () => LOCAL_CHEAP,
   transcriptPollMs?: number,
+  editFileFn?: (path: string) => Promise<void>,
 ) {
   return render(
     <MouseProvider>
@@ -461,6 +479,8 @@ function renderApp(
         configPath="/x/config.json"
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
+        draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
+        editFileFn={editFileFn}
         refreshPollMs={refreshPollMs}
         healthPollMs={999999}
         queuePollMs={999999}
@@ -996,6 +1016,7 @@ describe("App", () => {
       },
       listChatDrafts: async () => okv([]),
       readChatDraftFile: async () => okv(""),
+      relintChatDraft: async (id: string) => okv({ ...CHAT_DRAFT_STUB, id }),
       updateChatDraft: async () => okv(null),
       discardChatDraft: async () => okv(null),
       archiveSubmittedChatDraft: async () => okv(null),
@@ -1194,6 +1215,7 @@ describe("App", () => {
             configPath="/x/config.json"
             clonesDir={CLONES_DIR}
             logPath="/x/state/worker.log"
+            draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
             refreshPollMs={999999}
             healthPollMs={999999}
             queuePollMs={999999}
@@ -1250,6 +1272,7 @@ describe("App", () => {
             configPath="/x/config.json"
             clonesDir={CLONES_DIR}
             logPath="/x/state/worker.log"
+            draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
             refreshPollMs={999999}
             healthPollMs={999999}
             queuePollMs={999999}
@@ -1993,6 +2016,7 @@ describe("audit hotkey (u/A)", () => {
         configPath="/x/config.json"
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
+        draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
@@ -2382,6 +2406,140 @@ describe("review view (v)", () => {
     expect(discarded[0]).toBe(commentDraft.id);
     await until(() => (r.lastFrame() ?? "").includes("discarded")); // toast
     await until(() => (r.lastFrame() ?? "").includes("no pending audit reviews"));
+  });
+
+  // The chat-draft third list (spec 2026-09-01 §8.6): the cursor walks past the
+  // other two lists into it, enter previews, and s/e/r/D reach the draft verbs.
+  const chatDraft = {
+    ...CHAT_DRAFT_STUB,
+    id: "acme__api-20260901-1",
+    files: [
+      {
+        name: "add-cache.md",
+        content: "Cache the index.",
+        lint: [],
+        route: {
+          destination: "inbox" as const,
+          reasons: ["repo is not bridge-watched"],
+          watchedNwo: null,
+          carriedTimeout: null,
+          discarded: [],
+        },
+        droppedKeys: [],
+      },
+    ],
+  };
+
+  it("v lists a chat draft after the comment drafts; enter previews it and esc closes", async () => {
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listCommentDrafts: () => Promise<unknown> }).listCommentDrafts = async () =>
+      okv([commentDraft]);
+    (client as { listChatDrafts: () => Promise<unknown> }).listChatDrafts = async () =>
+      okv([chatDraft]);
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("add-cache"));
+    // Row order: comment draft first, chat draft after it.
+    const rows = (r.lastFrame() ?? "").split("\n");
+    expect(rows.findIndex((l) => l.includes("add-cache"))).toBeGreaterThan(
+      rows.findIndex((l) => l.includes("o/r#5")),
+    );
+    r.stdin.write("j"); // past the comment draft onto the chat draft
+    // Gate on the cursor glyph landing on the chat row, not a fixed tick.
+    await until(() =>
+      (r.lastFrame() ?? "").split("\n").some((l) => l.includes("add-cache") && l.includes("▌")),
+    );
+    r.stdin.write("\r"); // enter → chat draft preview
+    await until(() => (r.lastFrame() ?? "").includes("Cache the index."));
+    expect(r.lastFrame()).toContain("destination: inbox");
+    expect(r.lastFrame()).toContain("s submit · e edit · r route");
+    r.stdin.write(ESC);
+    await until(() => !(r.lastFrame() ?? "").includes("Cache the index."));
+  });
+
+  it("r cycles the open chat draft's route override through the client", async () => {
+    const updated: Array<{ routeOverride: string }> = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listChatDrafts: () => Promise<unknown> }).listChatDrafts = async () =>
+      okv([chatDraft]);
+    (client as { updateChatDraft: (d: unknown) => Promise<unknown> }).updateChatDraft = async (
+      d,
+    ) => {
+      updated.push(d as { routeOverride: string });
+      return okv(null);
+    };
+    const r = renderApp(client, wl8());
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("add-cache"));
+    r.stdin.write("\r"); // sole row → preview
+    await until(() => (r.lastFrame() ?? "").includes("Cache the index."));
+    r.stdin.write("r");
+    await until(() => updated.length === 1);
+    expect(updated[0]?.routeOverride).toBe("inbox");
+  });
+
+  it("s submits the open chat draft through the CLI, archives it and clears the list", async () => {
+    const ran: string[][] = [];
+    const archived: string[] = [];
+    const { client } = makeClient({ "acme/api": [] });
+    let listed = [chatDraft];
+    (client as { listChatDrafts: () => Promise<unknown> }).listChatDrafts = async () => okv(listed);
+    (
+      client as { archiveSubmittedChatDraft: (id: string) => Promise<unknown> }
+    ).archiveSubmittedChatDraft = async (id) => {
+      archived.push(id);
+      listed = [];
+      return okv(null);
+    };
+    const r = renderApp(client, wl8(), 999999, async (name, args) => {
+      ran.push([name, ...args]);
+      return { code: 0, output: "queued\n", timedOut: false };
+    });
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("add-cache"));
+    r.stdin.write("\r");
+    await until(() => (r.lastFrame() ?? "").includes("Cache the index."));
+    r.stdin.write("s");
+    await until(() => archived.length === 1);
+    expect(ran).toEqual([["submit", "/x/state/chatDrafts/acme__api-20260901-1/add-cache.md"]]);
+    // The reload drops the row AND closes the preview it was showing.
+    await until(() => (r.lastFrame() ?? "").includes("no pending audit reviews"));
+  });
+
+  it("e opens every file of the selected chat draft in the editor, then re-lints", async () => {
+    const edited: string[] = [];
+    const relinted: string[] = [];
+    const { client } = makeClient({ "acme/api": [] });
+    (client as { listChatDrafts: () => Promise<unknown> }).listChatDrafts = async () =>
+      okv([chatDraft]);
+    (client as { relintChatDraft: (id: string) => Promise<unknown> }).relintChatDraft = async (
+      id,
+    ) => {
+      relinted.push(id);
+      return okv({ ...chatDraft, id });
+    };
+    const r = renderApp(
+      client,
+      wl8(),
+      999999,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async (p) => void edited.push(p),
+    );
+    await until(() => (r.lastFrame() ?? "").includes("acme/api"));
+    r.stdin.write("v");
+    await until(() => (r.lastFrame() ?? "").includes("add-cache"));
+    r.stdin.write("e"); // list mode: the cursor's draft is the target
+    await until(() => relinted.length === 1);
+    expect(edited).toEqual(["/x/state/chatDrafts/acme__api-20260901-1/add-cache.md"]);
+    expect(relinted).toEqual([chatDraft.id]);
   });
 });
 
@@ -2824,6 +2982,7 @@ describe("workspace wide mode", () => {
         configPath="/x/config.json"
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
+        draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
@@ -2929,6 +3088,7 @@ describe("workspace wide mode", () => {
         configPath="/x/config.json"
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
+        draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
@@ -3117,6 +3277,7 @@ describe("workspace wide mode", () => {
         configPath="/x/config.json"
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
+        draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}

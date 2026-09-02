@@ -7,6 +7,7 @@ import { useReview } from "../src/tui/hooks/useReview.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { PendingAssess } from "../src/assessReview.js";
 import type { PendingComment } from "../src/commentReview.js";
+import type { PendingDraft } from "../src/chat/draftStore.js";
 import { until } from "./helpers/until.js";
 
 const MARKER_BATCH: PendingAssess = {
@@ -41,15 +42,32 @@ const MARKER_DRAFT: PendingComment = {
   footer: true,
 };
 
+const MARKER_CHAT_DRAFT: PendingDraft = {
+  id: "acme__widgets-20260901-1",
+  key: "acme/widgets",
+  slug: "acme__widgets",
+  kind: "ticket",
+  files: [{ name: "add-cache.md", content: "body", lint: [], route: null, droppedKeys: [] }],
+  cwd: "/repos/acme/widgets",
+  nwo: "acme/widgets",
+  createdAt: "2026-09-01T00:00:00.000Z",
+  lintFailed: false,
+  blocked: null,
+  routeOverride: "auto",
+  commandArgs: null,
+};
+
 type FakeResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function makeClient(
   reviewResult: FakeResult<PendingAssess[]>,
   draftsResult: FakeResult<PendingComment[]>,
+  chatDraftsResult: FakeResult<PendingDraft[]> = { ok: true, value: [] },
 ): DashboardClient {
   return {
     listReview: async () => reviewResult,
     listCommentDrafts: async () => draftsResult,
+    listChatDrafts: async () => chatDraftsResult,
   } as unknown as DashboardClient;
 }
 
@@ -66,7 +84,7 @@ function Probe({
   const s = api.reviewState;
   return (
     <Text>
-      {`loading:${s.loading}:batches:${s.batches.length}:drafts:${s.drafts.length}:cursor:${s.cursor}:error:${s.error ?? "none"}`}
+      {`loading:${s.loading}:batches:${s.batches.length}:drafts:${s.drafts.length}:chat:${s.chatDrafts.length}:cursor:${s.cursor}:error:${s.error ?? "none"}`}
     </Text>
   );
 }
@@ -81,24 +99,60 @@ describe("useReview", () => {
       error: null,
       batches: [],
       drafts: [],
+      chatDrafts: [],
       cursor: 0,
       open: null,
     });
-    expect(r.lastFrame()).toBe("loading:false:batches:0:drafts:0:cursor:0:error:none");
+    expect(r.lastFrame()).toBe("loading:false:batches:0:drafts:0:chat:0:cursor:0:error:none");
     r.unmount();
   });
 
-  it("loadReview populates batches/drafts and clears loading on success", async () => {
+  it("loadReview populates batches/drafts/chat drafts and clears loading on success", async () => {
     const client = makeClient(
       { ok: true, value: [MARKER_BATCH] },
       { ok: true, value: [MARKER_DRAFT] },
+      { ok: true, value: [MARKER_CHAT_DRAFT] },
     );
     let api!: ReturnType<typeof useReview>;
     const r = render(<Probe client={client} onReady={(a) => (api = a)} />);
     void api.loadReview();
-    await until(() => r.lastFrame() === "loading:false:batches:1:drafts:1:cursor:0:error:none");
+    await until(
+      () => r.lastFrame() === "loading:false:batches:1:drafts:1:chat:1:cursor:0:error:none",
+    );
     expect(api.reviewState.batches[0]?.id).toBe(MARKER_BATCH.id);
     expect(api.reviewState.drafts[0]?.id).toBe(MARKER_DRAFT.id);
+    expect(api.reviewState.chatDrafts[0]?.id).toBe(MARKER_CHAT_DRAFT.id);
+    r.unmount();
+  });
+
+  it("a reload that loses the OPEN chat draft (submitted/discarded) closes the preview", async () => {
+    const client = makeClient({ ok: true, value: [] }, { ok: true, value: [] });
+    let api!: ReturnType<typeof useReview>;
+    const r = render(<Probe client={client} onReady={(a) => (api = a)} />);
+    api.setReviewState((s) => ({
+      ...s,
+      chatDrafts: [MARKER_CHAT_DRAFT],
+      open: { kind: "chatDraft", idx: 0 },
+    }));
+    await until(() => api.reviewState.open !== null);
+    void api.loadReview();
+    await until(() => api.reviewState.open === null && api.reviewState.chatDrafts.length === 0);
+    r.unmount();
+  });
+
+  it("a reload that KEEPS the open chat draft leaves the preview open", async () => {
+    const client = makeClient(
+      { ok: true, value: [] },
+      { ok: true, value: [] },
+      { ok: true, value: [MARKER_CHAT_DRAFT] },
+    );
+    let api!: ReturnType<typeof useReview>;
+    const r = render(<Probe client={client} onReady={(a) => (api = a)} />);
+    api.setReviewState((s) => ({ ...s, open: { kind: "chatDraft", idx: 0 } }));
+    await until(() => api.reviewState.open !== null);
+    void api.loadReview();
+    await until(() => api.reviewState.chatDrafts.length === 1);
+    expect(api.reviewState.open).toEqual({ kind: "chatDraft", idx: 0 });
     r.unmount();
   });
 
@@ -107,8 +161,25 @@ describe("useReview", () => {
     let api!: ReturnType<typeof useReview>;
     const r = render(<Probe client={client} onReady={(a) => (api = a)} />);
     void api.loadReview();
-    await until(() => r.lastFrame() === "loading:false:batches:0:drafts:0:cursor:0:error:boom");
+    await until(
+      () => r.lastFrame() === "loading:false:batches:0:drafts:0:chat:0:cursor:0:error:boom",
+    );
     expect(api.reviewState.error).toBe("boom");
     r.unmount();
+  });
+
+  it("any one of the three lists failing is the state's error", async () => {
+    const cases: Array<[FakeResult<PendingComment[]>, FakeResult<PendingDraft[]>, string]> = [
+      [{ ok: false, error: "no drafts" }, { ok: true, value: [] }, "no drafts"],
+      [{ ok: true, value: [] }, { ok: false, error: "no chat drafts" }, "no chat drafts"],
+    ];
+    for (const [drafts, chat, error] of cases) {
+      const client = makeClient({ ok: true, value: [] }, drafts, chat);
+      let api!: ReturnType<typeof useReview>;
+      const r = render(<Probe client={client} onReady={(a) => (api = a)} />);
+      void api.loadReview();
+      await until(() => api.reviewState.error === error);
+      r.unmount();
+    }
   });
 });

@@ -196,6 +196,7 @@ describe("useMainActions — the main view's action table", () => {
         error: "old",
         batches: [],
         drafts: [],
+        chatDrafts: [],
         cursor: 5,
         open: { kind: "draft", draftIdx: 1 },
       }),

@@ -14,12 +14,16 @@ import type { DashboardClient } from "./ghClient.js";
 import { subscribeChat, postChat, type ChatSubscribeHandlers } from "./chatClient.js";
 import {
   listChatDrafts,
+  readChatDraft,
   writeChatDraft,
   archiveChatDraft,
   draftFilePath,
   type PendingDraft,
 } from "../chat/draftStore.js";
 import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
+import { parseTicket } from "../ticket.js";
+import { lintTicket } from "../planLint.js";
+import { decideRoute } from "../submitPreflight.js";
 
 export interface ChatClientMethodDeps {
   attempt: <T>(fn: () => Promise<T>) => Promise<Result<T>>;
@@ -31,6 +35,8 @@ export interface ChatClientMethodDeps {
    *  GH_TIMEOUT docstring; passed in rather than re-exported so ghClient.ts's
    *  public surface is unchanged (Ruling R15). */
   ghTimeoutMs: number;
+  /** relintChatDraft's routing seam — the real decideRoute probes git/fs. */
+  decideRouteFn?: typeof decideRoute;
 }
 
 const chatErr = (r: { status: number; body: unknown }): string => {
@@ -46,6 +52,7 @@ export function chatClientMethods(
   | "chat"
   | "listChatDrafts"
   | "readChatDraftFile"
+  | "relintChatDraft"
   | "updateChatDraft"
   | "discardChatDraft"
   | "archiveSubmittedChatDraft"
@@ -53,6 +60,7 @@ export function chatClientMethods(
   | "issueContext"
 > {
   const { attempt, ghFn, readFileFn, fetchFn, healthBase, ghTimeoutMs } = deps;
+  const routeFn = deps.decideRouteFn ?? decideRoute;
 
   return {
     chat: {
@@ -93,6 +101,40 @@ export function chatClientMethods(
     },
     readChatDraftFile(id: string, name: string) {
       return attempt(async () => readFileFn(draftFilePath(cfg, id, name)));
+    },
+    /** The `e` edit round-trip's return leg (spec §6.6): the operator's
+     * $EDITOR wrote the files in place, so re-read each one and re-run
+     * exactly what parking ran — lintTicket (never the network: no label
+     * check) + decideRoute — then rewrite the JSON. The command kinds and a
+     * planSet carry no ticket, so their files are only refreshed. */
+    relintChatDraft(id: string) {
+      return attempt(async () => {
+        const { entry, error } = readChatDraft(cfg, id);
+        if (error) throw new Error(error);
+        if (!entry) throw new Error(`no chat draft '${id}'`);
+        const files = await Promise.all(
+          entry.files.map(async (f) => {
+            const content = readFileFn(draftFilePath(cfg, id, f.name));
+            if (entry.kind === "audit" || entry.kind === "investigate" || entry.kind === "planSet")
+              return { ...f, content };
+            const t = parseTicket(f.name, content, cfg.defaultTimeoutMinutes);
+            const lint = lintTicket(t.body, t.frontmatter, {
+              repoPath: entry.cwd,
+              repoNwo: entry.nwo,
+              checkLabels: false,
+            }).violations;
+            const route = await routeFn(cfg, t.frontmatter);
+            return { ...f, content, lint, route };
+          }),
+        );
+        const updated: PendingDraft = {
+          ...entry,
+          files,
+          lintFailed: files.some((f) => f.lint.some((v) => v.severity === "error")),
+        };
+        writeChatDraft(cfg, updated);
+        return updated;
+      });
     },
     updateChatDraft(draft: PendingDraft) {
       return attempt(async () => {

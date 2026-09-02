@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import type { Config } from "./types.js";
 import type { AppProps } from "./tui/App.js";
 import { dataTreePaths } from "./dataTree.js";
+import { draftFilePath } from "./chat/draftStore.js";
 import { checkForUpdate } from "./updateCheck.js";
 import { resolveBotLogin } from "./botIdentity.js";
 import type React from "react";
@@ -118,6 +119,9 @@ export async function runDashboard(
     clonesDir: dataTreePaths(c).clonesWatched,
     // The daemon's log file — the LOCAL logs section tails it (useLogTail).
     logPath: dataTreePaths(c).logFile,
+    // A parked chat draft's file on disk: `e` edits it, `s` hands the CLI the
+    // very same path (spec 2026-09-01 §6.6).
+    draftFilePathFn: (id: string, name: string) => draftFilePath(c, id, name),
     queueFn: makeQueueSnapshotFn(c),
     // Per-repo assess history for the rail's audit-age indicator (#193).
     assessHistoryFn: () => Promise.resolve(listHistory(c)),

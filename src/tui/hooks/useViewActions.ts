@@ -7,6 +7,8 @@ import type { ReviewState } from "../components/ReviewView.js";
 import type { View } from "../App.js";
 import type { CmdState } from "./useCmdOutput.js";
 import type { TranscriptState } from "./useTranscript.js";
+import type { ChatDraftActions } from "./useChatDrafts.js";
+import type { PendingDraft } from "../../chat/draftStore.js";
 
 export interface ViewActionsInput {
   /** The current view — this hook owns every arm EXCEPT `main`. */
@@ -29,6 +31,20 @@ export interface ViewActionsInput {
   toEnd: () => void;
   reviewState: ReviewState;
   setReviewState: Dispatch<SetStateAction<ReviewState>>;
+  /** The four chat-draft verbs (useChatDrafts) — the review row's half of the
+   * confirm surface the chat pane's card also drives (spec §6.6). */
+  chatDraftActions: ChatDraftActions;
+}
+
+/** The chat draft `submit`/`edit`/`route`/`discard` act on: the open preview's
+ * draft, or — in combined-list mode — the one under the cursor (the cursor
+ * walks batches, then comment drafts, then chat drafts). null everywhere else,
+ * which is what keeps `discard` on its batch/comment-draft meaning. */
+function selectedChatDraft(rs: ReviewState): PendingDraft | null {
+  if (rs.open?.kind === "chatDraft") return rs.chatDrafts[rs.open.idx] ?? null;
+  if (rs.open !== null) return null;
+  const idx = rs.cursor - rs.batches.length - rs.drafts.length;
+  return idx >= 0 ? (rs.chatDrafts[idx] ?? null) : null;
 }
 
 /**
@@ -63,19 +79,29 @@ export function useViewActions({
   toEnd,
   reviewState,
   setReviewState,
+  chatDraftActions,
 }: ViewActionsInput): Record<string, () => void> {
   const reviewActions = useMemo((): Record<string, () => void> => {
+    // Chat-draft verb dispatch: a no-op unless a chat draft is actually
+    // selected, so `s`/`e`/`r` are dead keys on a batch or comment-draft row.
+    const onChatDraft = (fn: (d: PendingDraft) => Promise<void>) => (): void => {
+      const d = selectedChatDraft(reviewState);
+      if (d) void fn(d);
+    };
     // Optimistic removal shared by post and discard: drop the draft, close
     // the preview, clamp the cursor to the (shrunk) combined list.
     const dropDraft = (id: string): void => {
       setReviewState((s) => {
         const drafts = s.drafts.filter((d) => d.id !== id);
-        const total = s.batches.length + drafts.length;
+        const total = s.batches.length + drafts.length + s.chatDrafts.length;
         return { ...s, drafts, open: null, cursor: Math.min(s.cursor, Math.max(0, total - 1)) };
       });
     };
     return {
       close,
+      submit: onChatDraft(chatDraftActions.submit),
+      edit: onChatDraft(chatDraftActions.edit),
+      route: onChatDraft(chatDraftActions.route),
       all: () =>
         setReviewState((s) => {
           const batch = s.open?.kind === "batch" ? s.batches[s.open.batchIdx] : undefined;
@@ -151,6 +177,9 @@ export function useViewActions({
       },
       discard: () => {
         const rs = reviewState;
+        // One `D`, three lists: the chat draft wins when it is the selection.
+        const chatDraft = selectedChatDraft(rs);
+        if (chatDraft) return void chatDraftActions.discard(chatDraft);
         if (rs.open?.kind === "draft") {
           const draft = rs.drafts[rs.open.draftIdx];
           if (!draft) return;
@@ -176,7 +205,7 @@ export function useViewActions({
               showToast("success", "discarded");
               setReviewState((s) => {
                 const batches = s.batches.filter((b) => b.id !== id);
-                const total = batches.length + s.drafts.length;
+                const total = batches.length + s.drafts.length + s.chatDrafts.length;
                 return {
                   ...s,
                   batches,
@@ -191,7 +220,7 @@ export function useViewActions({
         }
       },
     };
-  }, [close, client, aliveRef, showToast, reviewState, setReviewState]);
+  }, [close, client, aliveRef, showToast, reviewState, setReviewState, chatDraftActions]);
 
   return useMemo((): Record<string, () => void> => {
     switch (view) {
