@@ -5,7 +5,15 @@
  * `git format-patch --stdout` in a scratch clone, never hand-approximated.
  */
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -191,7 +199,7 @@ describe("applyPatchSeries", () => {
     const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
-    const contents = execFileSync("cat", [join(work, "game.js")], { encoding: "utf8" });
+    const contents = readFileSync(join(work, "game.js"), "utf8");
     expect(contents).toContain("five-point-five"); // the series' change landed
     expect(contents).toContain("three (annotated)"); // the drift survived, merged
   });
