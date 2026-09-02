@@ -115,6 +115,44 @@ describe("subscribeChat", () => {
     expect(statuses).toContain("down");
     expect(n).toBeLessThan(10);
   });
+
+  it("a non-2xx carries the daemon's own reason; a transport failure carries none (R32)", async () => {
+    for (const [status, body, reason] of [
+      [503, JSON.stringify({ error: "chat_disabled" }), "chat_disabled"],
+      [404, JSON.stringify({ error: "unknown_key" }), "unknown_key"],
+      [409, JSON.stringify({ error: "no_checkout" }), "no_checkout"],
+      [403, "forbidden, not json", null],
+    ] as const) {
+      const fetchFn = (async () => new Response(body, { status })) as unknown as typeof fetch;
+      const seen: Array<[string, string | null | undefined]> = [];
+      const stop = subscribeChat(
+        "k",
+        0,
+        { record: () => {}, status: (s, why) => seen.push([s, why]), end: () => {} },
+        { fetchFn, baseUrl: "http://x", backoffMs: [1], sleep: async () => {} },
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      stop();
+      expect(seen[seen.length - 1]).toEqual(["down", reason]);
+    }
+    // A transport failure says only "down": the dashboard must not render a
+    // stale route reason for a daemon that never answered.
+    const fetchFn = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const seen: Array<[string, string | null | undefined]> = [];
+    const stop = subscribeChat(
+      "k",
+      0,
+      { record: () => {}, status: (s, why) => seen.push([s, why]), end: () => {} },
+      { fetchFn, baseUrl: "http://x", backoffMs: [1, 1, 1], sleep: async () => {} },
+    );
+    await new Promise((r) => setTimeout(r, 40));
+    stop();
+    const down = seen.filter(([s]) => s === "down");
+    expect(down.length).toBeGreaterThan(0);
+    expect(down.every(([, why]) => why === undefined || why === null)).toBe(true);
+  });
 });
 
 describe("postChat", () => {

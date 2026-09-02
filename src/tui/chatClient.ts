@@ -45,7 +45,10 @@ export type ChatConnState = "connecting" | "live" | "reconnecting" | "down" | "e
 
 export interface ChatSubscribeHandlers {
   record(offset: number | null, line: string): void;
-  status(s: ChatConnState): void;
+  /** `reason` is the daemon's OWN word for a non-2xx refusal (chat_disabled,
+   *  unknown_key, no_checkout, not_a_repo …, Ruling R32) — absent for a
+   *  transport failure, which says nothing beyond "down". */
+  status(s: ChatConnState, reason?: string | null): void;
   end(reason: string): void;
 }
 
@@ -59,6 +62,19 @@ export interface ChatClientDeps {
 
 const DEFAULT_BACKOFF = [500, 1000, 2000, 5000];
 const DOWN_AFTER = 3;
+
+/** The `{"error":"…"}` a refused /chat/* answer carries (chatRoutes.ts).
+ *  Anything else — an empty body, HTML from a proxy, a body that cannot be
+ *  read — is null, never a guess. */
+async function errorReason(resp: Response): Promise<string | null> {
+  try {
+    const v: unknown = JSON.parse(await resp.text());
+    const e = typeof v === "object" && v !== null ? (v as { error?: unknown }).error : undefined;
+    return typeof e === "string" && e !== "" ? e : null;
+  } catch {
+    return null;
+  }
+}
 
 export function subscribeChat(
   key: string,
@@ -98,8 +114,10 @@ export function subscribeChat(
         if (!resp.ok || !resp.body) {
           // ANY non-2xx (or a 2xx with no body) is a daemon ANSWER, not a
           // transport failure: report down and stop — no retry storm against
-          // e.g. a 503 chat_disabled or a 404 unknown_key (ruling R19).
-          on.status("down");
+          // e.g. a 503 chat_disabled or a 404 unknown_key (ruling R19). The
+          // answer's own `error` rides along (R32) so the header can say WHY
+          // instead of collapsing every refusal into "daemon down".
+          on.status("down", resp.ok ? null : await errorReason(resp));
           return;
         }
         failures = 0;

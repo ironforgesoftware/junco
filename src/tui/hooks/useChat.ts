@@ -17,6 +17,10 @@ export const CHAT_RESUBSCRIBE_MS = 1000;
 export interface ChatState {
   key: string;
   connection: ChatConnState;
+  /** Ruling R32: the daemon's own word for a non-2xx refusal (chat_disabled,
+   *  no_checkout, not_a_repo, unknown_key …). Null while live, and null for a
+   *  transport-level down — which genuinely means only "daemon down". */
+  downReason: string | null;
   endReason: string | null;
   summary: TranscriptSummary | null; // over the ring, excluding message_update
   liveText: string; // in-flight assistant text (bus-only deltas), cleared at turn end
@@ -42,6 +46,7 @@ export interface ChatApi {
   send(text: string): Promise<void>;
   abort(): Promise<void>;
   fresh(): Promise<void>;
+  clearError(): void;
   setComposer(text: string): void;
   focusComposer(on: boolean): void;
   moveCursor(delta: number): void;
@@ -55,6 +60,7 @@ export interface ChatApi {
 const freshState = (key: string): ChatState => ({
   key,
   connection: "connecting",
+  downReason: null,
   endReason: null,
   summary: null,
   liveText: "",
@@ -116,6 +122,11 @@ export function useChat({
   const resubscribeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
   const keyRef = useRef<string | null>(null);
+  /** The composer's live content, mirrored so `send` can tell "still what the
+   *  operator was looking at" from "they typed while the POST was in flight"
+   *  without closing over a render's state. Every writer of `composer` below
+   *  keeps it in sync. */
+  const composerRef = useRef("");
   const lastOffsetRef = useRef<number | null>(null);
   // Bumped by closeChat and by every connect() call: a callback or timer
   // captured against an earlier generation is stale and no-ops.
@@ -211,9 +222,13 @@ export function useChat({
           if (offset !== null) lastOffsetRef.current = offset;
           onRecord(offset, line);
         },
-        status: (s) => {
+        status: (s, reason) => {
           if (genRef.current !== gen || !aliveRef.current) return;
-          setChat((st) => (st === null || st.key !== key ? st : { ...st, connection: s }));
+          setChat((st) =>
+            st === null || st.key !== key
+              ? st
+              : { ...st, connection: s, downReason: s === "down" ? (reason ?? null) : null },
+          );
         },
         end: (reason) => {
           if (genRef.current !== gen || !aliveRef.current) return;
@@ -264,6 +279,7 @@ export function useChat({
     unsubRef.current = null;
     keyRef.current = null;
     lastOffsetRef.current = null;
+    composerRef.current = "";
     ring.current = [];
     pendingDelta.current = "";
     if (flushTimer.current !== null) clearTimeout(flushTimer.current);
@@ -298,13 +314,39 @@ export function useChat({
     [aliveRef],
   );
 
+  /**
+   * Ruling R32: the composer is emptied only once the POST has been ACCEPTED.
+   * Clearing first threw the operator's message away on every failure —
+   * silently, since nothing rendered `error` either.
+   *
+   * What is cleared is the composer's own content at send time (`before`),
+   * not `text`: the slash router sends text the composer never held (`/pr 42`
+   * submits the fetched PR body). It is left alone if the operator has typed
+   * since, and put back if something else emptied the box while the POST was
+   * in flight.
+   */
   const send = useCallback(
     async (text: string): Promise<void> => {
       if (text.trim() === "") return;
-      setChat((s) => (s === null ? s : { ...s, composer: "", error: null }));
-      await withKey((key) => client.chat.prompt(key, text));
+      const key = keyRef.current;
+      if (key === null) return;
+      const before = composerRef.current;
+      setChat((s) => (s === null ? s : { ...s, error: null }));
+      const r = await client.chat.prompt(key, text);
+      if (!aliveRef.current) return;
+      if (r.ok) {
+        if (composerRef.current !== before) return;
+        composerRef.current = "";
+        setChat((s) => (s === null ? s : { ...s, composer: "" }));
+        return;
+      }
+      const composer = composerRef.current === "" ? before : composerRef.current;
+      composerRef.current = composer;
+      setChat((s) =>
+        s === null ? s : { ...s, composer, error: r.error ?? "chat request failed" },
+      );
     },
-    [client, withKey],
+    [client, aliveRef],
   );
   const abort = useCallback(
     (): Promise<void> => withKey((key) => client.chat.abort(key)),
@@ -319,10 +361,16 @@ export function useChat({
     [client, withKey],
   );
 
-  const setComposer = useCallback(
-    (composer: string): void => setChat((s) => (s === null ? s : { ...s, composer })),
+  /** Consumed by useChatInput's toast effect: an error is shown once, then
+   *  cleared, so the next failure toasts again even if it says the same thing. */
+  const clearError = useCallback(
+    (): void => setChat((s) => (s === null || s.error === null ? s : { ...s, error: null })),
     [],
   );
+  const setComposer = useCallback((composer: string): void => {
+    composerRef.current = composer;
+    setChat((s) => (s === null ? s : { ...s, composer }));
+  }, []);
   const focusComposer = useCallback(
     (composerFocused: boolean): void =>
       setChat((s) => (s === null ? s : { ...s, composerFocused })),
@@ -374,6 +422,7 @@ export function useChat({
     send,
     abort,
     fresh: freshSession,
+    clearError,
     setComposer,
     focusComposer,
     moveCursor,

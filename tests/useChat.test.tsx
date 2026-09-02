@@ -47,7 +47,8 @@ function makeClient(over: Partial<DashboardClient["chat"]> = {}, drafts: unknown
     client,
     calls,
     push: (offset: number | null, line: string) => handlers!.record(offset, line),
-    status: (s: Parameters<ChatSubscribeHandlers["status"]>[0]) => handlers!.status(s),
+    status: (s: Parameters<ChatSubscribeHandlers["status"]>[0], reason?: string | null) =>
+      handlers!.status(s, reason),
     end: (r: string) => handlers!.end(r),
   };
 }
@@ -182,6 +183,42 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     await api.abort();
     await api.fresh();
     expect(c.calls).toEqual(expect.arrayContaining(["abort", "fresh"]));
+  });
+
+  it("a failed send keeps the operator's text, raises `error`, and clearError clears it (R32)", async () => {
+    const c = makeClient({
+      prompt: async () => ({ ok: false as const, error: "no_checkout" }),
+    });
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    api.setComposer("a long message the operator typed");
+    await api.send("a long message the operator typed");
+    // Loop, don't tick: `api` is only refreshed by a commit (CLAUDE.md's Ink rule).
+    await until(() => api.chat!.error === "no_checkout");
+    // Clearing before the POST threw the text away on every failure.
+    expect(api.chat!.composer).toBe("a long message the operator typed");
+    api.clearError();
+    await until(() => api.chat!.error === null);
+  });
+
+  it("keeps the daemon's own down reason, and drops it once the stream is live again (R32)", async () => {
+    const c = makeClient();
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    c.status("down", "chat_disabled");
+    await until(() => api.chat!.connection === "down");
+    expect(api.chat!.downReason).toBe("chat_disabled");
+    c.status("live");
+    await until(() => api.chat!.connection === "live");
+    expect(api.chat!.downReason).toBeNull();
+    // A transport failure names no reason: nothing stale may survive it.
+    c.status("down");
+    await until(() => api.chat!.connection === "down");
+    expect(api.chat!.downReason).toBeNull();
   });
 
   it("drafts join the transcript's draft notes; the cursor walks anchors; selectedDraft resolves", async () => {

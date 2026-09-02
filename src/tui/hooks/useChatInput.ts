@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { MutableRefObject } from "react";
 import type { Key } from "ink";
 import type { DashboardClient } from "../ghClient.js";
@@ -79,6 +79,7 @@ export function useChatInput({
   const {
     chat,
     abort,
+    clearError,
     closeChat,
     focusComposer,
     fresh,
@@ -90,6 +91,17 @@ export function useChatInput({
     toggleThinking,
   } = chatApi;
   const follow = chat?.follow ?? false;
+
+  // Ruling R32: useChat records the last POST failure on `error`, and this
+  // hook owns the toast, so this is where it becomes visible — a failed
+  // send/abort/new was otherwise silent. Cleared straight after, so the SAME
+  // message toasts again on the next failure instead of reading as unchanged.
+  const error = chat?.error ?? null;
+  useEffect(() => {
+    if (error === null) return;
+    showToast("error", error);
+    clearError();
+  }, [error, showToast, clearError]);
 
   const close = useCallback((): void => {
     closeChat();

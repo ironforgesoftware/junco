@@ -22,6 +22,7 @@ import { until } from "./helpers/until.js";
 const base = (over: Partial<ChatState> = {}): ChatState => ({
   key: "acme/api",
   connection: "live",
+  downReason: null,
   endReason: null,
   summary: null,
   liveText: "",
@@ -72,6 +73,22 @@ describe("chatHeaderStatus (pure)", () => {
     expect(
       chatHeaderStatus(base({ endReason: "daemon_stopped", connection: "live" }), "m").text,
     ).toBe("idle");
+  });
+
+  it("a down connection says WHY when the daemon told us (R32)", () => {
+    for (const [downReason, text] of [
+      ["chat_disabled", "chat disabled (chat.enabled)"],
+      ["no_checkout", "no checkout — clone the repo first"],
+      ["not_a_repo", "checkout is not a git repo"],
+      ["unknown_key", "repo not watched"],
+      ["something_new", "daemon down"],
+      [null, "daemon down"],
+    ] as const) {
+      expect(chatHeaderStatus(base({ connection: "down", downReason }), "m")).toEqual({
+        text,
+        tone: "error",
+      });
+    }
   });
 
   it("blocked without an until timestamp omits the 'until' suffix", () => {
@@ -168,6 +185,26 @@ describe("ChatView", () => {
     expect(f).toContain("chat · acme/api · daemon down · showing last 2000");
     expect(f).toContain("esc blur/abort"); // footer: composer focused variant (base's default)
     expect(f).toContain("daemon down — chat unavailable"); // composer disabledReason (down)
+  });
+
+  it("the composer's disabled line names the daemon's reason too (R32)", async () => {
+    const r = render(
+      <ChatView
+        state={base({ connection: "down", downReason: "chat_disabled" })}
+        modelId={null}
+        costUsd={null}
+        scroll={0}
+        height={20}
+        width={80}
+        focused
+        onComposerChange={() => {}}
+        onComposerSubmit={() => {}}
+      />,
+    );
+    await until(() => r.lastFrame()!.includes("chat disabled (chat.enabled)"));
+    const f = r.lastFrame()!;
+    expect(f).toContain("chat · acme/api · chat disabled (chat.enabled)");
+    expect(f).toContain("chat disabled (chat.enabled) — chat unavailable");
   });
 
   it("turns segment is singular for exactly one turn", async () => {

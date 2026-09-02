@@ -174,6 +174,9 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     await until(() =>
       c.calls.some((x) => x.startsWith("prompt:") && x.includes("PR #42: Add cache")),
     );
+    // R32: the composer empties only once the POST is accepted, so wait for
+    // it — typing into a box that still holds "/pr 42" builds "/pr 42/abort".
+    await until(() => !r.lastFrame()!.includes("/pr 42"));
     r.stdin.write("/abort");
     await until(() => r.lastFrame()!.includes("/abort"));
     r.stdin.write("\r");

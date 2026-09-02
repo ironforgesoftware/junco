@@ -24,6 +24,23 @@ import { CHAT_RING } from "../hooks/useChat.js";
 const hhmm = (iso: string): string => iso.slice(11, 16);
 
 /**
+ * Ruling R32: `down` is terminal, so this line is the only thing the operator
+ * gets — "daemon down" for a chat that is merely switched off sends them to
+ * check a process that is running fine. Each string names the fix; an
+ * unrecognized (or absent) reason keeps the honest generic word.
+ */
+const DOWN_TEXT: Record<string, string> = {
+  chat_disabled: "chat disabled (chat.enabled)",
+  no_checkout: "no checkout — clone the repo first",
+  not_a_repo: "checkout is not a git repo",
+  unknown_key: "repo not watched",
+};
+
+export function downText(reason: string | null): string {
+  return (reason !== null ? DOWN_TEXT[reason] : undefined) ?? "daemon down";
+}
+
+/**
  * Header word, in priority order (spec §8.2).
  *
  * Ruling R21b: `useChat` resubscribes automatically after a terminal `end`,
@@ -39,7 +56,7 @@ export function chatHeaderStatus(
   modelId: string | null,
 ): { text: string; tone?: RowTone } {
   void modelId;
-  if (s.connection === "down") return { text: "daemon down", tone: "error" };
+  if (s.connection === "down") return { text: downText(s.downReason), tone: "error" };
   if (s.endReason === "session_reset")
     return { text: "session reset — send a message to start fresh", tone: "warn" };
   if (s.endReason === "daemon_stopped" && s.connection !== "live")
@@ -153,7 +170,9 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
         focused={p.focused && state.composerFocused}
         disabled={disabled}
         disabledReason={
-          state.connection === "down" ? "daemon down — chat unavailable" : "connecting…"
+          state.connection === "down"
+            ? `${downText(state.downReason)} — chat unavailable`
+            : "connecting…"
         }
         width={p.width - 2}
       />

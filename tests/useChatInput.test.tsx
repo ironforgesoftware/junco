@@ -50,6 +50,7 @@ const K = (over: Partial<Key> = {}): Key =>
 const chatState = (over: Partial<ChatState> = {}): ChatState => ({
   key: "acme/api",
   connection: "live",
+  downReason: null,
   endReason: null,
   summary: null,
   liveText: "",
@@ -93,7 +94,7 @@ function mount(
     draft?: PendingDraft | null;
     prContextFails?: boolean;
   } = {},
-): { readonly api: ChatInputApi; calls: string[] } {
+): { readonly api: ChatInputApi; calls: string[]; setChat: (c: ChatState | null) => void } {
   const calls: string[] = [];
   const rec = (s: string) => (): void => {
     calls.push(s);
@@ -105,6 +106,7 @@ function mount(
     send: async (t) => void calls.push(`send:${t}`),
     abort: async () => void calls.push("abort"),
     fresh: async () => void calls.push("fresh"),
+    clearError: rec("clearError"),
     setComposer: () => {},
     focusComposer: (on) => void calls.push(`focus:${String(on)}`),
     moveCursor: (d) => void calls.push(`cursor:${d}`),
@@ -143,16 +145,17 @@ function mount(
     railCount: 7,
   };
   const holder: { api: ChatInputApi | null } = { api: null };
-  function Probe(): React.JSX.Element {
-    holder.api = useChatInput(deps);
+  function Probe({ chat }: { chat: ChatState | null }): React.JSX.Element {
+    holder.api = useChatInput({ ...deps, chatApi: { ...chatApi, chat } });
     return <Text>probe</Text>;
   }
-  render(<Probe />);
+  const { rerender } = render(<Probe chat={deps.chatApi.chat} />);
   return {
     get api(): ChatInputApi {
       return holder.api!;
     },
     calls,
+    setChat: (c) => rerender(<Probe chat={c} />),
   };
 }
 
@@ -272,6 +275,19 @@ describe("useChatInput — the verbs (spec §8.6)", () => {
       h.api.chatHandlers[id]!();
       expect(h.calls, id).toEqual(["toast:info:no draft under the cursor"]);
     }
+  });
+
+  it("a POST failure on the chat state is toasted once and then cleared (R32)", async () => {
+    const h = mount();
+    expect(h.calls).toEqual([]);
+    h.setChat(chatState({ error: "no_checkout" }));
+    await until(() => h.calls.includes("toast:error:no_checkout"));
+    expect(h.calls).toEqual(["toast:error:no_checkout", "clearError"]);
+    // Cleared, so the same message toasts again next time rather than being
+    // swallowed as "unchanged".
+    h.setChat(chatState({ error: null }));
+    h.setChat(chatState({ error: "no_checkout" }));
+    await until(() => h.calls.filter((c) => c.startsWith("toast:")).length === 2);
   });
 
   it("thinking, follow (pausing at the tail), and close", () => {
