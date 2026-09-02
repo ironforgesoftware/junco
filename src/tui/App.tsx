@@ -1362,6 +1362,7 @@ export function App(props: AppProps): React.JSX.Element {
       case "main":
         return {
           kind: "main",
+          pane,
           body:
             body?.kind === "issues"
               ? "issues"
@@ -1370,10 +1371,10 @@ export function App(props: AppProps): React.JSX.Element {
                 : "repoDetail",
         };
     }
-  }, [logOverlay, filtering, view, composerFocused, body]);
+  }, [logOverlay, filtering, view, composerFocused, body, pane]);
   const bindings = useMemo(
-    () => buildContextBindings(bindingContext, pane, layout.mode),
-    [bindingContext, pane, layout.mode],
+    () => buildContextBindings(bindingContext, layout.mode),
+    [bindingContext, layout.mode],
   );
   // Help opens over the MAIN view only; the modal lists the bindings of the
   // surface underneath it (the help context itself derives nothing).
@@ -1382,6 +1383,7 @@ export function App(props: AppProps): React.JSX.Element {
       buildContextBindings(
         {
           kind: "main",
+          pane,
           body:
             body?.kind === "issues"
               ? "issues"
@@ -1389,7 +1391,6 @@ export function App(props: AppProps): React.JSX.Element {
                 ? body.section
                 : "repoDetail",
         },
-        pane,
         layout.mode,
       ),
     [body, pane, layout.mode],

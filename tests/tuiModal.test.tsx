@@ -28,7 +28,7 @@ describe("HelpModal", () => {
         pane={2}
         mode="wide"
         trigger="junco"
-        bindings={buildContextBindings({ kind: "main", body: "issues" }, 2, "wide")}
+        bindings={buildContextBindings({ kind: "main", body: "issues", pane: 2 }, "wide")}
       />,
     ).lastFrame()!;
     const ctx = f.indexOf("this view");
@@ -49,7 +49,7 @@ describe("HelpModal", () => {
         pane={2}
         mode="wide"
         trigger="junco"
-        bindings={buildContextBindings({ kind: "main", body: "issues" }, 2, "wide")}
+        bindings={buildContextBindings({ kind: "main", body: "issues", pane: 2 }, "wide")}
       />,
     ).lastFrame()!;
     expect(f).toContain("system rows"); // the section-verbs block
@@ -69,7 +69,7 @@ describe("HelpModal — derived mnemonics (#shortcut overhaul)", () => {
         pane={2}
         mode="wide"
         trigger="junco"
-        bindings={buildContextBindings({ kind: "main", body: "issues" }, 2, "wide")}
+        bindings={buildContextBindings({ kind: "main", body: "issues", pane: 2 }, "wide")}
       />,
     ).lastFrame()!;
     // Derived keys render as key → label rows: investigate (was analyze) is
@@ -93,7 +93,7 @@ describe("HelpModal — derived mnemonics (#shortcut overhaul)", () => {
         pane={2}
         mode="wide"
         trigger="junco"
-        bindings={buildContextBindings({ kind: "main", body: "queue" }, 2, "wide")}
+        bindings={buildContextBindings({ kind: "main", body: "queue", pane: 2 }, "wide")}
       />,
     ).lastFrame()!;
     const rows = f.split("\n").map((l) => l.replace(/║/g, "").trim());

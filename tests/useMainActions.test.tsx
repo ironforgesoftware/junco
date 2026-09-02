@@ -158,6 +158,7 @@ const ALL_IDS = [
   "restart",
   "retry",
   "review",
+  "transcript",
   "unwatch",
 ];
 
@@ -177,7 +178,7 @@ describe("useMainActions — the main view's action table", () => {
   });
 
   it("chat opens the selected row's session and focuses the chat pane, or toasts on a system row", () => {
-    const { api, spies, unmount } = mount();
+    const { api, spies, unmount } = mount({ pane: 1 });
     api["chat"]?.();
     expect(spies.openChat).toHaveBeenCalledWith("acme/widgets");
     expect(spies.setView).toHaveBeenCalledWith("chat");
@@ -190,9 +191,12 @@ describe("useMainActions — the main view's action table", () => {
     sys.unmount();
   });
 
-  it("chat yields t back to the issue transcript on the issues LIST pane (#330)", () => {
+  // `t`'s other reading (#330): the same derived letter, a separate verb —
+  // viewActions' `bodyVerbs` decides which one the pane offers (R27), so this
+  // handler carries no pane branch of its own.
+  it("transcript opens the selected issue's ticket transcript", () => {
     const { api, spies, unmount } = mount({ pane: 2 });
-    api["chat"]?.();
+    api["transcript"]?.();
     expect(spies.openIssueTranscript).toHaveBeenCalledWith("acme/widgets", ISSUE);
     expect(spies.openChat).not.toHaveBeenCalled();
     unmount();

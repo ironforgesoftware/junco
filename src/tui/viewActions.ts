@@ -39,7 +39,11 @@ export type StructuralOnlyView =
   | "chatCompose";
 
 export type BindingContext =
-  | { kind: "main"; body: MainBody }
+  /** The main view's context is PANE-scoped: the focused pane decides which
+   * verbs the body offers (Ruling R27 — see `bodyVerbs`), so the pane belongs
+   * to the context identity rather than to a second argument that could
+   * disagree with it. */
+  | { kind: "main"; body: MainBody; pane: 1 | 2 | 3 }
   | { kind: "view"; view: OverlayView }
   | { kind: "logOverlay" }
   | { kind: "structuralOnly"; view: StructuralOnlyView };
@@ -277,6 +281,19 @@ const RAIL_CHIP_ORDER = [
 const ISSUES_CHIP_ORDER = ["dispatch", "approve", "analyze", "assess", "prs", "quit", "help"];
 const PANE3_CHIP_ORDER = ["browser", "quit", "help"];
 
+/** The body's verb list for the focused pane. `t` is claimed by TWO readings
+ * of the issues body (Ruling R27): the issue LIST owns the ticket-transcript
+ * key (#330 — the older, documented contract), while the rail and the PR
+ * monitor, where no issue sits under the cursor, open the repo's chat (spec
+ * 2026-09-01 §8.1). One slot, one derived letter, one honest label per pane —
+ * and since the footer chip, the help modal and the keyboard dispatch all read
+ * this same list, no label can claim a verb its key does not run. */
+function bodyVerbs(body: MainBody, pane: 1 | 2 | 3): MnemonicOption[] {
+  const verbs = BODY_VERBS[body];
+  if (body !== "issues" || pane !== 2) return verbs;
+  return verbs.map((o) => (o.id === "chat" ? { id: "transcript", label: "transcript" } : o));
+}
+
 function mnemonicChip(d: DerivedMnemonic): Chip {
   return {
     kind: "mnemonic",
@@ -292,14 +309,14 @@ function toKeymap(all: DerivedMnemonic[]): ReadonlyMap<string, string> {
   return new Map(all.map((d) => [d.key, d.id]));
 }
 
-export function buildContextBindings(
-  context: BindingContext,
-  pane: 1 | 2 | 3,
-  mode: LayoutMode,
-): ContextBindings {
+export function buildContextBindings(context: BindingContext, mode: LayoutMode): ContextBindings {
   switch (context.kind) {
     case "main": {
-      const all = deriveMnemonics([...MAIN_GLOBALS, ...BODY_VERBS[context.body]], {
+      // The ONE pane this call knows about (it used to arrive as a second
+      // argument that only this branch read, which let the keymap and the
+      // chips be built for different panes).
+      const pane = context.pane;
+      const all = deriveMnemonics([...MAIN_GLOBALS, ...bodyVerbs(context.body, pane)], {
         reserved: MAIN_RESERVED,
         excluded: MAIN_EXCLUDED,
       });
@@ -313,7 +330,9 @@ export function buildContextBindings(
               ? ISSUES_CHIP_ORDER
               : // Section/RepoDetail bodies: the body's own verbs (globals
                 // live on the rail chips; the keymap carries them anyway).
-                BODY_VERBS[context.body].filter((o) => !o.hidden).map((o) => o.id);
+                bodyVerbs(context.body, pane)
+                  .filter((o) => !o.hidden)
+                  .map((o) => o.id);
       const byId = new Map(visible.map((d) => [d.id, d]));
       return {
         chips: [
