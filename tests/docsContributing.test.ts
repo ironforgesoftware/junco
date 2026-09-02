@@ -43,7 +43,7 @@ describe("CONTRIBUTING.md mirrors what the tree enforces (#373)", () => {
   it("states the full gate exactly as .github/workflows/quality-gate.yml runs it", () => {
     const gate = ciGate();
     expect(gate).toBe(
-      "npm run lint && npm run format:check && npm run typecheck && npm run build && npm test",
+      "npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run test:e2e",
     );
     expect(CONTRIBUTING).toContain(gate);
     expect(CLAUDE).toContain(gate);

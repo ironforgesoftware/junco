@@ -1,18 +1,22 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, configDefaults } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    // tests/e2e/ is its own project (vitest.e2e.config.ts): it spawns the
+    // built CLI and must never ride along with the unit run.
+    exclude: [...configDefaults.exclude, "tests/e2e/**"],
     // vi.restoreAllMocks() before every test: a vi.spyOn left behind by a
     // failed (or forgetful) test must not leak into the next one.
     restoreMocks: true,
     coverage: {
       provider: "v8",
       include: ["src/**"],
-      // Global floor = the whole suite measured 2026-09-01 (92.51/85.46/90.63/
+      // Global floor = the whole suite measured 2026-09-01 (92.50/85.45/90.63/
       // 94.39), rounded down to whole percent. The round-down is the slack that
-      // absorbs ordinary churn; raising these is a reviewable edit and lowering
-      // them is a visible one, so a silent drop cannot happen. Ratchet them
-      // whenever the measured numbers clear the next whole percent.
+      // absorbs ordinary churn — and ~0.01pt of run-to-run jitter, so never
+      // ratchet to the last decimal; raising these is a reviewable edit and
+      // lowering them is a visible one, so a silent drop cannot happen. Ratchet
+      // them whenever the measured numbers clear the next whole percent.
       // (Previous floor: 90/83/87/92, the 2026-07-21 baseline —
       // docs/superpowers/specs/2026-07-21-test-suite-consolidation-design.md §5.)
       //
