@@ -85,6 +85,22 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
     if (!key) return json(res, 400, { error: "missing key" });
     const sinceRaw = url.searchParams.get("since") ?? req.headers["last-event-id"];
     const since = Number.parseInt(typeof sinceRaw === "string" ? sinceRaw : "0", 10);
+
+    // Declared before subscribing so `onEnd` (which fires from inside the
+    // manager call, before the ping timer or `unsubscribe` exist yet) can
+    // still reach a single, idempotent cleanup: `res.end()` there must
+    // synchronously disarm the ping, since the `close` event it eventually
+    // triggers fires too late to stop one more `res.write` after `end`.
+    let ping: NodeJS.Timeout | null = null;
+    let unsubscribe: (() => void) | null = null;
+    let cleaned = false;
+    const cleanup = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      if (ping) clearInterval(ping);
+      unsubscribe?.();
+    };
+
     const r = await manager.subscribe(key, Number.isFinite(since) && since > 0 ? since : 0, {
       onLine(line, offset) {
         const data = line.endsWith("\n") ? line.slice(0, -1) : line;
@@ -93,9 +109,11 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
       onEnd(reason) {
         res.write(`event: end\ndata: ${JSON.stringify({ reason })}\n\n`);
         res.end();
+        cleanup();
       },
     });
     if (!r.ok) return json(res, STATUS[r.error], { error: r.error });
+    unsubscribe = r.value.unsubscribe;
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
@@ -106,11 +124,7 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
     // arrives, so flush explicitly.
     res.flushHeaders();
     for (const { offset, line } of r.value.replay) res.write(`id: ${offset}\ndata: ${line}\n\n`);
-    const ping = setInterval(() => res.write(": ping\n\n"), pingMs);
-    const cleanup = (): void => {
-      clearInterval(ping);
-      r.value.unsubscribe();
-    };
+    ping = setInterval(() => res.write(": ping\n\n"), pingMs);
     req.on("close", cleanup);
     res.on("close", cleanup);
   };
