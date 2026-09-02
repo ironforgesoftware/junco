@@ -61,7 +61,7 @@
     "ink": "7.1.1",
     "react": "19.2.8",
     "yaml": "2.9.0",
-    "zod": "3.25.76"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@types/node": "22.19.19",

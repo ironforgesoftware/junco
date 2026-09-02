@@ -18,6 +18,15 @@ const DEFAULT_THINKING_LEVEL_MAP: Record<string, string> = {
   xhigh: "xhigh",
 };
 
+// `.prefault({})` on every nested section, never `.default({})`: zod 4 changed
+// `.default()` to short-circuit — an absent key yields the default value AS
+// GIVEN, without parsing it — so `z.object({...}).default({})` would hand back a
+// literal `{}` and strand every leaf default inside it as `undefined`.
+// `.prefault()` is zod 4's spelling for the v3 behaviour junco relies on: the
+// value is fed THROUGH the schema, so an omitted section materializes with all
+// of its leaf defaults filled in. Leaf `.default(v)` calls are unaffected — `v`
+// there is already the parsed output. Pinned by
+// tests/configSchemaDefaults.test.ts.
 export const ConfigSchema = z.object({
   dataDir: z.string().optional(), // unified data root; default applied at assembly
   // npm update-check opt-out (spec 2026-07-16): CLI/TUI-side only, the daemon
@@ -43,7 +52,7 @@ export const ConfigSchema = z.object({
         .string()
         .optional()
         .refine((v) => v === undefined || !v.startsWith("!"), {
-          message:
+          error:
             'config: model.apiKey must not be a "!command" value — junco does not execute ' +
             "shell commands from config.json.",
         }),
@@ -52,7 +61,7 @@ export const ConfigSchema = z.object({
           maxRetries: z.number().int().min(0).optional(),
           baseDelayMs: z.number().min(0).optional(),
         })
-        .default({}),
+        .prefault({}),
       reasoning: z.boolean().default(true),
       input: z.array(z.string()).default(["text", "image"]),
       contextWindow: z.number().default(131072),
@@ -64,12 +73,12 @@ export const ConfigSchema = z.object({
           cacheRead: z.number().default(0),
           cacheWrite: z.number().default(0),
         })
-        .default({}),
+        .prefault({}),
       thinkingLevel: z.string().default("medium"),
-      thinkingLevelMap: z.record(z.string()).default(DEFAULT_THINKING_LEVEL_MAP),
-      compat: z.record(z.unknown()).default({}),
+      thinkingLevelMap: z.record(z.string(), z.string()).default(DEFAULT_THINKING_LEVEL_MAP),
+      compat: z.record(z.string(), z.unknown()).default({}),
     })
-    .default({}),
+    .prefault({}),
   worker: z
     .object({
       defaultTimeoutMinutes: z.number().min(1).default(30),
@@ -93,7 +102,7 @@ export const ConfigSchema = z.object({
       // budget_exhausted until local midnight — see providerGate.ts.
       dailyBudgetUsd: z.number().min(0).default(0),
     })
-    .default({}),
+    .prefault({}),
   supervisor: z
     .object({
       enabled: z.boolean().default(true),
@@ -102,7 +111,7 @@ export const ConfigSchema = z.object({
       outputBudgetPerTurn: z.number().default(12000),
       outputBudgetPostCommit: z.number().default(24000),
     })
-    .default({}),
+    .prefault({}),
   git: z
     .object({
       gitBin: z.string().default("git"),
@@ -113,7 +122,7 @@ export const ConfigSchema = z.object({
       removeWorktreeOnSuccess: z.boolean().default(true),
       allowedRepoRoots: z.array(z.string()).default([]),
     })
-    .default({}),
+    .prefault({}),
   pr: z
     .object({
       draftByDefault: z.boolean().default(true),
@@ -123,7 +132,7 @@ export const ConfigSchema = z.object({
       // junco's own push — this is the choke point that sees it. On by default.
       secretScan: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   verify: z
     .object({
       enabled: z.boolean().default(true),
@@ -134,7 +143,7 @@ export const ConfigSchema = z.object({
       // leave the sandbox (verification then runs the repo's code unconfined).
       sandboxed: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   sandbox: z
     .object({
       // On by default: agent tool execution is confined unless explicitly
@@ -155,21 +164,21 @@ export const ConfigSchema = z.object({
       // max = 2^31-1 ms in seconds — Node's setTimeout ceiling
       bashTimeoutSeconds: z.number().int().min(0).max(2_147_483).default(600),
     })
-    .default({}),
+    .prefault({}),
   critic: z
     .object({
       enabled: z.boolean().default(true),
       maxRetries: z.number().default(1),
       thinking: z.string().default("minimal"),
     })
-    .default({}),
+    .prefault({}),
   planLint: z
     .object({
       enabled: z.boolean().default(true),
       blockOnError: z.boolean().default(true),
       checkLabels: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   observability: z
     .object({
       healthEnabled: z.boolean().default(true),
@@ -188,7 +197,7 @@ export const ConfigSchema = z.object({
       logToFile: z.boolean().default(true),
       transcripts: z.boolean().default(true),
     })
-    .default({}),
+    .prefault({}),
   github: z
     .object({
       enabled: z.boolean().default(false),
@@ -207,7 +216,7 @@ export const ConfigSchema = z.object({
         )
         .default([]),
     })
-    .default({}),
+    .prefault({}),
   assess: z
     .object({
       maxIssuesPerRun: z.number().int().min(1).default(20),
@@ -215,25 +224,25 @@ export const ConfigSchema = z.object({
       npmBin: z.string().min(1).default("npm"),
       fileAs: z.enum(["me", "bot"]).default("me"),
     })
-    .default({}),
+    .prefault({}),
   skills: z
     .object({
       harnessDirs: z.array(z.string().min(1)).default([]),
     })
-    .default({}),
+    .prefault({}),
   botAccount: z
     .object({
       enabled: z.boolean().default(false),
       configDir: z.string().min(1).default(DEFAULT_BOT_GH_CONFIG_DIR),
     })
-    .default({}),
+    .prefault({}),
   planSets: z
     .object({
       enabled: z.boolean().default(false),
       mergePollSeconds: z.number().min(5).default(60),
       maxTasks: z.number().int().min(1).default(10),
     })
-    .default({}),
+    .prefault({}),
 });
 
 export type ConfigParsed = z.infer<typeof ConfigSchema>;
