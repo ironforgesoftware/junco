@@ -30,6 +30,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       m: "dispatch",
       o: "approve",
       n: "analyze",
+      t: "chat",
       I: "dispatchAsk",
       A: "assessAutoPlan",
       R: "replan",
@@ -47,9 +48,44 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
   it("main:daemon", () => {
     expect(km({ kind: "main", body: "daemon" })).toEqual({ ...GLOBALS, R: "restart", f: "flush" });
   });
-  it("main:repoDetail and main:logs are globals-only", () => {
-    expect(km({ kind: "main", body: "repoDetail" })).toEqual(GLOBALS);
+  it("main:logs is globals-only", () => {
     expect(km({ kind: "main", body: "logs" })).toEqual(GLOBALS);
+  });
+  it("main:issues and main:repoDetail carry chat on t (a body verb — the queue body keeps t for retry)", () => {
+    expect(km({ kind: "main", body: "issues" })).toMatchObject({ t: "chat" });
+    expect(km({ kind: "main", body: "repoDetail" })).toEqual({ ...GLOBALS, t: "chat" });
+    expect(km({ kind: "main", body: "queue" })).toMatchObject({ t: "retry" });
+    expect(km({ kind: "main", body: "logs" })).toEqual(GLOBALS);
+  });
+  it("chat view (composer blurred) and chatCompose (focused)", () => {
+    expect(km({ kind: "view", view: "chat" })).toEqual({
+      s: "submit",
+      e: "edit",
+      D: "discard",
+      r: "route",
+      t: "thinking",
+      f: "follow",
+      q: "close",
+    });
+    expect(km({ kind: "structuralOnly", view: "chatCompose" })).toEqual({});
+    const chips = buildContextBindings(
+      { kind: "structuralOnly", view: "chatCompose" },
+      2,
+      "wide",
+    ).chips.map((c) => c.label);
+    expect(chips).toEqual(["message", "send", "newline", "commands", "blur/abort"]);
+  });
+  it("review gains submit/edit/route AFTER the existing four, keys unchanged", () => {
+    expect(km({ kind: "view", view: "review" })).toEqual({
+      a: "all",
+      n: "none",
+      f: "file",
+      D: "discard",
+      s: "submit",
+      e: "edit",
+      r: "route",
+      q: "close",
+    });
   });
   it("overlay views (each with the hidden reserved q close)", () => {
     for (const view of ["detail", "prDetail", "repoDetail", "prs"] as const) {
@@ -114,6 +150,7 @@ describe("invariants", () => {
       { kind: "view", view: "prDetail" },
       { kind: "view", view: "repoDetail" },
       { kind: "view", view: "transcript" },
+      { kind: "view", view: "chat" },
       { kind: "logOverlay" },
     ];
     for (const c of contexts) {

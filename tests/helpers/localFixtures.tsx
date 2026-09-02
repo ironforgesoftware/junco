@@ -306,6 +306,7 @@ export function makeAppProps(over: Partial<AppProps> = {}): AppProps {
     clonesDir: "/x/state/repos",
     logPath: "/x/state/worker.log",
     draftFilePathFn: (id, name) => `/x/state/chatDrafts/${id}/${name}`,
+    chatModelId: "test/model",
     // Never the real default: `e` on a chat draft would spawn $EDITOR (or vi)
     // with stdio inherited INSIDE vitest and hang the run. Overridable.
     editFileFn: async () => {},

@@ -83,6 +83,7 @@ export async function runDashboard(
     { makeQueueSnapshotFn },
     { makeLocalCheapFn, makeLocalHeavyFn },
     { listHistory },
+    { chatCfgFor },
     react,
     ink,
   ] = await Promise.all([
@@ -96,6 +97,9 @@ export async function runDashboard(
     import("./tui/queueSnapshot.js"),
     import("./tui/localSnapshot.js"),
     import("./assessHistory.js"),
+    // Dynamic like the rest: chatSession.ts pulls the whole chat turn stack in
+    // behind it, and only the dashboard needs the resolved model id.
+    import("./chat/chatSession.js"),
     import("react"),
     import("ink"),
   ]);
@@ -122,6 +126,9 @@ export async function runDashboard(
     // A parked chat draft's file on disk: `e` edits it, `s` hands the CLI the
     // very same path (spec 2026-09-01 §6.6).
     draftFilePathFn: (id: string, name: string) => draftFilePath(c, id, name),
+    // The chat's own model chain (chat.modelId → plannerModelId → model.id),
+    // for the chat header strip.
+    chatModelId: chatCfgFor(c).model.id,
     queueFn: makeQueueSnapshotFn(c),
     // Per-repo assess history for the rail's audit-age indicator (#193).
     assessHistoryFn: () => Promise.resolve(listHistory(c)),

@@ -26,13 +26,23 @@ export type OverlayView =
   | "prDetail"
   | "review"
   | "cmdOutput"
-  | "transcript";
+  | "transcript"
+  | "chat";
+
+/** Text-owning contexts: no mnemonic derives, so their chips ARE the keymap. */
+export type StructuralOnlyView =
+  | "palette"
+  | "addRepo"
+  | "config"
+  | "help"
+  | "filtering"
+  | "chatCompose";
 
 export type BindingContext =
   | { kind: "main"; body: MainBody }
   | { kind: "view"; view: OverlayView }
   | { kind: "logOverlay" }
-  | { kind: "structuralOnly"; view: "palette" | "addRepo" | "config" | "help" | "filtering" };
+  | { kind: "structuralOnly"; view: StructuralOnlyView };
 
 export type Chip =
   | { kind: "structural"; key: string; label: string }
@@ -84,12 +94,16 @@ const BODY_VERBS: Record<MainBody, MnemonicOption[]> = {
     { id: "dispatch", label: "import" },
     { id: "approve", label: "approve" },
     { id: "analyze", label: "investigate" },
+    // Spec 2026-09-01 §8.1: `chat` is a BODY verb of the two repo-row bodies,
+    // never a MAIN_GLOBAL — a global would claim `t` ahead of the queue body's
+    // `retry`, which owns it by a deliberate earlier fix.
+    { id: "chat", label: "chat" },
     // Shift variants: bound, help-only (spec §2 hidden set).
     { id: "dispatchAsk", label: "import as ask", guarded: true, hidden: true },
     { id: "assessAutoPlan", label: "audit auto-plan", guarded: true, hidden: true },
     { id: "replan", label: "re-plan", guarded: true, hidden: true },
   ],
-  repoDetail: [],
+  repoDetail: [{ id: "chat", label: "chat" }],
   queue: [
     // `retry` — the CLI verb this spawns (junco retry), and a label whose
     // letters survive the global claims (spec §2).
@@ -131,6 +145,18 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
   ],
   cmdOutput: [{ id: "reRun", label: "re-run" }, CLOSE],
   transcript: [{ id: "thinking", label: "thinking" }, { id: "follow", label: "follow" }, CLOSE],
+  // Spec 2026-09-01 §8.3, in this order: submit → s, edit → e, discard → D,
+  // route → r, thinking → t, follow → f, close (hidden) → q. The first four
+  // act on the draft card under the cursor, the last two on the view.
+  chat: [
+    { id: "submit", label: "submit" },
+    { id: "edit", label: "edit" },
+    { id: "discard", label: "discard", guarded: true },
+    { id: "route", label: "route" },
+    { id: "thinking", label: "thinking" },
+    { id: "follow", label: "follow" },
+    CLOSE,
+  ],
 };
 
 const LOG_OVERLAY_OPTIONS: MnemonicOption[] = [
@@ -187,10 +213,18 @@ function viewStructural(view: OverlayView): Chip[] {
       return [s("↑/↓", "scroll"), s("esc", "back")];
     case "transcript":
       return [s("↑/↓", "tool"), s("enter", "expand"), s("[/]", "scroll"), s("esc", "back")];
+    case "chat":
+      return [
+        s("i", "compose"),
+        s("↑/↓", "move"),
+        s("enter", "expand"),
+        s("[/]", "scroll"),
+        s("esc", "back"),
+      ];
   }
 }
 
-function structuralOnly(view: "palette" | "addRepo" | "config" | "help" | "filtering"): Chip[] {
+function structuralOnly(view: StructuralOnlyView): Chip[] {
   const s = (key: string, label: string): Chip => ({ kind: "structural", key, label });
   switch (view) {
     case "filtering":
@@ -203,6 +237,16 @@ function structuralOnly(view: "palette" | "addRepo" | "config" | "help" | "filte
       return [s("↑/↓", "field"), s("←/→", "section"), s("enter", "edit/toggle"), s("esc", "close")];
     case "help":
       return [s("any key", "close")];
+    case "chatCompose":
+      // The composer owns every key while focused (spec §8.3), so no mnemonic
+      // may derive here — these five chips are the whole surface.
+      return [
+        s("type", "message"),
+        s("enter", "send"),
+        s("ctrl+j", "newline"),
+        s("/", "commands"),
+        s("esc", "blur/abort"),
+      ];
   }
 }
 

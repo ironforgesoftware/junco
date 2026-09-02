@@ -480,6 +480,7 @@ function renderApp(
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
         draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
+        chatModelId="test/model"
         // Never the real default here either: it would spawn $EDITOR/vi with
         // stdio inherited inside vitest (see localFixtures' makeAppProps).
         editFileFn={editFileFn ?? (async () => {})}
@@ -1218,6 +1219,7 @@ describe("App", () => {
             clonesDir={CLONES_DIR}
             logPath="/x/state/worker.log"
             draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
+            chatModelId="test/model"
             refreshPollMs={999999}
             healthPollMs={999999}
             queuePollMs={999999}
@@ -1275,6 +1277,7 @@ describe("App", () => {
             clonesDir={CLONES_DIR}
             logPath="/x/state/worker.log"
             draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
+            chatModelId="test/model"
             refreshPollMs={999999}
             healthPollMs={999999}
             queuePollMs={999999}
@@ -2019,6 +2022,7 @@ describe("audit hotkey (u/A)", () => {
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
         draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
+        chatModelId="test/model"
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
@@ -2985,6 +2989,7 @@ describe("workspace wide mode", () => {
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
         draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
+        chatModelId="test/model"
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
@@ -3091,6 +3096,7 @@ describe("workspace wide mode", () => {
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
         draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
+        chatModelId="test/model"
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}
@@ -3280,6 +3286,7 @@ describe("workspace wide mode", () => {
         clonesDir={CLONES_DIR}
         logPath="/x/state/worker.log"
         draftFilePathFn={(id, name) => `/x/state/chatDrafts/${id}/${name}`}
+        chatModelId="test/model"
         refreshPollMs={999999}
         healthPollMs={999999}
         queuePollMs={999999}

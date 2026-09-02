@@ -66,6 +66,8 @@ function makeSpies() {
     runAction: vi.fn(),
     runLocalAction: vi.fn(),
     askConfirm: vi.fn(),
+    openChat: vi.fn(),
+    openIssueTranscript: vi.fn(),
   };
 }
 
@@ -98,6 +100,9 @@ function mount(
     sysSection: null,
     selectedRow: { kind: "repo", repo: REPO },
     currentNwo: "acme/widgets",
+    currentRepoKey: "acme/widgets",
+    openChat: spies.openChat,
+    openIssueTranscript: spies.openIssueTranscript,
     currentIssue: ISSUE,
     currentRepo: MAPPING,
     selectedPane3Pr: null,
@@ -137,6 +142,7 @@ const ALL_IDS = [
   "assess",
   "assessAutoPlan",
   "browser",
+  "chat",
   "commands",
   "delete",
   "dispatch",
@@ -167,6 +173,28 @@ describe("useMainActions — the main view's action table", () => {
     api["quit"]?.();
     expect(spies.exit).toHaveBeenCalledTimes(1);
     expect(spies.onExit).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("chat opens the selected row's session and focuses the chat pane, or toasts on a system row", () => {
+    const { api, spies, unmount } = mount();
+    api["chat"]?.();
+    expect(spies.openChat).toHaveBeenCalledWith("acme/widgets");
+    expect(spies.setView).toHaveBeenCalledWith("chat");
+    expect(spies.setPane).toHaveBeenCalledWith(2);
+    unmount();
+    const sys = mount({ currentRepoKey: null });
+    sys.api["chat"]?.();
+    expect(sys.spies.openChat).not.toHaveBeenCalled();
+    expect(sys.spies.showToast).toHaveBeenCalledWith("info", "no repo selected");
+    sys.unmount();
+  });
+
+  it("chat yields t back to the issue transcript on the issues LIST pane (#330)", () => {
+    const { api, spies, unmount } = mount({ pane: 2 });
+    api["chat"]?.();
+    expect(spies.openIssueTranscript).toHaveBeenCalledWith("acme/widgets", ISSUE);
+    expect(spies.openChat).not.toHaveBeenCalled();
     unmount();
   });
 

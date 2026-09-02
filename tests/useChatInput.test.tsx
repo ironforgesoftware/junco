@@ -1,0 +1,324 @@
+/**
+ * useChatInput (spec 2026-09-01 §8.3): the chat view's key cascade, its
+ * id-keyed verbs, and the slash router. App wires these into its own cascade
+ * (tests/tuiApp.chat.test.tsx covers the wiring through real frames); this
+ * suite drives every branch directly against a fake ChatApi so the App-level
+ * suite can stay small.
+ */
+import React from "react";
+import { describe, it, expect } from "vitest";
+import { render } from "ink-testing-library";
+import { Text, type Key } from "ink";
+import {
+  useChatInput,
+  type ChatInputApi,
+  type ChatInputDeps,
+} from "../src/tui/hooks/useChatInput.js";
+import type { ChatApi, ChatState } from "../src/tui/hooks/useChat.js";
+import type { DashboardClient } from "../src/tui/ghClient.js";
+import type { PendingDraft } from "../src/chat/draftStore.js";
+import type { Pane, View } from "../src/tui/App.js";
+import { okv, stubClient } from "./helpers/localFixtures.js";
+import { until } from "./helpers/until.js";
+
+const KEY_NAMES = [
+  "upArrow",
+  "downArrow",
+  "leftArrow",
+  "rightArrow",
+  "pageDown",
+  "pageUp",
+  "home",
+  "end",
+  "return",
+  "escape",
+  "ctrl",
+  "shift",
+  "tab",
+  "backspace",
+  "delete",
+  "meta",
+  "super",
+  "hyper",
+  "capsLock",
+  "numLock",
+] as const;
+/** A Key with every modifier false, then the caller's overrides. */
+const K = (over: Partial<Key> = {}): Key =>
+  ({ ...Object.fromEntries(KEY_NAMES.map((n) => [n, false])), ...over }) as Key;
+
+const chatState = (over: Partial<ChatState> = {}): ChatState => ({
+  key: "acme/api",
+  connection: "live",
+  endReason: null,
+  summary: null,
+  liveText: "",
+  streaming: false,
+  blocked: null,
+  degraded: false,
+  overflowed: false,
+  drafts: [],
+  composer: "",
+  composerFocused: false,
+  cursor: 0,
+  follow: false,
+  showThinking: false,
+  expanded: new Set(),
+  lastOffset: null,
+  error: null,
+  ...over,
+});
+
+const DRAFT: PendingDraft = {
+  id: "d1",
+  key: "acme/api",
+  slug: "acme__api",
+  kind: "ticket",
+  files: [],
+  cwd: "/r",
+  nwo: "acme/api",
+  createdAt: "t",
+  lintFailed: false,
+  blocked: null,
+  routeOverride: "auto",
+  commandArgs: null,
+};
+
+function mount(
+  o: {
+    chat?: ChatState | null;
+    view?: View;
+    pane?: Pane;
+    currentNwo?: string;
+    draft?: PendingDraft | null;
+    prContextFails?: boolean;
+  } = {},
+): { readonly api: ChatInputApi; calls: string[] } {
+  const calls: string[] = [];
+  const rec = (s: string) => (): void => {
+    calls.push(s);
+  };
+  const chatApi: ChatApi = {
+    chat: o.chat === undefined ? chatState() : o.chat,
+    openChat: (k) => void calls.push(`open:${k}`),
+    closeChat: rec("closeChat"),
+    send: async (t) => void calls.push(`send:${t}`),
+    abort: async () => void calls.push("abort"),
+    fresh: async () => void calls.push("fresh"),
+    setComposer: () => {},
+    focusComposer: (on) => void calls.push(`focus:${String(on)}`),
+    moveCursor: (d) => void calls.push(`cursor:${d}`),
+    toggleExpanded: rec("expand"),
+    toggleThinking: rec("thinking"),
+    setFollow: (on) => void calls.push(`follow:${String(on)}`),
+    reloadDrafts: async () => {},
+    selectedDraft: () => o.draft ?? null,
+  };
+  const client: DashboardClient = {
+    ...stubClient,
+    prContext: async (nwo, n) =>
+      o.prContextFails ? { ok: false, error: "gh boom" } : okv(`PR ${nwo}#${n} body`),
+    issueContext: async (nwo, n) => okv(`ISSUE ${nwo}#${n} body`),
+  };
+  const deps: ChatInputDeps = {
+    view: o.view ?? "chat",
+    pane: o.pane ?? 2,
+    chatApi,
+    chatDraftActions: {
+      submit: async (d) => void calls.push(`submit:${d.id}`),
+      edit: async (d) => void calls.push(`edit:${d.id}`),
+      route: async (d) => void calls.push(`route:${d.id}`),
+      discard: async (d) => void calls.push(`discard:${d.id}`),
+    },
+    client,
+    aliveRef: { current: true },
+    showToast: (kind, text) => void calls.push(`toast:${kind}:${text}`),
+    currentNwo: o.currentNwo,
+    setView: (v) => void calls.push(`view:${v}`),
+    setPane: (p) => void calls.push(`pane:${p}`),
+    scrollBy: (d) => void calls.push(`scroll:${d}`),
+    toEnd: rec("toEnd"),
+    moveRail: (d) => void calls.push(`rail:${d}`),
+    moveRailTo: (i) => void calls.push(`railTo:${i}`),
+    railCount: 7,
+  };
+  const holder: { api: ChatInputApi | null } = { api: null };
+  function Probe(): React.JSX.Element {
+    holder.api = useChatInput(deps);
+    return <Text>probe</Text>;
+  }
+  render(<Probe />);
+  return {
+    get api(): ChatInputApi {
+      return holder.api!;
+    },
+    calls,
+  };
+}
+
+describe("useChatInput — the cascade (spec §8.3)", () => {
+  it("declines every key unless the chat view is open with a session", () => {
+    expect(mount({ view: "main" }).api.handleChatKey("j", K())).toBe(false);
+    expect(mount({ chat: null }).api.handleChatKey("j", K())).toBe(false);
+  });
+
+  it("focused: esc aborts a streaming turn, blurs an idle one, and every other key is the composer's", () => {
+    const s = mount({ chat: chatState({ composerFocused: true, streaming: true }) });
+    expect(s.api.handleChatKey("", K({ escape: true }))).toBe(true);
+    expect(s.calls).toEqual(["abort"]);
+    const i = mount({ chat: chatState({ composerFocused: true }) });
+    i.api.handleChatKey("", K({ escape: true }));
+    expect(i.calls).toEqual(["focus:false"]);
+    // Typed prose is swallowed here (the Composer's own hook owns it) — it
+    // must never reach the main-view tail of App's cascade.
+    const t = mount({ chat: chatState({ composerFocused: true }) });
+    expect(t.api.handleChatKey("q", K())).toBe(true);
+    expect(t.calls).toEqual([]);
+  });
+
+  it("blurred: the movement/scroll/expand keys and the pane doors", () => {
+    const h = mount();
+    const api = h.api;
+    api.handleChatKey("i", K());
+    api.handleChatKey("j", K());
+    api.handleChatKey("", K({ upArrow: true }));
+    api.handleChatKey("", K({ return: true }));
+    api.handleChatKey(" ", K());
+    api.handleChatKey("]", K());
+    api.handleChatKey("[", K());
+    api.handleChatKey("h", K());
+    api.handleChatKey("", K({ rightArrow: true }));
+    api.handleChatKey("G", K());
+    api.handleChatKey("g", K());
+    expect(h.calls).toEqual([
+      "focus:true",
+      "cursor:1",
+      "cursor:-1",
+      "expand",
+      "expand",
+      "scroll:1",
+      "scroll:-1",
+      "pane:1",
+      "pane:2",
+      "follow:true",
+      "follow:false",
+      "scroll:-1000000",
+    ]);
+  });
+
+  it("blurred: [ on a followed chat lands at the tail first, then steps up", () => {
+    const h = mount({ chat: chatState({ follow: true }) });
+    h.api.handleChatKey("[", K());
+    expect(h.calls).toEqual(["toEnd", "follow:false", "scroll:-1"]);
+  });
+
+  it("blurred: esc leaves the view, and an unbound key is swallowed", () => {
+    const h = mount();
+    expect(h.api.handleChatKey("", K({ escape: true }))).toBe(true);
+    expect(h.calls).toEqual(["closeChat", "view:main"]);
+    // `:` would open the palette from the main-view tail of App's cascade.
+    const p = mount();
+    expect(p.api.handleChatKey(":", K())).toBe(true);
+    expect(p.calls).toEqual([]);
+  });
+
+  it("pane 1 routes the movement keys to the RAIL (spec §8.1), not the chat cursor", () => {
+    const h = mount({ pane: 1 });
+    const api = h.api;
+    api.handleChatKey("j", K());
+    api.handleChatKey("k", K());
+    api.handleChatKey("", K({ downArrow: true }));
+    api.handleChatKey("g", K());
+    api.handleChatKey("G", K());
+    expect(h.calls).toEqual(["rail:1", "rail:-1", "rail:1", "railTo:0", "railTo:6"]);
+    // The doors still work from pane 1 — `l` returns focus to the chat.
+    api.handleChatKey("l", K());
+    expect(h.calls).toContain("pane:2");
+  });
+});
+
+describe("useChatInput — the verbs (spec §8.6)", () => {
+  it("the draft verbs act on the card under the cursor", () => {
+    const h = mount({ draft: DRAFT });
+    for (const id of ["submit", "edit", "route", "discard"]) h.api.chatHandlers[id]!();
+    expect(h.calls).toEqual(["submit:d1", "edit:d1", "route:d1", "discard:d1"]);
+  });
+
+  it("a draft verb with no card under the cursor toasts instead", () => {
+    const h = mount({ draft: null });
+    h.api.chatHandlers["submit"]!();
+    expect(h.calls).toEqual(["toast:info:no draft under the cursor"]);
+  });
+
+  it("thinking, follow (pausing at the tail), and close", () => {
+    const h = mount({ chat: chatState({ follow: true }) });
+    h.api.chatHandlers["thinking"]!();
+    h.api.chatHandlers["follow"]!();
+    h.api.chatHandlers["close"]!();
+    expect(h.calls).toEqual(["thinking", "toEnd", "follow:false", "closeChat", "view:main"]);
+    // Resuming follow needs no jump — the window re-pins to the tail itself.
+    const off = mount();
+    off.api.chatHandlers["follow"]!();
+    expect(off.calls).toEqual(["follow:true"]);
+  });
+});
+
+describe("useChatInput — the slash router (spec §8.2)", () => {
+  it("plain prose sends as-is; an empty composer sends nothing", () => {
+    const h = mount();
+    h.api.onComposerSubmit("  why is the build slow?  ");
+    h.api.onComposerSubmit("   ");
+    expect(h.calls).toEqual(["send:why is the build slow?"]);
+  });
+
+  it("/draft, /audit and /investigate N send their standing requests", () => {
+    const h = mount();
+    h.api.onComposerSubmit("/draft");
+    h.api.onComposerSubmit("/audit");
+    h.api.onComposerSubmit("/investigate 7");
+    expect(h.calls[0]).toMatch(/^send:Draft a junco ticket/);
+    expect(h.calls[1]).toMatch(/junco-ticket fence whose frontmatter has an `audit:` block/);
+    expect(h.calls[2]).toMatch(/`investigate:` block with `issue: 7`/);
+  });
+
+  it("/investigate without a number is a usage toast", () => {
+    const h = mount();
+    h.api.onComposerSubmit("/investigate");
+    h.api.onComposerSubmit("/investigate soon");
+    expect(h.calls).toEqual([
+      "toast:error:usage: /investigate N",
+      "toast:error:usage: /investigate N",
+    ]);
+  });
+
+  it("/pr N and /issue N inject the fetched context as a user message", async () => {
+    const h = mount({ currentNwo: "acme/api" });
+    h.api.onComposerSubmit("/pr 42");
+    await until(() => h.calls.length === 1);
+    expect(h.calls[0]).toBe("send:Context, PR #42 on acme/api:\n\nPR acme/api#42 body");
+    h.api.onComposerSubmit("/issue 9");
+    await until(() => h.calls.length === 2);
+    expect(h.calls[1]).toBe("send:Context, issue #9 on acme/api:\n\nISSUE acme/api#9 body");
+  });
+
+  it("/pr refuses a bad number or an unwatched row, and relays a fetch failure", async () => {
+    const bad = mount({ currentNwo: "acme/api" });
+    bad.api.onComposerSubmit("/pr");
+    const unwatched = mount();
+    unwatched.api.onComposerSubmit("/pr 42");
+    expect(bad.calls).toEqual(["toast:error:usage: /pr N (watched repo only)"]);
+    expect(unwatched.calls).toEqual(["toast:error:usage: /pr N (watched repo only)"]);
+    const boom = mount({ currentNwo: "acme/api", prContextFails: true });
+    boom.api.onComposerSubmit("/pr 42");
+    await until(() => boom.calls.length === 1);
+    expect(boom.calls).toEqual(["toast:error:gh boom"]);
+  });
+
+  it("/abort and /new map to their verbs; an unknown command toasts", () => {
+    const h = mount();
+    h.api.onComposerSubmit("/abort");
+    h.api.onComposerSubmit("/new");
+    h.api.onComposerSubmit("/nope");
+    expect(h.calls).toEqual(["abort", "fresh", "toast:error:unknown command /nope"]);
+  });
+});

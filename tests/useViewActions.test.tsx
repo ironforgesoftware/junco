@@ -135,6 +135,7 @@ function makeSpies() {
     chatEdit: vi.fn(async () => {}),
     chatRoute: vi.fn(async () => {}),
     chatDiscard: vi.fn(async () => {}),
+    chatClose: vi.fn(),
   };
 }
 
@@ -181,6 +182,7 @@ function mount(
       route: spies.chatRoute,
       discard: spies.chatDiscard,
     },
+    chatHandlers: { close: spies.chatClose },
     ...rest,
   };
   let api!: Record<string, () => void>;
@@ -256,6 +258,15 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
     expect(paused.spies.toEnd).not.toHaveBeenCalled();
     expect(paused.spies.setTranscriptFollow).toHaveBeenCalledWith(true);
     paused.unmount();
+  });
+
+  it("the chat view hands through useChatInput's own arm (Ruling R15)", () => {
+    const { api, spies, unmount } = mount({ view: "chat" });
+    expect(ids(api)).toEqual(["close"]);
+    api["close"]!();
+    expect(spies.chatClose).toHaveBeenCalledTimes(1);
+    expect(spies.close).not.toHaveBeenCalled(); // NOT the shared close recipe
+    unmount();
   });
 
   it("the chromeless views expose no mnemonic actions", () => {

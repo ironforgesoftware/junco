@@ -34,6 +34,9 @@ export interface ViewActionsInput {
   /** The four chat-draft verbs (useChatDrafts) — the review row's half of the
    * confirm surface the chat pane's card also drives (spec §6.6). */
   chatDraftActions: ChatDraftActions;
+  /** The `chat` view's own arm, built by useChatInput (Ruling R15) — this hook
+   * only picks it, the way it picks every other view's. */
+  chatHandlers: Record<string, () => void>;
 }
 
 /** The chat draft `submit`/`edit`/`route`/`discard` act on: the open preview's
@@ -80,6 +83,7 @@ export function useViewActions({
   reviewState,
   setReviewState,
   chatDraftActions,
+  chatHandlers,
 }: ViewActionsInput): Record<string, () => void> {
   const reviewActions = useMemo((): Record<string, () => void> => {
     // Chat-draft verb dispatch: a no-op unless a chat draft is actually
@@ -263,6 +267,8 @@ export function useViewActions({
         };
       case "review":
         return reviewActions;
+      case "chat":
+        return chatHandlers;
       case "palette":
       case "addRepo":
       case "config":
@@ -287,5 +293,6 @@ export function useViewActions({
     setTranscriptFollow,
     toEnd,
     reviewActions,
+    chatHandlers,
   ]);
 }

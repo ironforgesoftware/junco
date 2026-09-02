@@ -35,6 +35,15 @@ export interface MainActionsInput {
   sysSection: SystemSection | null;
   selectedRow: RailRow | undefined;
   currentNwo: string | undefined;
+  /** The selected row's chat session key (chatKey.ts); null on a system row. */
+  currentRepoKey: string | null;
+  /** useChat's opener — `t` on a repo row starts/attaches its session. */
+  openChat: (key: string) => void;
+  /** `t` on an ISSUE row (#330) — the other half of the shared key. */
+  openIssueTranscript: (
+    nwo: string | null | undefined,
+    issue: DashIssue | null | undefined,
+  ) => void;
   currentIssue: DashIssue | undefined;
   /** The watched mapping behind the selected issues row — the external gate. */
   currentRepo: WatchedMapping | undefined;
@@ -91,6 +100,9 @@ export function useMainActions({
   sysSection,
   selectedRow,
   currentNwo,
+  currentRepoKey,
+  openChat,
+  openIssueTranscript,
   currentIssue,
   currentRepo,
   selectedPane3Pr,
@@ -202,10 +214,34 @@ export function useMainActions({
         }
         void openBrowser();
       },
+      // `t` on either repo-row body (spec 2026-09-01 §8.1): attach the chat to
+      // the selected row's key and hand it the focus — the composer is focused
+      // from mount, so the chat pane must be the focused pane.
+      //
+      // Pane-aware, like `browser`/`assess` above, and for a sharper reason:
+      // `t` on an ISSUE row already opens that issue's ticket transcript
+      // (#330, and the derived keymap is pane-independent). Both readings are
+      // documented and both are wanted — the spec's own wording is "`t` on a
+      // REPO row" — so the issues LIST keeps the transcript and every other
+      // place the key lands (the rail, the repoDetail body, pane 3) chats.
+      chat: () => {
+        if (pane === 2 && body?.kind === "issues")
+          return void openIssueTranscript(currentNwo, currentIssue);
+        if (currentRepoKey === null) return void showToast("info", "no repo selected");
+        openChat(currentRepoKey);
+        setView("chat");
+        setPane(2);
+      },
     }),
     [
       forceLocalRefresh,
       currentNwo,
+      currentIssue,
+      currentRepoKey,
+      openChat,
+      openIssueTranscript,
+      setView,
+      setPane,
       githubSetRefreshing,
       githubRefreshAll,
       selectedRow,
