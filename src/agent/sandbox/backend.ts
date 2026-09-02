@@ -29,7 +29,7 @@ export const PROBE_STDERR_LIMIT = 400;
 
 /** Collapse a child's stderr into a bounded single-line diagnostic, or
  *  `undefined` when it said nothing worth repeating. */
-export function summarizeProbeStderr(raw: string | undefined): string | undefined {
+function summarizeProbeStderr(raw: string | undefined): string | undefined {
   const line = (raw ?? "").replace(/\s+/g, " ").trim();
   if (line === "") return undefined;
   return line.length > PROBE_STDERR_LIMIT ? `${line.slice(0, PROBE_STDERR_LIMIT)}…` : line;

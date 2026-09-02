@@ -239,7 +239,7 @@ function readSpendUsd(
 }
 
 /** Human-readable byte size for the text view (e.g. "1.5 KB", "3 MB"). */
-export function humanSize(bytes: number): string {
+function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KB", "MB", "GB", "TB"];
   let v = bytes / 1024;

@@ -86,7 +86,7 @@ export const VERIFICATION_MAX_TOTAL_MS = 10 * 60_000;
 /** Build the scrubbed child env for verification blocks: never the worker's
  * full process.env (which holds GH_TOKEN / inference-endpoint API keys). See
  * scrubEnv (#35) — the same allowlist now also guards the sandboxed agent bash. */
-export function verificationEnv(
+function verificationEnv(
   source: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
   return scrubEnv(source);

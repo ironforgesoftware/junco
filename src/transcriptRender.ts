@@ -91,7 +91,7 @@ function proseLines(block: string, width: number): string[] {
 
 /** `740` / `1.8k` / `34.7k` — local (not tui/queueFmt) to keep this module
  * free of a root → tui import. */
-export function fmtK(n: number): string {
+function fmtK(n: number): string {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
 }
 

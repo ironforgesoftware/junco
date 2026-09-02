@@ -69,7 +69,7 @@ export interface EnvelopeDeps {
  * `runEnveloped` so the "new file?" check is a pure, injectable decision
  * rather than baked into the write sequence.
  */
-export function openTicketTranscript(
+function openTicketTranscript(
   path: string,
   factory: TranscriptSinkFactory,
   fileExists: (p: string) => boolean,

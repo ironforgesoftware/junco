@@ -19,7 +19,7 @@ import type { GuardEvent } from "./supervisor.js";
  * kind ∈ {"tool_call_loop", "tool_error_loop", "text_rep", "thinking_rep", "output_budget"}.
  * Other kinds fall back to a generic template that quotes `detail`.
  */
-export function buildNudgeMessage(
+function buildNudgeMessage(
   kind: string,
   opts: {
     toolName?: string | null;
