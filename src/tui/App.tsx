@@ -23,7 +23,6 @@ import { listRowsHeight, railListHeight, sectionRowsHeight } from "./geometry.js
 import { Workspace } from "./components/Workspace.js";
 import { Header } from "./components/Chrome.js";
 import { LogView } from "./components/LogView.js";
-import { cycleLevel, distinctTickets } from "./logFilter.js";
 import type { LocalCheap, LocalHeavy, LocalSection } from "./localSnapshot.js";
 import {
   buildRailRows,
@@ -31,7 +30,6 @@ import {
   bodyKindFor,
   resolveRailIndex,
   rowKey,
-  sysKey,
   type SystemSection,
   type UnifiedRepo,
 } from "./railModel.js";
@@ -86,6 +84,9 @@ import { useLogOverlay } from "./hooks/useLogOverlay.js";
 import { useAddRepoForm } from "./hooks/useAddRepoForm.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useGithubData } from "./hooks/useGithubData.js";
+import { useLogOverlayActions } from "./hooks/useLogOverlayActions.js";
+import { useViewActions } from "./hooks/useViewActions.js";
+import { useMainActions, type LocalRow } from "./hooks/useMainActions.js";
 import { summarizeUnwatchPlan } from "./unwatchSummary.js";
 // Type-only: unwatchCmd is a pure module, but the dashboard drives it through
 // the CLI (spawned), never in-process — nothing here may pull it into the bundle.
@@ -155,7 +156,7 @@ export interface AppProps {
 
 // Panes: 1 repos (rail), 2 issues (list), 3 PRs for the selected repo (wide
 // terminals only).
-type Pane = 1 | 2 | 3;
+export type Pane = 1 | 2 | 3;
 
 export type View =
   | "main"
@@ -510,13 +511,8 @@ export function App(props: AppProps): React.JSX.Element {
   // selectable too (since the transcript viewer: `enter` opens their live
   // transcript) — retry/delete guard them the same way.
   // Gives x/R/o/f an explicit LOCAL target instead of the github currentRepo.
-  type LocalRow =
-    | { kind: "running"; id: string }
-    | { kind: "waiting"; id: string }
-    | { kind: "recent"; id: string; status: "done" | "failed" }
-    | { kind: "outboxOp"; id: string }
-    | { kind: "worktree"; path: string; slug: string; klass: "live" | "stale" | "backup" };
-
+  // (`LocalRow` itself lives with the handlers that guard on it — see
+  // hooks/useMainActions.ts.)
   const sectionRowsFor = (section: SystemSection): LocalRow[] => {
     switch (section) {
       case "queue": {
@@ -1270,472 +1266,114 @@ export function App(props: AppProps): React.JSX.Element {
     [body, pane, layout.mode],
   );
 
+  // The shared close recipe. WHICH surface `q`/esc closes depends on what is
+  // open, so it stays here (App owns the nav spine) and is handed to both
+  // action-table slices below.
+  const closeSurface = useCallback((): void => {
+    if (logOverlay) {
+      setLogOverlay(false);
+      setLogSearchMode(false);
+      return;
+    }
+    if (view === "prDetail") return void setView(prDetail?.from ?? "main");
+    if (view === "cmdOutput") return void setView("palette");
+    if (view === "transcript") {
+      closeTranscript();
+      return void setView(transcriptFrom === "detail" ? "detail" : "main");
+    }
+    setView("main");
+  }, [
+    logOverlay,
+    setLogOverlay,
+    setLogSearchMode,
+    view,
+    prDetail,
+    closeTranscript,
+    transcriptFrom,
+  ]);
+
   // ── THE action table: id-keyed handlers shared by the keyboard dispatch
   // tail AND the footer chips — one implementation per verb, guards included.
   // (Replaces the key-keyed footerActions whose entries duplicated every
-  // keyboard branch verbatim; that drift class is structurally gone.) ──
-  const actionHandlers: Record<string, () => void> = useMemo((): Record<string, () => void> => {
-    if (confirm !== null) return {}; // destructive confirm owns input
-    const close = (): void => {
-      if (logOverlay) {
-        setLogOverlay(false);
-        setLogSearchMode(false);
-        return;
-      }
-      if (view === "prDetail") return void setView(prDetail?.from ?? "main");
-      if (view === "cmdOutput") return void setView("palette");
-      if (view === "transcript") {
-        closeTranscript();
-        return void setView(transcriptFrom === "detail" ? "detail" : "main");
-      }
-      setView("main");
-    };
-    if (logOverlay) {
-      return {
-        close,
-        follow: () => {
-          // Pause lands at the tail first (toEnd) so the paused window shows
-          // the newest lines, not a jump to the top.
-          if (logFollow) {
-            setLogFollow(false);
-            toEnd();
-          } else {
-            setLogFollow(true);
-          }
-        },
-        level: () => setLogFilters((f) => ({ ...f, minLevel: cycleLevel(f.minLevel) })),
-        ticket: () => {
-          // Cycle null (all) → each ticket present in the buffer → back to null.
-          const opts: (string | null)[] = [null, ...distinctTickets(logEntries)];
-          const idx = opts.indexOf(logFilters.ticket);
-          setLogFilters((f) => ({ ...f, ticket: opts[(idx + 1) % opts.length] }));
-        },
-      };
-    }
-    switch (view) {
-      case "detail":
-        return { browser: openDetailIssueInBrowser, close };
-      case "prDetail":
-        return { browser: openPrDetailInBrowser, close };
-      case "repoDetail":
-        return {
-          close,
-          browser: () => {
-            const nwo = repoDetailTarget?.nwo;
-            if (nwo !== null && nwo !== undefined) openRepoBrowser(nwo);
-            else showToast("info", "no GitHub URL");
-          },
-        };
-      case "prs":
-        return { browser: openSelectedPr, close };
-      case "cmdOutput":
-        return {
-          close,
-          ...(cmd && !cmd.running
-            ? { reRun: () => runPaletteCommand(cmd.name, cmd.extraArgs) }
-            : {}),
-        };
-      case "transcript":
-        return {
-          close,
-          thinking: toggleTranscriptThinking,
-          ...(transcript?.summary?.live
-            ? {
-                follow: () => {
-                  // Pausing lands at the tail first (log-overlay recipe) so the
-                  // paused window shows the newest rows, not a jump to the top.
-                  if (transcript.follow) toEnd();
-                  setTranscriptFollow(!transcript.follow);
-                },
-              }
-            : {}),
-        };
-      case "review": {
-        // Optimistic removal shared by post and discard: drop the draft, close
-        // the preview, clamp the cursor to the (shrunk) combined list.
-        const dropDraft = (id: string): void => {
-          setReviewState((s) => {
-            const drafts = s.drafts.filter((d) => d.id !== id);
-            const total = s.batches.length + drafts.length;
-            return { ...s, drafts, open: null, cursor: Math.min(s.cursor, Math.max(0, total - 1)) };
-          });
-        };
-        return {
-          close,
-          all: () =>
-            setReviewState((s) => {
-              const batch = s.open?.kind === "batch" ? s.batches[s.open.batchIdx] : undefined;
-              return s.open && s.open.kind === "batch" && batch
-                ? {
-                    ...s,
-                    open: { ...s.open, checked: new Set(batch.findings.map((f) => f.fingerprint)) },
-                  }
-                : s;
-            }),
-          none: () =>
-            setReviewState((s) =>
-              s.open && s.open.kind === "batch"
-                ? { ...s, open: { ...s.open, checked: new Set() } }
-                : s,
-            ),
-          file: () => {
-            const rs = reviewState;
-            if (rs.open?.kind === "draft") {
-              const draft = rs.drafts[rs.open.draftIdx];
-              if (!draft) return;
-              const id = draft.id;
-              showToast("info", `posting ${draft.nwo}#${draft.issue}…`);
-              void client.postCommentDraft(id).then((res) => {
-                if (!aliveRef.current) return;
-                if (res.ok) {
-                  const { outcome, url } = res.value;
-                  showToast(
-                    "success",
-                    outcome === "queued"
-                      ? "queued offline — will post on next flush"
-                      : url
-                        ? `posted ${url}`
-                        : "posted",
-                  );
-                  dropDraft(id);
-                } else {
-                  showToast("error", res.error);
-                }
-              });
-              return;
-            }
-            if (rs.open?.kind === "batch") {
-              const open = rs.open;
-              const batch = rs.batches[open.batchIdx];
-              if (!batch) return;
-              const fps = batch.findings
-                .map((f) => f.fingerprint)
-                .filter((fp) => open.checked.has(fp));
-              if (fps.length === 0) return void showToast("info", "nothing selected");
-              const id = batch.id;
-              showToast("info", `filing ${fps.length} on ${batch.nwo}…`);
-              void client.fileReview(id, fps).then((res) => {
-                if (!aliveRef.current) return;
-                if (res.ok) {
-                  const v = res.value;
-                  showToast(
-                    "success",
-                    `filed ${v.created} · queued ${v.queuedOffline} · dup ${v.deduped} · failed ${v.failed}`,
-                  );
-                  setReviewState((s) => {
-                    const batches = s.batches.map((b) => (b.id === id ? v.batch : b));
-                    const nextOpen =
-                      s.open && s.open.kind === "batch"
-                        ? {
-                            ...s.open,
-                            checked: new Set(
-                              [...s.open.checked].filter((fp) => !v.batch.filed?.[fp]),
-                            ),
-                          }
-                        : s.open;
-                    return { ...s, batches, open: nextOpen };
-                  });
-                } else {
-                  showToast("error", res.error);
-                }
-              });
-            }
-          },
-          discard: () => {
-            const rs = reviewState;
-            if (rs.open?.kind === "draft") {
-              const draft = rs.drafts[rs.open.draftIdx];
-              if (!draft) return;
-              const id = draft.id;
-              void client.discardCommentDraft(id).then((res) => {
-                if (!aliveRef.current) return;
-                if (res.ok) {
-                  showToast("success", "discarded");
-                  dropDraft(id);
-                } else {
-                  showToast("error", res.error);
-                }
-              });
-              return;
-            }
-            if (rs.open?.kind === "batch") {
-              const batch = rs.batches[rs.open.batchIdx];
-              if (!batch) return;
-              const id = batch.id;
-              void client.discardReview(id).then((res) => {
-                if (!aliveRef.current) return;
-                if (res.ok) {
-                  showToast("success", "discarded");
-                  setReviewState((s) => {
-                    const batches = s.batches.filter((b) => b.id !== id);
-                    const total = batches.length + s.drafts.length;
-                    return {
-                      ...s,
-                      batches,
-                      open: null,
-                      cursor: Math.min(s.cursor, Math.max(0, total - 1)),
-                    };
-                  });
-                } else {
-                  showToast("error", res.error);
-                }
-              });
-            }
-          },
-        };
-      }
-      case "palette":
-      case "addRepo":
-      case "config":
-      case "help":
-        return {};
-      case "main": {
-        const currentExternal = currentRepo?.external === true;
-        return {
-          quit: () => {
-            exit();
-            onExit();
-          },
-          help: () => setView("help"),
-          queue: () => {
-            setRailSel(sysKey("queue"));
-            setPane(2);
-          },
-          prs: () => {
-            setView("prs");
-            void githubRefreshAll({ scope: "monitor" });
-          },
-          review: () => {
-            setReviewState((s) => ({ ...s, loading: true, error: null, open: null, cursor: 0 }));
-            setView("review");
-            void loadReview();
-          },
-          commands: () => {
-            resetPalette();
-            setView("palette");
-          },
-          addRepo: () => {
-            if (!props.githubEnabled)
-              return void showToast("info", "github mode is off ([github] enabled=false)");
-            if (watchlistError)
-              return void showToast("error", "watchlist unreadable — fix it before adding");
-            setAddRepoError(null);
-            setView("addRepo");
-          },
-          refresh: () => {
-            void forceLocalRefresh();
-            if (currentNwo) {
-              githubSetRefreshing(true);
-              void githubRefreshAll().finally(() => githubSetRefreshing(false));
-            }
-          },
-          unwatch: () => {
-            if (selectedRow?.kind === "repo" && selectedRow.repo.watched && selectedRow.repo.nwo) {
-              return void unwatch(selectedRow.repo.nwo);
-            }
-            showToast("info", "not in watchlist");
-          },
-          // Pane-aware: 1 → the selected rail repo, 3 → the selected PR,
-          // 2 issues → the selected issue.
-          browser: () => {
-            if (pane === 1 || body?.kind !== "issues") {
-              if (selectedRow?.kind === "repo" && selectedRow.repo.nwo)
-                return void openRepoBrowser(selectedRow.repo.nwo);
-              return void showToast("info", "no GitHub URL");
-            }
-            if (pane === 3) {
-              if (selectedPane3Pr) {
-                const { nwo, number } = selectedPane3Pr;
-                void client.openPrInBrowser(nwo, number).then((res) => {
-                  if (!aliveRef.current) return;
-                  if (!res.ok) showToast("error", res.error);
-                });
-              }
-              return;
-            }
-            void openBrowser();
-          },
-          // Pane-aware like the old `u`: issues pane with a selection scopes
-          // to the issue; everywhere else repo-scoped.
-          assess: () => {
-            if (pane === 2 && body?.kind === "issues" && currentNwo && currentIssue) {
-              return void runAssess(false, `${currentNwo}#${currentIssue.number}`);
-            }
-            void runAssess(false);
-          },
-          assessAutoPlan: () => {
-            if (pane === 2 && body?.kind === "issues" && currentNwo && currentIssue) {
-              return void runAssess(true, `${currentNwo}#${currentIssue.number}`);
-            }
-            void runAssess(true);
-          },
-          dispatch: () => {
-            if (body?.kind !== "issues") return;
-            if (!currentExternal) return void runAction("dispatch");
-            if (!currentNwo || !currentIssue) return;
-            const num = currentIssue.number;
-            showToast("info", `importing ${currentNwo}#${num}…`);
-            void client.dispatchTicket(currentNwo, num).then((res) => {
-              if (!aliveRef.current) return;
-              if (res.ok) showToast("success", `ticket queued: ${res.value.id}`);
-              else showToast("error", res.error);
-            });
-          },
-          dispatchAsk: () => {
-            if (body?.kind !== "issues") return;
-            if (currentExternal) {
-              return void showToast(
-                "error",
-                "not available for external repos — import queues a fork-PR ticket",
-              );
-            }
-            void runAction("dispatchAsk");
-          },
-          approve: () => {
-            if (body?.kind !== "issues") return;
-            if (currentExternal) {
-              return void showToast(
-                "error",
-                "not available for external repos — import queues a fork-PR ticket",
-              );
-            }
-            void runAction("approve");
-          },
-          replan: () => {
-            if (body?.kind !== "issues") return;
-            if (currentExternal) {
-              return void showToast(
-                "error",
-                "not available for external repos — import queues a fork-PR ticket",
-              );
-            }
-            const st = currentIssue ? deriveState(currentIssue.labels, trigger) : "raw";
-            void runAction(st === "plan-ready" || st === "approved" ? "replan" : "recycle");
-          },
-          analyze: () => {
-            if (body?.kind !== "issues") return;
-            if (!currentNwo || !currentIssue) return;
-            const num = currentIssue.number;
-            showToast("info", `drafting investigation for ${currentNwo}#${num}…`);
-            void client.analyzeIssue(currentNwo, num).then((res) => {
-              if (!aliveRef.current) return;
-              if (res.ok)
-                showToast(
-                  "success",
-                  `investigation queued: ${res.value.id} · v to review when parked`,
-                );
-              else showToast("error", res.error);
-            });
-          },
-          // Section-body verbs — the ex-handleSectionBodyInput recipes,
-          // localTarget guards included (highlight == target invariant).
-          retry: () => {
-            if (sysSection !== "queue") return;
-            const tgt = localTarget;
-            if (tgt?.kind === "recent" && tgt.status === "failed")
-              return void runLocalAction("retry", [tgt.id], { label: "requeue" });
-            if (tgt?.kind === "recent" && tgt.status === "done")
-              return void showToast("info", "done tickets can't be requeued");
-            if (tgt?.kind === "running")
-              return void showToast("info", "running — enter opens its transcript");
-          },
-          delete: () => {
-            if (sysSection !== "queue") return;
-            const tgt = localTarget;
-            if (tgt?.kind !== "waiting") return;
-            askConfirm({
-              title: "delete queued ticket",
-              danger: true,
-              body: `Delete inbox/${tgt.id}.md? (best-effort; the daemon may have claimed it)`,
-              onConfirm: () => runLocalAction("rm", [tgt.id]),
-            });
-          },
-          flush: () => {
-            if (sysSection === "outbox" || sysSection === "daemon")
-              runLocalAction("outbox", ["flush"], { label: "flush" });
-          },
-          prune: () => {
-            if (sysSection !== "worktrees") return;
-            const tgt = localTarget;
-            if (tgt?.kind !== "worktree") return;
-            if (tgt.klass === "live") return void showToast("info", "live worktree — not prunable");
-            askConfirm({
-              title: "prune worktree",
-              danger: true,
-              body: `Prune ${tgt.slug} (${tgt.klass})? git worktree remove --force under the daemon lock.`,
-              onConfirm: () => runLocalAction("worktree", ["prune", tgt.path], { label: "prune" }),
-            });
-          },
-          restart: () => {
-            if (sysSection !== "daemon") return;
-            const n = localCheap?.daemon.currentTickets.length ?? 0;
-            askConfirm({
-              title: "restart daemon",
-              danger: true,
-              body: `Restart will interrupt ${n} in-flight ticket(s) (soft-abort, committed work salvaged). Continue?`,
-              onConfirm: () => runLocalAction("restart", [], { label: "restart" }),
-            });
-          },
-        };
-      }
-    }
-  }, [
-    confirm,
-    logOverlay,
-    logFollow,
-    logFilters,
+  // keyboard branch verbatim; that drift class is structurally gone.)
+  //
+  // Split by the switch's own discriminant into three hooks (#350). The single
+  // 56-dep memo this replaced recomputed on essentially every render (several
+  // of its deps — logEntries, transcript, cmd, reviewState — change per tick),
+  // so it bought no stability while carrying the maximum exhaustive-deps
+  // maintenance surface; each slice now owns a short dep list of its own and
+  // this composition picks between them exactly as the old switch did. ──
+  const logOverlayActions = useLogOverlayActions({
+    close: closeSurface,
     logEntries,
-    toEnd,
-    view,
-    cmd,
-    transcript,
-    closeTranscript,
-    toggleTranscriptThinking,
-    setTranscriptFollow,
-    prDetail,
-    transcriptFrom,
-    reviewState,
-    loadReview,
-    watchlistError,
-    pane,
-    currentRepo,
-    currentNwo,
-    currentIssue,
-    selectedPane3Pr,
-    selectedRow,
-    body,
-    sysSection,
-    localTarget,
-    localCheap,
-    repoDetailTarget,
-    client,
-    trigger,
-    exit,
-    onExit,
-    forceLocalRefresh,
-    runLocalAction,
-    askConfirm,
-    openRepoBrowser,
-    openDetailIssueInBrowser,
-    openPrDetailInBrowser,
-    openSelectedPr,
-    runPaletteCommand,
-    githubRefreshAll,
-    githubSetRefreshing,
-    showToast,
-    runAction,
-    runAssess,
-    openBrowser,
-    unwatch,
-    props.githubEnabled,
-    resetPalette,
-    setAddRepoError,
+    logFilters,
+    logFollow,
     setLogFilters,
     setLogFollow,
-    setLogOverlay,
-    setLogSearchMode,
+    toEnd,
+  });
+  const viewActions = useViewActions({
+    view,
+    close: closeSurface,
+    client,
+    aliveRef,
+    showToast,
+    openDetailIssueInBrowser,
+    openPrDetailInBrowser,
+    openRepoBrowser,
+    openSelectedPr,
+    repoDetailTarget,
+    cmd,
+    runPaletteCommand,
+    transcript,
+    toggleTranscriptThinking,
+    setTranscriptFollow,
+    toEnd,
+    reviewState,
     setReviewState,
-  ]);
+  });
+  const mainActions = useMainActions({
+    client,
+    aliveRef,
+    trigger,
+    githubEnabled: props.githubEnabled,
+    watchlistError,
+    pane,
+    body,
+    sysSection,
+    selectedRow,
+    currentNwo,
+    currentIssue,
+    currentRepo,
+    selectedPane3Pr,
+    localTarget,
+    localCheap,
+    exit,
+    onExit,
+    setView,
+    setRailSel,
+    setPane,
+    githubRefreshAll,
+    githubSetRefreshing,
+    setReviewState,
+    loadReview,
+    resetPalette,
+    setAddRepoError,
+    showToast,
+    forceLocalRefresh,
+    unwatch,
+    openRepoBrowser,
+    openBrowser,
+    runAssess,
+    runAction,
+    runLocalAction,
+    askConfirm,
+  });
+  const actionHandlers: Record<string, () => void> = useMemo((): Record<string, () => void> => {
+    if (confirm !== null) return {}; // destructive confirm owns input
+    if (logOverlay) return logOverlayActions; // the overlay wins over the view
+    return view === "main" ? mainActions : viewActions;
+  }, [confirm, logOverlay, view, logOverlayActions, mainActions, viewActions]);
 
   // Clickable STRUCTURAL chips (key-keyed): the non-derivable siblings of the
   // action table — esc/enter/←/, recipes per context.
