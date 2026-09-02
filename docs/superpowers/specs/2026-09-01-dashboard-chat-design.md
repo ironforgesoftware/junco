@@ -450,7 +450,12 @@ will be incomplete and the header says so.
 `isLoopback(req)` predicate (default: `req.socket.remoteAddress ∈ {127.0.0.1, ::1,
 ::ffff:127.0.0.1}`) and returns `403` otherwise. Any request carrying an `Origin` header is
 `403` — browsers always send it cross-origin, the TUI never does, which closes the
-localhost-CSRF door without a token. `/live`, `/ready`, `/health` are unchanged.
+localhost-CSRF door without a token. A third check closes DNS rebinding (a page whose
+hostname has been rebound to 127.0.0.1 is same-origin with the daemon, so its `GET
+/chat/events` carries no `Origin` and arrives over loopback): the `Host` header's hostname
+must be `localhost`, a loopback literal, or the configured `healthHost`, else `403`. All three
+checks run before any other work on every `/chat/*` path. `/live`, `/ready`, `/health` are
+unchanged.
 
 ---
 
