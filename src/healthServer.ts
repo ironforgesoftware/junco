@@ -5,6 +5,8 @@
 //   GET /live   — pure liveness (process is up + responsive)
 //   GET /ready  — readiness (can it serve work; probes deps)
 //   GET /health — rich ops view (always 200; includes full metrics snapshot)
+// Plus, when an injected handler is wired: /chat/* (spec 2026-09-01 §5) —
+// dashboard chat's SSE stream + POST verbs, loopback-only.
 // ---------------------------------------------------------------------------
 
 import { createServer } from "node:http";
@@ -12,6 +14,8 @@ import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { MetricsSnapshot } from "./metrics.js";
 import type { GateStatus } from "./providerGate.js";
+import type { ChatHealth } from "./chat/chatManager.js";
+import type { ChatRoutes } from "./chat/chatRoutes.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -56,6 +60,11 @@ export interface HealthServerOpts {
    * logged and swallowed so it can never crash the host process (#121).
    */
   logFn?: (msg: string) => void;
+  /** /chat/* handler (spec 2026-09-01 §5). Absent → those paths are 404. It
+   *  is consulted BEFORE the GET-only gate: the handler owns its methods. */
+  chat?: ChatRoutes;
+  /** `/health.chats` — the chat manager's health view; absent on an older daemon. */
+  chatStatus?: () => ChatHealth;
 }
 
 /** Today's USD spend + the configured daily cap (Phase-3 Task 6). `dailyBudgetUsd`
@@ -130,6 +139,16 @@ function safeSpend(spendStatus: (() => SpendStatus) | undefined): SpendStatus | 
   }
 }
 
+/** Same containment discipline as `safeGate` above, for `chatStatus`. */
+function safeChats(fn: (() => ChatHealth) | undefined): ChatHealth | null {
+  if (!fn) return null;
+  try {
+    return fn();
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -141,6 +160,19 @@ export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerH
 
   const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
+      // /chat/* is dispatched to the injected handler BEFORE the GET-only
+      // gate below: it owns its own methods, auth boundary, and body parsing
+      // (spec 2026-09-01 §5).
+      const rawPath = (req.url ?? "/").split("?")[0] ?? "/";
+      if (rawPath === "/chat" || rawPath.startsWith("/chat/")) {
+        if (!opts.chat) {
+          writeJson(res, 404, { error: "not found" });
+          return;
+        }
+        await opts.chat.handle(req, res);
+        return;
+      }
+
       // Method gate — only GET is supported
       if (req.method !== "GET") {
         writeJson(res, 405, { error: "method not allowed" });
@@ -192,7 +224,8 @@ export function startHealthServer(opts: HealthServerOpts): Promise<HealthServerH
         ]);
         const gate = safeGate(opts.gateStatus);
         const spend = safeSpend(opts.spendStatus);
-        writeJson(res, 200, { status: "ok", ready, metrics: snap, gate, spend });
+        const chats = safeChats(opts.chatStatus);
+        writeJson(res, 200, { status: "ok", ready, metrics: snap, gate, spend, chats });
         return;
       }
 

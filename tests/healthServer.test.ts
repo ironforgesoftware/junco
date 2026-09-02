@@ -432,6 +432,35 @@ describe("healthServer", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Chat status (/health) — dashboard chat (spec 2026-09-01 §5)
+  // -------------------------------------------------------------------------
+
+  it("/health carries `chats` from chatStatus, and /chat/* is 404 without a chat handler", async () => {
+    handle = await startHealthServer({
+      port: 0,
+      metrics: makeFakeMetrics(),
+      chatStatus: () => ({
+        enabled: true,
+        sessions: [],
+        turns: 0,
+        costUsd: 0,
+        tokensIn: 0,
+        tokensOut: 0,
+      }),
+    });
+    const body = (await (await fetch(`${handle.url}/health`)).json()) as { chats?: unknown };
+    expect(body.chats).toEqual({
+      enabled: true,
+      sessions: [],
+      turns: 0,
+      costUsd: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+    });
+    expect((await fetch(`${handle.url}/chat/status?key=k`)).status).toBe(404);
+  });
+
+  // -------------------------------------------------------------------------
   // Unknown path / wrong method
   // -------------------------------------------------------------------------
 
