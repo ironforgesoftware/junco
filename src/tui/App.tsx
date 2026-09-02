@@ -1360,6 +1360,13 @@ export function App(props: AppProps): React.JSX.Element {
     helpContext: helpCtx.current,
   });
   const openHelp = useCallback((): void => {
+    // Re-entrancy guard: help is reachable from a surface whose footer still
+    // renders a live `? help` chip UNDER the modal — the log overlay wins over
+    // `view` in both useFooterBindings and `actionHandlers`, and the footer is
+    // outside the modal, so that chip stays clickable. Re-arming the origin to
+    // "help" there would make any-key close (and onMouseMiss) re-open help
+    // forever. Already open ⇒ do nothing, and above all keep the origin.
+    if (view === "help") return;
     helpFrom.current = view;
     helpCtx.current = bindingContext;
     setView("help");

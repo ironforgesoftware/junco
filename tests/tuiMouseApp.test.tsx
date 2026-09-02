@@ -7,8 +7,9 @@
 import React, { useContext } from "react";
 import { describe, it, afterEach, expect } from "vitest";
 import { render, cleanup } from "ink-testing-library";
-import { until, fireUntil } from "./helpers/until.js";
-import { renderApp, makeAppProps, okv, stubClient } from "./helpers/localFixtures.js";
+import { until, fireUntil, tick } from "./helpers/until.js";
+import { renderApp, makeAppProps, okv, stubClient, ESC } from "./helpers/localFixtures.js";
+import type { LogReaderDeps } from "../src/logReader.js";
 import { App } from "../src/tui/App.js";
 import { MouseContext, MouseProvider } from "../src/tui/MouseProvider.js";
 import type { MouseStore } from "../src/tui/mouseRegions.js";
@@ -391,6 +392,73 @@ describe("footer chips: mouse", () => {
     await until(() =>
       (r.lastFrame() ?? "").includes("investigation queued: analyze-acme-api-1 · v to review"),
     );
+  });
+
+  // In-memory log source (tuiLogOverlay's fixture, inlined): the overlay only
+  // needs one line to prove it mounted.
+  const oneLineLogFs = (): LogReaderDeps => {
+    const content = Buffer.from(
+      JSON.stringify({ ts: "2026-07-20T05:00:00.000Z", level: "info", msg: "seed-h" }) + "\n",
+      "utf8",
+    );
+    return {
+      existsFn: () => true,
+      statFn: () => ({ size: content.length }),
+      openFn: () => 1,
+      closeFn: () => undefined,
+      readFn: (_fd: number, buf: Buffer, _off: number, len: number, pos: number) => {
+        const slice = content.subarray(pos, pos + len);
+        slice.copy(buf, 0);
+        return slice.length;
+      },
+    };
+  };
+
+  // Regression (fix round 1): help opened from the LOG OVERLAY is the one
+  // state where the modal is up AND the footer still renders a live `? help`
+  // chip — the overlay wins over `view` in both useFooterBindings (context) and
+  // App's actionHandlers (logOverlayActions carries `help`), and the footer
+  // sits outside the modal, so MouseProvider happily hit-tests that chip.
+  // Clicking it used to re-arm the origin to "help" itself, after which any-key
+  // close and onMouseMiss both re-opened help: the dashboard was stuck until
+  // Ctrl-C. openHelp now refuses to run while help is already open.
+  it("help over the log overlay: clicking its own '? help' chip cannot trap the dashboard", async () => {
+    // 100 columns exactly: ink-testing-library's stdout is fixed at 100, so on
+    // a WIDER frame the right edge — where the pinned chips live — no longer
+    // lines up with the real yoga columns the hit-test resolves against.
+    // 60 rows: the HelpModal is ~45 rows tall, so on the suite's usual 30-row
+    // terminal it pushes the footer clean off the frame and the chip cannot be
+    // reached at all. The trap needs a terminal tall enough to keep the footer
+    // on screen under the modal — which plenty of real ones are.
+    const r = renderApp({
+      sizeOverride: { columns: 100, rows: 60 },
+      logReaderDeps: oneLineLogFs(),
+      logsPollMs: 15,
+    });
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
+    // G parks the rail cursor on the last row (logs); resend is idempotent.
+    await fireUntil(r.stdin, "G", () => (r.lastFrame() ?? "").includes("seed-h"));
+    // Enter opens the full-screen overlay; Enter is unbound inside it.
+    await fireUntil(r.stdin, "\r", () => (r.lastFrame() ?? "").includes("following"));
+    r.stdin.write("?"); // the overlay's own arm dispatches help (Ruling R5)
+    await until(() => (r.lastFrame() ?? "").includes("junco dashboard — keys"));
+    // The pinned `? help` chip on the navigate row, still live under the modal.
+    const f = r.lastFrame() ?? "";
+    const y = navigateY(f);
+    const x = rowAt(f, y).indexOf("? help");
+    expect(x).toBeGreaterThan(0);
+    // Guarded, the press is a NO-OP, so there is nothing to poll on: send it a
+    // few times with a settle between (harmless by construction) so a press
+    // racing ClickableBox's registration effect still lands at least once.
+    for (let i = 0; i < 5; i++) {
+      r.stdin.write(press(x, y));
+      await tick();
+    }
+    r.stdin.write("x"); // any key closes help — back to the OVERLAY, not help
+    await until(() => !(r.lastFrame() ?? "").includes("junco dashboard — keys"));
+    await until(() => (r.lastFrame() ?? "").includes("following"));
+    r.stdin.write(ESC); // and the overlay still closes normally
+    await until(() => !(r.lastFrame() ?? "").includes("following"));
   });
 
   it("help modal: a footer press underneath is a miss — closes help, never quits", async () => {
