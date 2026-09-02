@@ -14,7 +14,7 @@ import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState } from "./state.js";
 import { githubTicketId, lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { defaultEditFile } from "./editFile.js";
 import type { GithubRepoMapping } from "../types.js";
 import type { UpdateInfo } from "../updateCheck.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
@@ -120,7 +120,13 @@ export interface AppProps {
    * editor and the byte-identical path `s` hands the CLI. */
   draftFilePathFn: (id: string, name: string) => string;
   /** `$EDITOR` spawn for the chat draft `e` verb, injectable so tests never
-   * open an editor (spec 2026-09-01 §8.6). Default: `defaultEditFile`. */
+   * open an editor (spec 2026-09-01 §8.6). Default: `defaultEditFile`
+   * (src/tui/editFile.ts).
+   *
+   * Contract (Ruling R34): resolves when the editor exits, whatever its exit
+   * code; REJECTS when it could not be run at all. Every call site is inside
+   * a useChatDrafts verb, and each of those catches and toasts — nothing here
+   * may reach Node as an unhandled rejection. */
   editFileFn?: (path: string) => Promise<void>;
   /** The chat's resolved model id (`chatCfgFor(cfg).model.id`), for the chat
    * header strip; null when it cannot be resolved. */
@@ -261,18 +267,6 @@ function optimisticLabels(action: DashAction, labels: string[], trigger: string)
   }
   return [...set];
 }
-
-/** The default `editFileFn`: hand the terminal to $EDITOR (stdio inherited)
- * for one file and resolve when it exits. Always called from inside
- * useSuspend, which has already blanked Ink and dropped raw mode. A non-zero
- * editor exit is still a resolve — the operator may have quit deliberately;
- * the re-lint that follows reads whatever is on disk either way. */
-const defaultEditFile = (path: string): Promise<void> =>
-  new Promise((resolve_, reject) => {
-    const child = spawn(process.env.EDITOR ?? "vi", [path], { stdio: "inherit" });
-    child.on("exit", () => resolve_());
-    child.on("error", reject);
-  });
 
 /** One repo row's ambient chat signal (spec 2026-09-01 §8.6), off the health
  * poll: `●` while a turn streams, `N▣` for parked drafts, both when both,

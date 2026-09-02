@@ -401,6 +401,48 @@ describe("useChatDrafts", () => {
     b.unmount();
   });
 
+  it("a throwing verb toasts instead of rejecting — no `void verb()` can kill Node (R34)", async () => {
+    // `EDITOR="code --wait"` used to ENOENT here, and every call site is a
+    // `void fn(d)`: on Node 22 an unhandled rejection takes the process down.
+    const rejected: unknown[] = [];
+    const onRejection = (e: unknown): void => void rejected.push(e);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const e = mount({
+        editFileFn: () => Promise.reject(new Error("spawn sh ENOENT")),
+      });
+      await expect(e.api.edit(draft())).resolves.toBeUndefined();
+      expect(e.toasts).toEqual(["error:edit failed: spawn sh ENOENT"]);
+      e.unmount();
+
+      // Same guard on the other three: any throw from the client, the CLI
+      // runner or the note POST is a toast, never a rejection.
+      const boom: DashboardClient = {
+        ...stubClient,
+        updateChatDraft: () => Promise.reject(new Error("disk gone")),
+        discardChatDraft: () => Promise.reject(new Error("disk gone")),
+      };
+      const s = mount({
+        runCliFn: () => Promise.reject(new Error("fork failed")),
+      });
+      await expect(s.api.submit(draft())).resolves.toBeUndefined();
+      expect(s.toasts).toEqual(["error:submit failed: fork failed"]);
+      s.unmount();
+      const rt = mount({ client: boom });
+      await expect(rt.api.route(draft())).resolves.toBeUndefined();
+      await expect(rt.api.discard(draft())).resolves.toBeUndefined();
+      expect(rt.toasts).toEqual([
+        "error:route failed: disk gone",
+        "error:discard failed: disk gone",
+      ]);
+      rt.unmount();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(rejected).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+
   it("route and discard surface a client failure as a toast without reloading", async () => {
     const client: DashboardClient = {
       ...stubClient,

@@ -35,6 +35,11 @@ export function submitArgv(d: PendingDraft, filePath: (name: string) => string):
   return d.files.map((f) => ["submit", ...(asIssue(f) ? ["--as-issue"] : []), filePath(f.name)]);
 }
 
+/** Ruling R34: every verb RESOLVES. Each call site is a `void fn(d)` (the
+ * chat card's key handler, the review row's), and on Node 22 an unhandled
+ * rejection takes the dashboard down with it — so a throw anywhere inside
+ * (the editor that could not be spawned, a client that rejects rather than
+ * returning `{ok:false}`) becomes a toast here. */
 export interface ChatDraftActions {
   submit(d: PendingDraft): Promise<void>;
   edit(d: PendingDraft): Promise<void>;
@@ -71,7 +76,17 @@ export function useChatDrafts(opts: {
     draftFilePath,
   } = opts;
 
-  const submit = useCallback(
+  /** R34's landing pad: whatever went wrong, the operator sees it and the
+   *  promise resolves. */
+  const toastThrow = useCallback(
+    (verb: string, e: unknown): void => {
+      if (!aliveRef.current) return;
+      showToast("error", `${verb} failed: ${e instanceof Error ? e.message : String(e)}`);
+    },
+    [aliveRef, showToast],
+  );
+
+  const submitBody = useCallback(
     async (d: PendingDraft): Promise<void> => {
       if (d.lintFailed) return showToast("error", "draft failed lint — edit it first (e)");
       if (d.blocked) return showToast("error", `draft blocked: ${d.blocked.replace(/_/g, " ")}`);
@@ -125,7 +140,7 @@ export function useChatDrafts(opts: {
     [client, runCliFn, showCmdResult, showToast, aliveRef, onChanged, draftFilePath],
   );
 
-  const edit = useCallback(
+  const editBody = useCallback(
     async (d: PendingDraft): Promise<void> => {
       // Suspended: the editor owns the real terminal until every file is
       // closed; Ink repaints from an empty frame afterwards (useSuspend).
@@ -144,7 +159,7 @@ export function useChatDrafts(opts: {
     [client, editFileFn, suspend, showToast, aliveRef, onChanged, draftFilePath],
   );
 
-  const route = useCallback(
+  const routeBody = useCallback(
     async (d: PendingDraft): Promise<void> => {
       const r = await client.updateChatDraft({ ...d, routeOverride: nextRoute(d.routeOverride) });
       if (!aliveRef.current) return;
@@ -154,7 +169,7 @@ export function useChatDrafts(opts: {
     [client, showToast, aliveRef, onChanged],
   );
 
-  const discard = useCallback(
+  const discardBody = useCallback(
     async (d: PendingDraft): Promise<void> => {
       const r = await client.discardChatDraft(d.id);
       if (!aliveRef.current) return;
@@ -173,5 +188,21 @@ export function useChatDrafts(opts: {
     [client, showToast, aliveRef, onChanged],
   );
 
-  return useMemo(() => ({ submit, edit, route, discard }), [submit, edit, route, discard]);
+  return useMemo(() => {
+    const guard =
+      (verb: string, fn: (d: PendingDraft) => Promise<void>) =>
+      async (d: PendingDraft): Promise<void> => {
+        try {
+          await fn(d);
+        } catch (e) {
+          toastThrow(verb, e);
+        }
+      };
+    return {
+      submit: guard("submit", submitBody),
+      edit: guard("edit", editBody),
+      route: guard("route", routeBody),
+      discard: guard("discard", discardBody),
+    };
+  }, [submitBody, editBody, routeBody, discardBody, toastThrow]);
 }
