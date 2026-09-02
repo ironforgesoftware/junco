@@ -100,8 +100,10 @@ function writeJson(res: ServerResponse, statusCode: number, obj: unknown): void 
   res.end(body);
 }
 
-/** Bracket an IPv6 literal for use in a URL authority (`::1` → `[::1]`); pass others through. */
-function bracketHost(host: string): string {
+/** Bracket an IPv6 literal for use in a URL authority (`::1` → `[::1]`); pass
+ * others through. Exported for src/tui/ghClient.ts's chat healthBase — the
+ * daemon-side twin of statusCmd.ts's own private copy (not touched here). */
+export function bracketHost(host: string): string {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }
 

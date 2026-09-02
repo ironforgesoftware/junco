@@ -27,6 +27,11 @@ import { fileFindings, type FileResult } from "../assessFiling.js";
 import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
 import { postDraftCore, analyzeIssueCore } from "../analyzeCmd.js";
 import type { ChatHealth } from "../chat/chatManager.js";
+import type { PendingDraft } from "../chat/draftStore.js";
+import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
+import type { ChatSubscribeHandlers } from "./chatClient.js";
+import { chatClientMethods } from "./chatClientMethods.js";
+import { bracketHost } from "../healthServer.js";
 
 /** One `readTranscript` outcome. `unchanged` is the live poll's steady state
  * (stat only, no read); `missing` is ENOENT — a pre-transcript ticket, or a
@@ -189,6 +194,35 @@ export interface DashboardClient {
    * pass the size from the previous read and an unchanged file costs one
    * stat. Resolves `transcriptPathFor(dataTreePaths(cfg).transcripts, id)`. */
   readTranscript(id: string, prevSize: number | null): Promise<Result<TranscriptRead>>;
+  /** Operator ↔ agent chat (spec 2026-09-01 §7): SSE subscribe + the POST
+   * verbs, thin over src/tui/chatClient.ts's transport. `subscribe` never
+   * fails — connection state (including a disabled/unreachable daemon)
+   * surfaces through `on.status`/`on.end`, not a Result. */
+  chat: {
+    subscribe(key: string, since: number | null, on: ChatSubscribeHandlers): () => void;
+    prompt(key: string, text: string): Promise<Result<{ mode: "prompt" | "steer" | "rejected" }>>;
+    abort(key: string): Promise<Result<{ aborted: boolean }>>;
+    fresh(key: string): Promise<Result<null>>;
+    note(key: string, record: Omit<ChatDraftRecord, "ts">): Promise<Result<null>>;
+  };
+  /** Parked chat drafts (Task 11's draftStore) awaiting human confirmation —
+   * the chat analogue of listReview/listCommentDrafts. */
+  listChatDrafts(): Promise<Result<PendingDraft[]>>;
+  /** One file beside a parked draft's JSON (`draftFilePath`). */
+  readChatDraftFile(id: string, name: string): Promise<Result<string>>;
+  /** Rewrite a parked draft's JSON + files — a route override or edited
+   * content from the review surface. */
+  updateChatDraft(draft: PendingDraft): Promise<Result<null>>;
+  /** Discard a parked chat draft without submitting it. */
+  discardChatDraft(id: string): Promise<Result<null>>;
+  /** Archive a parked chat draft as submitted, once its route has run. */
+  archiveSubmittedChatDraft(id: string): Promise<Result<null>>;
+  /** Compact PR context (title/body/reviews/comments) for the chat's system
+   * prompt when the session's cwd is a PR branch. */
+  prContext(nwo: string, n: number): Promise<Result<string>>;
+  /** Compact issue context (title/body/comments), the issue analogue of
+   * `prContext`. */
+  issueContext(nwo: string, n: number): Promise<Result<string>>;
   health(): Promise<HealthInfo>;
 }
 
@@ -302,6 +336,9 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
   const trigger = cfg.github.triggerLabel;
   const ll = lifecycleLabels(trigger);
   let viewer: string | null = null;
+  // Chat's own base URL (spec 2026-09-01 §7): same host:port as fetchHealth's
+  // /health probe, bracketed for an IPv6 healthHost.
+  const healthBase = `http://${bracketHost(cfg.healthHost)}:${cfg.healthPort}`;
 
   const attempt = async <T>(fn: () => Promise<T>): Promise<Result<T>> => {
     try {
@@ -371,6 +408,14 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
   };
 
   return {
+    ...chatClientMethods(cfg, {
+      attempt,
+      ghFn,
+      readFileFn,
+      fetchFn,
+      healthBase,
+      ghTimeoutMs: GH_TIMEOUT,
+    }),
     listIssues(nwo) {
       return attempt(async () => {
         try {

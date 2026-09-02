@@ -16,6 +16,7 @@ import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
 import { transcriptPathFor } from "../src/slug.js";
 import { dataTreePaths } from "../src/dataTree.js";
 import { runEnd, runStart, turnEndFull } from "./helpers/transcriptFixtures.js";
+import { writeChatDraft, listChatDrafts, type PendingDraft } from "../src/chat/draftStore.js";
 
 const cfg = {
   ghBin: "gh",
@@ -1285,5 +1286,253 @@ describe("readTranscript", () => {
       },
     });
     expect(await c.readTranscript("t-1", null)).toEqual({ ok: false, error: "EACCES: denied" });
+  });
+});
+
+describe("chat", () => {
+  const draftBase: PendingDraft = {
+    id: "chat-acme-1-1",
+    key: "acme/api",
+    slug: "chat-acme-1",
+    kind: "ticket",
+    files: [{ name: "ticket.md", content: "body", lint: [], route: null, droppedKeys: [] }],
+    cwd: "/repos/acme/api",
+    nwo: "acme/api",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    lintFailed: false,
+    blocked: null,
+    routeOverride: "auto",
+    commandArgs: null,
+  };
+  const NOTE_RECORD = {
+    type: "junco_chat_draft" as const,
+    draftId: "d-1",
+    kind: "ticket" as const,
+    status: "parked" as const,
+    ids: [],
+    destination: null,
+  };
+
+  it("prContext/issueContext fetch through gh and render a compact block", async () => {
+    const f = fakes();
+    f.ghFn = (async (_cfg, args) => {
+      if (args[0] === "pr")
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            title: "Add cache",
+            body: "why",
+            reviews: [{ author: { login: "bob" }, state: "CHANGES_REQUESTED", body: "no" }],
+            comments: [{ author: { login: "amy" }, body: "hm" }],
+          }),
+          stderr: "",
+        };
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          title: "Bug",
+          body: "it breaks",
+          comments: [{ author: { login: "amy" }, body: "me too" }],
+        }),
+        stderr: "",
+      };
+    }) as typeof f.ghFn;
+    const c = makeGhDashboardClient(cfg, f);
+    const pr = await c.prContext("acme/api", 42);
+    expect(pr.ok && pr.value).toContain("PR #42: Add cache");
+    expect(pr.ok && pr.value).toContain("bob (CHANGES_REQUESTED): no");
+    const issue = await c.issueContext("acme/api", 7);
+    expect(issue.ok && issue.value).toContain("Issue #7: Bug");
+    expect(issue.ok && issue.value).toContain("amy: me too");
+  });
+
+  it("prContext defaults a missing author/state and skips a bodyless review or comment", async () => {
+    const f = fakes();
+    f.ghFn = (async () => ({
+      code: 0,
+      stdout: JSON.stringify({
+        title: "Add cache",
+        body: "why",
+        reviews: [{ body: "" }, { body: "no author or state" }],
+        comments: [
+          { body: "" },
+          { body: "hi, no author" },
+          { author: { login: "amy" }, body: "hi" },
+        ],
+      }),
+      stderr: "",
+    })) as typeof f.ghFn;
+    const c = makeGhDashboardClient(cfg, f);
+    const r = await c.prContext("acme/api", 9);
+    expect(r).toEqual({
+      ok: true,
+      value:
+        "PR #9: Add cache\n\nwhy\n\n? (COMMENTED): no author or state\n?: hi, no author\namy: hi",
+    });
+  });
+
+  it("issueContext defaults a missing comment author and skips a bodyless comment", async () => {
+    const f = fakes();
+    f.ghFn = (async () => ({
+      code: 0,
+      stdout: JSON.stringify({
+        title: "Bug",
+        body: "it breaks",
+        comments: [
+          { body: "" },
+          { body: "no author" },
+          { author: { login: "amy" }, body: "me too" },
+        ],
+      }),
+      stderr: "",
+    })) as typeof f.ghFn;
+    const c = makeGhDashboardClient(cfg, f);
+    const r = await c.issueContext("acme/api", 9);
+    expect(r).toEqual({
+      ok: true,
+      value: "Issue #9: Bug\n\nit breaks\n\n?: no author\namy: me too",
+    });
+  });
+
+  it("prContext/issueContext fall back to empty defaults for a minimal gh payload", async () => {
+    const f = fakes();
+    f.ghFn = (async () => ({ code: 0, stdout: "{}", stderr: "" })) as typeof f.ghFn;
+    const c = makeGhDashboardClient(cfg, f);
+    expect(await c.prContext("acme/api", 9)).toEqual({ ok: true, value: "PR #9:" });
+    expect(await c.issueContext("acme/api", 9)).toEqual({ ok: true, value: "Issue #9:" });
+  });
+
+  it("chat draft passthroughs read the draft store", async () => {
+    const c = makeGhDashboardClient(cfg, fakes());
+    const list = await c.listChatDrafts();
+    expect(list).toEqual({ ok: true, value: [] });
+  });
+
+  it("readChatDraftFile reads the file at the draft's on-disk path", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftfile-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.readChatDraftFile(draftBase.id, "ticket.md");
+    expect(r).toEqual({ ok: true, value: "body" });
+  });
+
+  it("updateChatDraft rewrites the draft JSON via writeChatDraft", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftupdate-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.updateChatDraft(draftBase);
+    expect(r).toEqual({ ok: true, value: null });
+    expect(listChatDrafts(c2).map((d) => d.id)).toEqual([draftBase.id]);
+  });
+
+  it("discardChatDraft archives the draft as discarded, removing it from the pending list", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftdiscard-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.discardChatDraft(draftBase.id);
+    expect(r).toEqual({ ok: true, value: null });
+    expect(listChatDrafts(c2)).toEqual([]);
+  });
+
+  it("archiveSubmittedChatDraft archives the draft as submitted, removing it from the pending list", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "junco-ghclient-draftsubmit-"));
+    const c2 = { ...cfg, dataDir: stateDir } as Config;
+    writeChatDraft(c2, draftBase);
+    const c = makeGhDashboardClient(c2, fakes());
+    const r = await c.archiveSubmittedChatDraft(draftBase.id);
+    expect(r).toEqual({ ok: true, value: null });
+    expect(listChatDrafts(c2)).toEqual([]);
+  });
+
+  it("chat.prompt success returns the daemon's mode", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ mode: "steer" }), { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.prompt("k", "hi")).toEqual({ ok: true, value: { mode: "steer" } });
+  });
+
+  it("chat.prompt non-2xx surfaces the daemon's error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "chat_disabled" }), {
+        status: 503,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.prompt("k", "hi");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("chat_disabled");
+  });
+
+  it("chat.abort success (202) reports aborted:true", async () => {
+    const fetchFn = (async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.abort("k")).toEqual({ ok: true, value: { aborted: true } });
+  });
+
+  it("chat.abort no-op (204) reports aborted:false", async () => {
+    const fetchFn = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.abort("k")).toEqual({ ok: true, value: { aborted: false } });
+  });
+
+  it("chat.abort non-2xx surfaces the daemon's error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "unknown_key" }), {
+        status: 404,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.abort("k");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("unknown_key");
+  });
+
+  it("chat.abort with a non-JSON error body falls back to a generic message", async () => {
+    const fetchFn = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.abort("k");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("chat request failed (500)");
+  });
+
+  it("chat.fresh success returns null", async () => {
+    const fetchFn = (async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.fresh("k")).toEqual({ ok: true, value: null });
+  });
+
+  it("chat.fresh non-2xx surfaces the daemon's error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "no_checkout" }), {
+        status: 409,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.fresh("k");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("no_checkout");
+  });
+
+  it("chat.note success returns null", async () => {
+    const fetchFn = (async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.note("k", NOTE_RECORD)).toEqual({ ok: true, value: null });
+  });
+
+  it("chat.note non-2xx surfaces the daemon's error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "chat_disabled" }), {
+        status: 503,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.note("k", NOTE_RECORD);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("chat_disabled");
+  });
+
+  it("chat.subscribe wires the daemon healthBase through to subscribeChat", () => {
+    const c = makeGhDashboardClient(cfg, fakes());
+    const stop = c.chat.subscribe("k", null, { record: () => {}, status: () => {}, end: () => {} });
+    expect(typeof stop).toBe("function");
+    stop();
   });
 });
