@@ -6,8 +6,8 @@
  * `Lever` entry (enforced in bijection by tests/configLevers.test.ts) — no
  * per-field code lives here.
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import {
   LEVERS,
   getAtPath,
@@ -16,7 +16,8 @@ import {
   coerceLever,
   type Lever,
 } from "./configLevers.js";
-import { loadConfig, queuePaths, validateConfigObject } from "./config.js";
+import { loadConfig, queuePaths } from "./config.js";
+import { updateConfigFile } from "./configWrite.js";
 import type { Config } from "./types.js";
 import { renderConfigJson, defaultAnswers } from "./wizard/flow.js";
 import { summary } from "./wizard.js";
@@ -63,8 +64,9 @@ export function runConfigCommand(
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
   const err = deps.errFn ?? ((s: string) => process.stderr.write(s));
   const readFile = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
-  // 0600 (#343): config.json may hold a literal model.apiKey. The mode rides
-  // the tmp file through `set`'s rename, so a rewrite tightens a loose file too.
+  // 0600 (#343): config.json may hold a literal model.apiKey. `init`'s fresh
+  // scaffold is the only direct write here — `set` goes through
+  // updateConfigFile (configWrite.ts), whose default writer carries the mode.
   const writeFile =
     deps.writeFileFn ??
     ((p: string, s: string) => writeFileSync(p, s, { encoding: "utf8", mode: 0o600 }));
@@ -116,21 +118,19 @@ export function runConfigCommand(
       err(`config: ${path}: ${c.error}\n`);
       return 1;
     }
-    // Mutate raw (sparse), validate a defaulted copy via the schema, then atomic write.
-    const raw = exists(configPath)
-      ? (JSON.parse(readFile(configPath)) as Record<string, unknown>)
-      : {};
     const old = getEffective(readFile, exists, configPath, l);
-    setAtPath(raw, path, c.value);
+    // Mutate raw (sparse), validate via the schema, then atomic write — all
+    // inside updateConfigFile. A fresh install has no file yet: `set` starts
+    // from `{}` rather than failing on the read.
     try {
-      validateConfigObject(raw);
+      updateConfigFile(configPath, (raw) => setAtPath(raw, path, c.value), {
+        readFileFn: (p) => (exists(p) ? readFile(p) : "{}"),
+        writeFileFn: deps.writeFileFn,
+      });
     } catch (e) {
       err(`config: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
     }
-    const tmp = join(dirname(configPath), `.config.json.tmp-${process.pid}`);
-    writeFile(tmp, JSON.stringify(raw, null, 2) + "\n");
-    renameSync(tmp, configPath);
     print(`${path}: ${JSON.stringify(old)} → ${JSON.stringify(c.value)}\n`);
     if (l.reload === "restart" && deps.daemonRunningFn?.()) {
       print(`(restart the daemon to apply: junco restart)\n`);

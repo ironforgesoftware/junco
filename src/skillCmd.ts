@@ -2,16 +2,16 @@
  * `junco skill install [--harness <name|path>]...` — the explicit skill-link
  * entry point. No args: re-ensure from config (what the daemon does at start,
  * with a printed report). With --harness: resolve registry names to their
- * default dirs, persist NEW dirs to skills.harnessDirs (atomic tmp+rename,
- * configCmd pattern — presence in config is the standing consent the ensure
- * step honors), then ensure. Exit 1 only when an explicitly requested link
- * failed; config-driven warnings stay exit 0 (daemon parity).
+ * default dirs, persist NEW dirs to skills.harnessDirs (validated atomic
+ * write via updateConfigFile, configWrite.ts — presence in config is the
+ * standing consent the ensure step honors), then ensure. Exit 1 only when an
+ * explicitly requested link failed; config-driven warnings stay exit 0
+ * (daemon parity).
  */
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
-import { dirname, join } from "node:path";
 import type { Config } from "./types.js";
 import { loadConfig } from "./config.js";
 import { getAtPath, setAtPath } from "./configLevers.js";
+import { readConfigFile, updateConfigFile, isConfigValidationError } from "./configWrite.js";
 import {
   ensureSkillLinks,
   sameHarnessDir,
@@ -53,9 +53,6 @@ export async function runSkillInstallCommand(
   deps: SkillCmdDeps = {},
 ): Promise<number> {
   const print = deps.printFn ?? ((s: string) => process.stdout.write(s));
-  const readFile = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
-  const writeFile = deps.writeFileFn ?? ((p: string, s: string) => writeFileSync(p, s, "utf8"));
-  const renameFn = deps.renameFn ?? renameSync;
   const loadConfigFn = deps.loadConfigFn ?? loadConfig;
   const ensureFn = deps.ensureFn ?? ensureSkillLinks;
 
@@ -72,7 +69,7 @@ export async function runSkillInstallCommand(
   if (requested.length > 0) {
     let raw: Record<string, unknown>;
     try {
-      raw = JSON.parse(readFile(configPath)) as Record<string, unknown>;
+      raw = readConfigFile(configPath, deps);
     } catch (e) {
       print(`junco skill install: ${configPath}: ${e instanceof Error ? e.message : String(e)}\n`);
       return 1;
@@ -90,11 +87,22 @@ export async function runSkillInstallCommand(
       additions.push(d);
     }
     if (additions.length > 0) {
-      setAtPath(raw, "skills.harnessDirs", [...existing, ...additions]);
-      // Atomic tmp+rename — same pattern as configCmd/wizard writes.
-      const tmp = join(dirname(configPath), `.config.json.tmp-${process.pid}`);
-      writeFile(tmp, JSON.stringify(raw, null, 2) + "\n");
-      renameFn(tmp, configPath);
+      try {
+        updateConfigFile(
+          configPath,
+          (fresh) => setAtPath(fresh, "skills.harnessDirs", [...existing, ...additions]),
+          deps,
+        );
+      } catch (e) {
+        // #349: a config already schema-invalid elsewhere used to be persisted
+        // here anyway (this was the one writer without validation) and only
+        // loadConfigFn below blew up — after the write. Write failures still
+        // propagate as before.
+        if (!isConfigValidationError(e)) throw e;
+        const brief = (e instanceof Error ? e.message : String(e)).split("\n")[0];
+        print(`junco skill install: config invalid — not modified: ${brief}\n`);
+        return 1;
+      }
       for (const d of additions) print(`configured: ${d}\n`);
     }
   }

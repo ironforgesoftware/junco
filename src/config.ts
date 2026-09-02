@@ -799,9 +799,10 @@ export function loadConfig(
 }
 
 /** Validate a raw (parsed-JSON) config object against `ConfigSchema`, throwing
- * a zod error on failure. Used by `junco config set` (src/configCmd.ts) to
- * confirm a sparse mutation still produces a valid, defaultable config before
- * it's written to disk. */
+ * a zod error on failure. Used by every config.json writer via
+ * `writeConfigFile`/`updateConfigFile` (src/configWrite.ts) to confirm a
+ * sparse mutation still produces a valid, defaultable config before it's
+ * written to disk. */
 export function validateConfigObject(obj: unknown): void {
   ConfigSchema.parse(obj);
 }
