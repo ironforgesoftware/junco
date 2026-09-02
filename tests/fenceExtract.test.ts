@@ -131,6 +131,34 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
     expect(noId.problems).toEqual(["every ticket in a set needs an explicit id (file 2 has none)"]);
   });
 
+  it("two fences with the SAME id collapse to the last one, with a problem naming it (R35)", () => {
+    // slugifyId maps both onto one file, so a set of two would list two ids
+    // in the JSON and submit the same file twice.
+    const text = [
+      fence("id: add-cache", "# Add cache\n\nfirst attempt"),
+      fence("id: add-cache", "# Add cache\n\ncorrected"),
+    ].join("\n\n");
+    const [d] = extractDrafts(text, ctx);
+    expect(d!.kind).toBe("ticket"); // one file left → not a set
+    expect(d!.files).toHaveLength(1);
+    expect(d!.files[0]!.body).toContain("corrected");
+    expect(d!.files[0]!.body).not.toContain("first attempt");
+    expect(d!.problems).toEqual(["duplicate id add-cache: kept the last fence"]);
+  });
+
+  it("a duplicate inside a genuine set keeps the set and drops only the superseded fence", () => {
+    const text = [
+      fence("id: api", "# API v1"),
+      fence("id: ui\ndepends_on: [api]", "# UI"),
+      fence("id: api", "# API v2"),
+    ].join("\n\n");
+    const [d] = extractDrafts(text, ctx);
+    expect(d!.kind).toBe("ticketSet");
+    expect(d!.files.map((f) => f.name)).toEqual(["ui.md", "api.md"]);
+    expect(d!.files.find((f) => f.id === "api")!.body).toContain("API v2");
+    expect(d!.problems).toEqual(["duplicate id api: kept the last fence"]);
+  });
+
   it("a fence without frontmatter gets a generated id from the H1", () => {
     const [d] = extractDrafts("```junco-ticket\n# Fix the flaky test\n\nbody\n```", ctx);
     expect(d!.files[0]!.id).toBe("fix-the-flaky-test");

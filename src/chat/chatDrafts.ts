@@ -12,7 +12,7 @@ import type { ReviewStoreDeps } from "../reviewStore.js";
 import { slugifyId } from "../slug.js";
 import type { ChatManagerDeps } from "./chatManager.js";
 import type { ChatSession } from "./chatSession.js";
-import { extractDrafts, type ExtractedDraft } from "./fenceExtract.js";
+import { extractDrafts, hasJuncoFence, type ExtractedDraft } from "./fenceExtract.js";
 import {
   removeChatDraft,
   writeChatDraft,
@@ -165,7 +165,13 @@ export function makeTurnHook(
   return async (session, result, source) => {
     if (result.mode !== "prompt" || result.status !== "ok") return;
     const c = cfg();
-    const extracted = extractDrafts(result.allText, {
+    // Spec §6.1 / Ruling R35: the FINAL assistant message is the answer, so
+    // that is what gets scanned whenever it carries a fence — a model that
+    // drafts, reads a file, then re-emits a corrected ticket must not park
+    // both. `allText` stays as the fallback for #67's case: a fence banked in
+    // an earlier message with a plain "parked it" as the closing word.
+    const scanned = hasJuncoFence(result.finalText) ? result.finalText : result.allText;
+    const extracted = extractDrafts(scanned, {
       repo: session.cwd,
       nwo: session.nwo,
       planSetsEnabled: c.planSets.enabled,

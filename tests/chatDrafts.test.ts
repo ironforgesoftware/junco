@@ -330,6 +330,62 @@ describe("lintFollowUp + makeTurnHook (spec 2026-09-01 §6.3)", () => {
     for (const id of firstIds) expect(after.map((d) => d.id)).not.toContain(id);
   });
 
+  it("scans the FINAL message when it holds a fence, and falls back to allText when it doesn't (R35)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const fakeSm = async (mode: SessionManagerMode) =>
+      "create" in mode
+        ? { manager: {}, file: join(mode.create.dir, "sdk") }
+        : { manager: {}, file: mode.open.file };
+    const session = new ChatSession(
+      {
+        cfg,
+        key: "acme/api",
+        kind: "watched",
+        cwd: "/repo",
+        nwo: "acme/api",
+        dir: join(root, "data", "chats", "acme__api"),
+      },
+      { makeSessionManager: fakeSm, sessionFactoryFor: () => fakeChatSession([]) },
+    );
+    await session.ensureMeta();
+    const hook = makeTurnHook(() => cfg, { routeFn: routeInbox });
+    const zero = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
+    const run = (finalText: string, allText: string) =>
+      hook(
+        session,
+        {
+          mode: "prompt",
+          status: "ok",
+          abortReason: null,
+          errorMessage: null,
+          usage: zero,
+          durationMs: 1,
+          finalText,
+          allText,
+        },
+        "operator",
+      );
+    const ticket = (body: string) => "````junco-ticket\n---\nid: good\n---\n" + body + "\n````";
+    const first = ticket(CLEAN_BODY);
+    const corrected = ticket(CLEAN_BODY.replace("# ", "# Corrected "));
+
+    // Draft → read → re-emit: the corrected fence is the answer, and the
+    // superseded one is not a second ticket with the same id.
+    await run(corrected, `${first}\n\nlet me check that\n\n${corrected}`);
+    const parked = listChatDrafts(cfg);
+    expect(parked).toHaveLength(1);
+    expect(parked[0]!.kind).toBe("ticket");
+    expect(parked[0]!.files).toHaveLength(1);
+    expect(parked[0]!.files[0]!.content).toContain("# Corrected ");
+
+    // #67's reason for allText: a fence banked before a closing message must
+    // still park, so a final message with no fence falls back.
+    await run("done — parked it above", `${first}\n\ndone — parked it above`);
+    const after = listChatDrafts(cfg);
+    expect(after).toHaveLength(2);
+  });
+
   it("a still-failing retry parks lintFailed and returns no further followUp", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-park-"));
     const cfg = cfgAt(root);

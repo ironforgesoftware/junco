@@ -216,18 +216,47 @@ function commandArgsFor(
   return null;
 }
 
+/**
+ * Ruling R35: one id, one file. `<id>.md` is the on-disk name, so two fences
+ * carrying the same id (the model drafts, reads a file, re-emits a corrected
+ * version) would park a "set" whose two entries slugify onto ONE path: the
+ * JSON lists two ids and `s` submits the same file twice. The LAST fence wins
+ * — it is the model's corrected answer — and the drop is a visible problem,
+ * never silent. Ids are compared as extracted (explicit or H1-derived): both
+ * produce the same colliding name.
+ */
+function dedupeById<T extends SplitResult>(results: T[], problems: string[]): T[] {
+  const lastIdx = new Map<string, number>();
+  results.forEach((r, i) => {
+    if (r.file.id !== null) lastIdx.set(r.file.id, i);
+  });
+  return results.filter((r, i) => {
+    if (r.file.id === null || lastIdx.get(r.file.id) === i) return true;
+    problems.push(`duplicate id ${r.file.id}: kept the last fence`);
+    return false;
+  });
+}
+
 function extractTicketDraft(text: string, ctx: ExtractCtx): ExtractedDraft | null {
   const tickets = allFencedBlocks(text, PLAN_FENCE);
   if (tickets.length === 0) return null;
-  if (tickets.length === 1) {
-    const problems: string[] = [];
-    const { file } = splitFile(tickets[0]!, ctx, problems);
+  const problems: string[] = [];
+  // Per-fence problems, merged only for the fences that SURVIVE the dedupe: a
+  // superseded draft's complaint (an unclosed junco-patch, say) must not be
+  // reported against the corrected one that replaced it.
+  const all = tickets.map((t) => {
+    const own: string[] = [];
+    return { ...splitFile(t, ctx, own), own };
+  });
+  const kept = dedupeById(all, problems);
+  for (const r of kept) problems.push(...r.own);
+  if (kept.length === 1) {
+    const file = kept[0]!.file;
     const kind = kindOf(file);
     const commandArgs = commandArgsFor(kind, file, ctx, problems);
     return { kind, files: [file], blocked: null, commandArgs, problems };
   }
-  const problems: string[] = [];
-  const results = tickets.map((t) => splitFile(t, ctx, problems));
+  const results = kept;
   const files = results.map((r) => r.file);
   const ids = new Set<string>();
   results.forEach(({ file: f, explicitId }, i) => {
@@ -242,6 +271,14 @@ function extractTicketDraft(text: string, ctx: ExtractCtx): ExtractedDraft | nul
       problems.push(`${f.id ?? f.name}: depends_on names no sibling: ${missing.join(", ")}`);
   }
   return { kind: "ticketSet", files, blocked: null, commandArgs: null, problems };
+}
+
+/** Does this message carry a junco fence of either kind? The scope switch
+ *  (R35): the FINAL assistant message is what gets scanned when it has one. */
+export function hasJuncoFence(text: string): boolean {
+  return (
+    allFencedBlocks(text, PLAN_FENCE).length > 0 || allFencedBlocks(text, PLAN_SET_FENCE).length > 0
+  );
 }
 
 export function extractDrafts(text: string, ctx: ExtractCtx): ExtractedDraft[] {
