@@ -205,24 +205,34 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
     if (i > 0) push("");
     if (run.prompt !== null)
       for (const l of wrapText(`you: ${run.prompt}`, width)) push(l, "accent");
-    const live = s.live && i === s.runs.length - 1;
-    const outcome = fmtRunOutcome(run, live);
-    const head = [
-      `run ${run.index}/${s.runs.length}`,
-      run.flow === null ? "v1" : fmtFlow(run.flow),
-      run.modelId ?? "?",
-      run.startedAt === null ? null : hhmmss(run.startedAt),
-      outcome.text,
-    ]
-      .filter((x): x is string => x !== null)
-      .join(" · ");
-    push(truncate(`── ${head} ──`, width), "bold");
-    // String(): a malformed record's errorMessage need not be a string (the
-    // transcript schema is not validated at parse time) — the renderer runs
-    // inside React's render, where a throw takes the whole dashboard down.
-    if (run.end?.errorMessage)
-      for (const l of wrapText(`✗ ${firstLine(String(run.end.errorMessage))}`, width - 3))
-        push(`   ${l}`, "error");
+    // R23: a note (e.g. junco_chat_turn_rejected) that lands before ANY run
+    // parks on a synthetic, prompt-less, turn-less run closed with a null
+    // stopReason (transcriptSummary.ts's noteRun) purely so it has somewhere
+    // to render — printing `── run 1/1 · chat · ? · stop ──` above it would
+    // claim a run happened when none did. Skip the header (and the
+    // error/guard rows that hang off it — a run in this shape carries
+    // neither) for such a run; the notes below still render.
+    const syntheticNoteRun = run.flow === "chat" && run.prompt === null && run.turns.length === 0;
+    if (!syntheticNoteRun) {
+      const live = s.live && i === s.runs.length - 1;
+      const outcome = fmtRunOutcome(run, live);
+      const head = [
+        `run ${run.index}/${s.runs.length}`,
+        run.flow === null ? "v1" : fmtFlow(run.flow),
+        run.modelId ?? "?",
+        run.startedAt === null ? null : hhmmss(run.startedAt),
+        outcome.text,
+      ]
+        .filter((x): x is string => x !== null)
+        .join(" · ");
+      push(truncate(`── ${head} ──`, width), "bold");
+      // String(): a malformed record's errorMessage need not be a string (the
+      // transcript schema is not validated at parse time) — the renderer runs
+      // inside React's render, where a throw takes the whole dashboard down.
+      if (run.end?.errorMessage)
+        for (const l of wrapText(`✗ ${firstLine(String(run.end.errorMessage))}`, width - 3))
+          push(`   ${l}`, "error");
+    }
     const guardRow = (g: GuardDecisionRecord): void =>
       push(
         truncate(

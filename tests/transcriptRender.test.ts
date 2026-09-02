@@ -385,6 +385,13 @@ describe("chat rows (spec 2026-09-01 §1.3)", () => {
     expect(before[0]!.text).toMatch(/^── run 1\/1 · audit/);
     expect(before.some((r) => r.text.startsWith("you:"))).toBe(false);
   });
+  it("a note landing before any run opens a synthetic, prompt-less run — its header is suppressed, only the note row renders (R23)", () => {
+    const s = summarizeTranscript([metaLine(), chatTurnRejected()]);
+    const rows = renderTranscriptRows(s, opts({ width: 80 }));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.text).toContain("turn rejected: rate limited");
+    expect(rows.some((r) => r.text.startsWith("── run"))).toBe(false);
+  });
   it("draft note text and tone vary by status; destination shown once submitted", () => {
     const s = summarizeTranscript([
       metaLine(),
