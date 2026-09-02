@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   archiveChatDraft,
+  chatDraftsDir,
   draftFilePath,
+  draftJsonPath,
   draftsParkedFor,
   listChatDrafts,
   readChatDraft,
@@ -70,5 +72,15 @@ describe("chat draft store (spec 2026-09-01 §6.2)", () => {
     removeChatDraft(cfg, "d2");
     expect(listChatDrafts(cfg)).toEqual([]);
     expect(existsSync(draftFilePath(cfg, "d2", "t.md"))).toBe(false);
+  });
+
+  it("draftJsonPath is the exact path removeChatDraft removes (R29: one exported helper)", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-ds-"));
+    const cfg = cfgAt(root);
+    expect(draftJsonPath(cfg, "d1")).toBe(join(chatDraftsDir(cfg), "d1.json"));
+    writeChatDraft(cfg, draft("d1"));
+    expect(existsSync(draftJsonPath(cfg, "d1"))).toBe(true);
+    removeChatDraft(cfg, "d1");
+    expect(existsSync(draftJsonPath(cfg, "d1"))).toBe(false);
   });
 });

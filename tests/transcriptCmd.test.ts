@@ -1,9 +1,17 @@
 import { describe, it, expect } from "vitest";
+import { join } from "node:path";
 import { runTranscriptCmd } from "../src/transcriptCmd.js";
 import { transcriptPathFor } from "../src/slug.js";
 import { dataTreePaths } from "../src/dataTree.js";
+import { chatSlug } from "../src/chat/chatKey.js";
 import { makeConfig, type ConfigSeams } from "./helpers/config.js";
-import { agentStart, runEnd, runStart, turnEndFull } from "./helpers/transcriptFixtures.js";
+import {
+  agentStart,
+  metaLine,
+  runEnd,
+  runStart,
+  turnEndFull,
+} from "./helpers/transcriptFixtures.js";
 
 const seams: ConfigSeams = {
   dataDir: "/sbxroot/data",
@@ -104,5 +112,28 @@ describe("runTranscriptCmd", () => {
     expect(await runTranscriptCmd(["t-1", "--width", "abc"], deps({}).d)).toBe(2);
     expect(await runTranscriptCmd([], deps({}).d)).toBe(2);
     expect(await runTranscriptCmd(["t-1", "--nope"], deps({}).d)).toBe(2);
+  });
+
+  it("--chat <key> resolves <chats>/<slug>/transcript.jsonl", async () => {
+    const reads: string[] = [];
+    const cfg = makeConfig(seams);
+    const code = await runTranscriptCmd(["--chat", "Acme/API"], {
+      loadCfg: () => cfg,
+      readFile: (p: string) => (reads.push(p), metaLine({ ticketId: "acme__api" }) + "\n"),
+      stdout: () => {},
+      columns: 80,
+    });
+    expect(code).toBe(0);
+    expect(reads[0]).toBe(join(dataTreePaths(cfg).chats, chatSlug("Acme/API"), "transcript.jsonl"));
+  });
+
+  it("--chat with a positional is a usage error", async () => {
+    expect(await runTranscriptCmd(["--chat", "a/b", "t-1"], deps({}).d)).toBe(2);
+  });
+
+  it("--chat without config is exit 1 with guidance", async () => {
+    const { out, d } = deps({}, null);
+    expect(await runTranscriptCmd(["--chat", "acme/api"], d)).toBe(1);
+    expect(out.join("\n")).toContain("no config found");
   });
 });

@@ -65,6 +65,13 @@ const store = makeReviewStore<PendingDraft>([
 export function chatDraftsDir(cfg: Config): string {
   return dataTreePaths(cfg).chatDrafts;
 }
+/** `<chatDrafts>/<slugifyId(id)>.json` — the one place a draft id becomes its
+ * JSON path, so `removeChatDraft` and `unwatchCmd.ts`'s chat-draft plan item
+ * can never compute it differently from each other or from what
+ * `store.write` (the makeReviewStore instance above) actually wrote. */
+export function draftJsonPath(cfg: Config, id: string): string {
+  return join(chatDraftsDir(cfg), `${slugifyId(id)}.json`);
+}
 export function draftFilesDir(cfg: Config, draftId: string): string {
   return join(chatDraftsDir(cfg), slugifyId(draftId));
 }
@@ -123,7 +130,7 @@ export function removeChatDraft(
   deps: { rmFn?: (p: string) => void } = {},
 ): void {
   const rmFn = deps.rmFn ?? ((p: string) => rmSync(p, { recursive: true, force: true }));
-  rmFn(join(chatDraftsDir(cfg), `${slugifyId(id)}.json`));
+  rmFn(draftJsonPath(cfg, id));
   rmFn(draftFilesDir(cfg, id));
 }
 

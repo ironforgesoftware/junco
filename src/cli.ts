@@ -178,10 +178,13 @@ Subcommands:
          [--output-budget-per-turn N] [--output-budget-post-commit N] [--json]
                         Re-run a recorded event transcript through the guards
                         under a chosen (or default) policy — a what-if report
-  transcript <ticket-id|path.jsonl> [--thinking] [--tools] [--width N] [--json]
+  transcript <ticket-id|path.jsonl> | --chat <owner/repo|path>
+             [--thinking] [--tools] [--width N] [--json]
                         Print a recorded event transcript — runs, turns, tool
                         calls and results, the agent's answer (the dashboard
-                        opens the same view with enter on a queue row)
+                        opens the same view with enter on a queue row);
+                        --chat prints a repo's dashboard chat transcript
+                        instead of a ticket's
   unwatch <owner/repo> [--plan]  Stop watching a repo and delete its junco-owned state (--plan previews as JSON)
   outbox [flush]      List or push the offline GitHub backlog
   prs                 List junco-authored pull requests across watched repos

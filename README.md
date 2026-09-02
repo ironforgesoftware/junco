@@ -215,30 +215,30 @@ escalates to a single agent session that treats the patch as a spec.
 
 ## CLI at a glance
 
-|                                                              |                                                                                                                      |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `junco start` / `junco restart`                              | run the daemon / restart the installed service                                                                       |
-| `junco submit <file>`                                        | queue a ticket (also reads stdin)                                                                                    |
-| `junco submit --patch <file> --repo <path>`                  | compose an apply ticket from a `git format-patch` series — zero model turns (`--title`, `--why`, `--verify`)         |
-| `junco submit --plan <file> --repo <path>`                   | compile a `junco-plan` fence into a dependency-ordered ticket set, one PR per task (needs `planSets.enabled`)        |
-| `junco submit --as-issue <file>`                             | file the ticket as a parked, unlabeled issue via the bot account — your trigger label launches it (also `--plan`)    |
-| `junco lint <file>`                                          | validate a ticket (plan-lint + repo/branch preflight) without submitting                                             |
-| `junco submit --dry-run <file>`                              | report destination, discarded frontmatter, and lint without submitting                                               |
-| `junco dashboard`                                            | the fullscreen TUI                                                                                                   |
-| `junco import <owner/repo#N \| url>`                         | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                         |
-| `junco status` / `junco list` / `junco logs -f`              | daemon, queue, and log visibility                                                                                    |
-| `junco prs`                                                  | list junco-authored pull requests across watched repos                                                               |
-| `junco audit <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`audit review`, `audit file`)        |
-| `junco investigate <owner/repo#N\|url>`                      | investigate an issue (owned or external); draft awaits review (`investigate review`, `investigate post`)             |
-| `junco retry <name…\|--all>`                                 | move failed tickets back to the inbox                                                                                |
-| `junco outbox [flush]`                                       | inspect or push the offline GitHub backlog                                                                           |
-| `junco doctor`                                               | preflight config, git/gh auth, endpoint, model                                                                       |
-| `junco transcript <ticket-id>`                               | print a ticket's recorded event transcript — runs, tool calls, results, the agent's answer (`--thinking`, `--tools`) |
-| `junco auth login`                                           | log the bot account in ([bot account guide](docs/bot-account.md))                                                    |
-| `junco auth grant <owner/repo>`                              | grant the bot push access to a repo — invite as you, accept as the bot ([bot account guide](docs/bot-account.md))    |
-| `junco config` / `junco schema` / `junco service`            | config get/set/init, ticket schema, service install                                                                  |
-| `junco update`                                               | install the latest release and drain-restart the supervised daemon                                                   |
-| `junco --version`                                            | print the running version                                                                                            |
+|                                                              |                                                                                                                                                                                  |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `junco start` / `junco restart`                              | run the daemon / restart the installed service                                                                                                                                   |
+| `junco submit <file>`                                        | queue a ticket (also reads stdin)                                                                                                                                                |
+| `junco submit --patch <file> --repo <path>`                  | compose an apply ticket from a `git format-patch` series — zero model turns (`--title`, `--why`, `--verify`)                                                                     |
+| `junco submit --plan <file> --repo <path>`                   | compile a `junco-plan` fence into a dependency-ordered ticket set, one PR per task (needs `planSets.enabled`)                                                                    |
+| `junco submit --as-issue <file>`                             | file the ticket as a parked, unlabeled issue via the bot account — your trigger label launches it (also `--plan`)                                                                |
+| `junco lint <file>`                                          | validate a ticket (plan-lint + repo/branch preflight) without submitting                                                                                                         |
+| `junco submit --dry-run <file>`                              | report destination, discarded frontmatter, and lint without submitting                                                                                                           |
+| `junco dashboard`                                            | the fullscreen TUI                                                                                                                                                               |
+| `junco import <owner/repo#N \| url>`                         | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                                                                                     |
+| `junco status` / `junco list` / `junco logs -f`              | daemon, queue, and log visibility                                                                                                                                                |
+| `junco prs`                                                  | list junco-authored pull requests across watched repos                                                                                                                           |
+| `junco audit <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`audit review`, `audit file`)                                                                    |
+| `junco investigate <owner/repo#N\|url>`                      | investigate an issue (owned or external); draft awaits review (`investigate review`, `investigate post`)                                                                         |
+| `junco retry <name…\|--all>`                                 | move failed tickets back to the inbox                                                                                                                                            |
+| `junco outbox [flush]`                                       | inspect or push the offline GitHub backlog                                                                                                                                       |
+| `junco doctor`                                               | preflight config, git/gh auth, endpoint, model                                                                                                                                   |
+| `junco transcript <ticket-id> \| --chat <owner/repo>`        | print a ticket's recorded event transcript — runs, tool calls, results, the agent's answer (`--thinking`, `--tools`); `--chat` prints a repo's dashboard chat transcript instead |
+| `junco auth login`                                           | log the bot account in ([bot account guide](docs/bot-account.md))                                                                                                                |
+| `junco auth grant <owner/repo>`                              | grant the bot push access to a repo — invite as you, accept as the bot ([bot account guide](docs/bot-account.md))                                                                |
+| `junco config` / `junco schema` / `junco service`            | config get/set/init, ticket schema, service install                                                                                                                              |
+| `junco update`                                               | install the latest release and drain-restart the supervised daemon                                                                                                               |
+| `junco --version`                                            | print the running version                                                                                                                                                        |
 
 ## Contributing
 
