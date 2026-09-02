@@ -195,7 +195,9 @@ export type View =
   | "transcript"
   | "chat";
 
-interface DetailState {
+// Exported so useViewActions.ts (Ruling R1, 2026-09-02 footer redesign) can
+// type its own `detail` input without re-declaring this shape.
+export interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
   nwo: string; // frozen with the issue snapshot — the open target never depends on live rail state
   body: string | null;
@@ -1457,6 +1459,8 @@ export function App(props: AppProps): React.JSX.Element {
     setReviewState,
     chatDraftActions,
     chatHandlers,
+    detail,
+    openIssueTranscript,
   });
   const mainActions = useMainActions({
     client,
@@ -1823,8 +1827,8 @@ export function App(props: AppProps): React.JSX.Element {
       if (key.escape) return void setView("main");
       if (input === "]" || key.downArrow) return void scrollBy(1);
       if (input === "[" || key.upArrow) return void scrollBy(-1);
-      if (input === "t")
-        return void openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null, "detail");
+      // `t` (transcript) dispatches at layer 3d now — useViewActions' own
+      // `detail` case (Ruling R1, spec 2026-09-02 footer redesign, Task 1).
       return;
     }
 
@@ -2033,8 +2037,8 @@ export function App(props: AppProps): React.JSX.Element {
     }
 
     // Named verbs (quit/help/queue/PRs/review/…) dispatched at layer 3d via
-    // the derived keymap; `,` config at layer 3c. `:` stays a structural
-    // symbol alias for the palette alongside the derived `c` commands key.
+    // the derived keymap; `,` config at layer 3c. `:` is the palette's own
+    // structural key (spec 2026-09-02 D5) — `c` now derives `chat` instead.
     if (input === ":") {
       resetPalette();
       setView("palette");

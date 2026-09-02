@@ -214,12 +214,13 @@ export function useMainActions({
         }
         void openBrowser();
       },
-      // `t` on a repo row (spec 2026-09-01 §8.1): attach the chat to the
-      // selected row's key and hand it the focus — the composer is focused
-      // from mount, so the chat pane must be the focused pane. Its twin is
-      // `transcript` below: the two share the derived `t`, and viewActions'
-      // `bodyVerbs` is what decides which of them the pane offers (R27), so
-      // neither handler needs a pane branch of its own.
+      // `c` on any row (spec 2026-09-02 D5 — chat is now a MAIN_GLOBAL):
+      // attach the chat to the selected row's key and hand it the focus — the
+      // composer is focused from mount, so the chat pane must be the focused
+      // pane. Formerly shared the derived `t` with `transcript` below,
+      // pane-scoped by viewActions' `bodyVerbs` (Ruling R27); R27 is
+      // withdrawn, `chat` claims its own `c` everywhere, and `transcript`
+      // below is the issue list's own `t`.
       chat: () => {
         if (currentRepoKey === null) return void showToast("info", "no repo selected");
         openChat(currentRepoKey);

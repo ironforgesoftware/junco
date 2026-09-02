@@ -1248,7 +1248,7 @@ describe("App", () => {
       // pre-header layout, so row 0 now sits at y=5 (was y=4). Opening the
       // overlay unmounts the row, so the retry self-terminates.
       await fireUntil(r.stdin, click(30, 5), () =>
-        (r.lastFrame() ?? "").includes("browser · esc back"),
+        (r.lastFrame() ?? "").includes("browser · chat · esc back"),
       );
       r.stdin.write(ESC); // back to the prs view, side card visible again
       await until(() => (r.lastFrame() ?? "").includes("pull requests"));
@@ -1310,7 +1310,7 @@ describe("App", () => {
       await fireUntil(r.stdin, click(85, 6), () => pane3BarOn(5) && !pane3BarOn(4));
       // click-again = enter → fullscreen PR overlay (unmounts the row → self-terminates).
       await fireUntil(r.stdin, click(85, 6), () =>
-        (r.lastFrame() ?? "").includes("browser · esc back"),
+        (r.lastFrame() ?? "").includes("browser · chat · esc back"),
       );
       r.stdin.write(ESC); // back to main; pane-3 selection intact
       await until(() => (r.lastFrame() ?? "").includes("PRs"));
@@ -1363,7 +1363,7 @@ describe("App", () => {
       r.stdin.write("p");
       await until(() => (r.lastFrame() ?? "").includes("Some PR"));
       r.stdin.write("\r"); // open the fullscreen PR overlay from the prs view
-      await until(() => (r.lastFrame() ?? "").includes("browser · esc back"));
+      await until(() => (r.lastFrame() ?? "").includes("browser · chat · esc back"));
       // ↗ metadata row of the overlay card; counted with === 1 so the retry stops
       // after the first landed click.
       await fireUntil(r.stdin, click(30, 5), () => prCalls.length === 1);
@@ -3201,9 +3201,12 @@ describe("workspace wide mode", () => {
     r.stdin.write(ESC + "[C"); // → focus issues pane
     await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write("\r");
-    // The detail view's exact footer (scroll · browser · esc back) — pane
-    // 3's hint set never produces this combo (no "esc back" there).
-    await until(() => (r.lastFrame() ?? "").includes("↑/↓ scroll · browser · esc back"));
+    // The detail view's exact footer (scroll · browser · chat · transcript ·
+    // esc back, spec 2026-09-02 D7) — pane 3's hint set never produces this
+    // combo (no "esc back" there).
+    await until(() =>
+      (r.lastFrame() ?? "").includes("↑/↓ scroll · browser · chat · transcript · esc back"),
+    );
     expect(r.lastFrame()).toContain("#7 Fix uploads");
     r.stdin.write(ESC);
     await until(() => (r.lastFrame() ?? "").includes("import"));
@@ -3674,7 +3677,10 @@ describe("t on an issue opens its ticket transcript (#330)", () => {
     await focusIssues(r);
     r.stdin.write("t");
     await until(() => (r.lastFrame() ?? "").includes("no ticket in flight"));
-    expect(r.lastFrame()).not.toContain("transcript");
+    // The issue-list footer now carries its own "transcript" chip (spec
+    // 2026-09-02 §4), so the real proxy for "the view never opened" is the
+    // transcript VIEW's header, not the bare word.
+    expect(r.lastFrame()).not.toContain("transcript ▸");
   });
 
   it("toasts 'not started yet' for a waiting ticket", async () => {

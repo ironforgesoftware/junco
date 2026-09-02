@@ -12,6 +12,8 @@ import type { UnifiedRepo } from "../src/tui/railModel.js";
 import type { PendingAssess } from "../src/assessReview.js";
 import type { PendingComment } from "../src/commentReview.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
+import type { DashIssue } from "../src/tui/state.js";
+import { makeDashIssue } from "./helpers/dashFixtures.js";
 import { until } from "./helpers/until.js";
 
 const BATCH: PendingAssess = {
@@ -131,6 +133,7 @@ function makeSpies() {
     setTranscriptFollow: vi.fn(),
     toEnd: vi.fn(),
     setReviewState: vi.fn(),
+    openIssueTranscript: vi.fn(),
     chatSubmit: vi.fn(async () => {}),
     chatEdit: vi.fn(async () => {}),
     chatRoute: vi.fn(async () => {}),
@@ -176,6 +179,8 @@ function mount(
     toEnd: spies.toEnd,
     reviewState: EMPTY_REVIEW,
     setReviewState: spies.setReviewState,
+    detail: null,
+    openIssueTranscript: spies.openIssueTranscript,
     chatDraftActions: {
       submit: spies.chatSubmit,
       edit: spies.chatEdit,
@@ -193,9 +198,8 @@ function mount(
 const ids = (a: Record<string, () => void>): string[] => Object.keys(a).sort();
 
 describe("useViewActions — per-view action id sets (the refactor's invariant)", () => {
-  it("detail / prDetail / prs expose browser+close, each wired to its own opener", () => {
+  it("prDetail / prs expose browser+close, each wired to its own opener", () => {
     for (const [view, spy] of [
-      ["detail", "openDetailIssueInBrowser"],
       ["prDetail", "openPrDetailInBrowser"],
       ["prs", "openSelectedPr"],
     ] as const) {
@@ -207,6 +211,33 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
       expect(spies.close).toHaveBeenCalledTimes(1);
       unmount();
     }
+  });
+
+  // Ruling R1 (2026-09-02 footer redesign, Task 1): the brief adds a
+  // `transcript` chip/keymap entry to the detail overlay, so App's layer-3d
+  // dispatch (which returns on ANY keymap hit) would otherwise swallow `t`
+  // before the raw cascade's own check ever ran — this handler is the one
+  // true path, replacing that raw `if (input === "t")` line in App.tsx.
+  it("detail exposes browser+close+transcript; transcript opens the frozen issue's ticket transcript", () => {
+    const DETAIL_ISSUE: DashIssue = makeDashIssue({ number: 46 });
+    const { api, spies, unmount } = mount({
+      view: "detail",
+      detail: {
+        issue: DETAIL_ISSUE,
+        nwo: "acme/widgets",
+        body: null,
+        planComment: null,
+        loading: false,
+      },
+    });
+    expect(ids(api)).toEqual(["browser", "close", "transcript"]);
+    api["browser"]?.();
+    expect(spies.openDetailIssueInBrowser).toHaveBeenCalledTimes(1);
+    api["close"]?.();
+    expect(spies.close).toHaveBeenCalledTimes(1);
+    api["transcript"]?.();
+    expect(spies.openIssueTranscript).toHaveBeenCalledWith("acme/widgets", DETAIL_ISSUE, "detail");
+    unmount();
   });
 
   it("repoDetail's browser opens the frozen target, and toasts when it has no nwo", () => {

@@ -4,11 +4,12 @@ import type { DashboardClient } from "../ghClient.js";
 import type { UnifiedRepo } from "../railModel.js";
 import type { ToastKind } from "../theme.js";
 import type { ReviewState } from "../components/ReviewView.js";
-import type { View } from "../App.js";
+import type { View, DetailState } from "../App.js";
 import type { CmdState } from "./useCmdOutput.js";
 import type { TranscriptState } from "./useTranscript.js";
 import type { ChatDraftActions } from "./useChatDrafts.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
+import type { DashIssue } from "../state.js";
 
 export interface ViewActionsInput {
   /** The current view — this hook owns every arm EXCEPT `main`. */
@@ -37,6 +38,19 @@ export interface ViewActionsInput {
   /** The `chat` view's own arm, built by useChatInput (Ruling R15) — this hook
    * only picks it, the way it picks every other view's. */
   chatHandlers: Record<string, () => void>;
+  /** The open issue-detail overlay's frozen snapshot (App.tsx `detail` state)
+   * — read-only here; the `detail` case's `transcript` handler reads its
+   * nwo/issue, same freshness as the raw `if (input === "t")` key check it
+   * replaces (Ruling R1, spec 2026-09-02 footer redesign, Task 1). */
+  detail: DetailState | null;
+  /** Opens the ticket transcript for an issue (App.tsx `openIssueTranscript`,
+   * shared with useMainActions' own `transcript` handler for #330). Ruling R1
+   * gives the detail overlay's own `t` this same handler. */
+  openIssueTranscript: (
+    nwo: string | null | undefined,
+    issue: DashIssue | null | undefined,
+    from?: "main" | "detail",
+  ) => void;
 }
 
 /** The chat draft `submit`/`edit`/`route`/`discard` act on: the open preview's
@@ -84,6 +98,8 @@ export function useViewActions({
   setReviewState,
   chatDraftActions,
   chatHandlers,
+  detail,
+  openIssueTranscript,
 }: ViewActionsInput): Record<string, () => void> {
   const reviewActions = useMemo((): Record<string, () => void> => {
     // Chat-draft verb dispatch: a no-op unless a chat draft is actually
@@ -229,7 +245,18 @@ export function useViewActions({
   return useMemo((): Record<string, () => void> => {
     switch (view) {
       case "detail":
-        return { browser: openDetailIssueInBrowser, close };
+        return {
+          browser: openDetailIssueInBrowser,
+          close,
+          // Ruling R1: `transcript` now derives on `t` here (viewActions.ts's
+          // VIEW_OPTIONS.detail), so App's layer-3d dispatch reaches this
+          // handler before the view cascade's own key checks ever run — this
+          // replaces the raw `if (input === "t")` line that used to live
+          // there. Same nwo/issue freshness as that line: read straight off
+          // the frozen `detail` snapshot, not a stale closure.
+          transcript: () =>
+            openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null, "detail"),
+        };
       case "prDetail":
         return { browser: openPrDetailInBrowser, close };
       case "repoDetail":
@@ -294,5 +321,7 @@ export function useViewActions({
     toEnd,
     reviewActions,
     chatHandlers,
+    detail,
+    openIssueTranscript,
   ]);
 }

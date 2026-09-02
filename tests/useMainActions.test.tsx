@@ -191,9 +191,9 @@ describe("useMainActions — the main view's action table", () => {
     sys.unmount();
   });
 
-  // `t`'s other reading (#330): the same derived letter, a separate verb —
-  // viewActions' `bodyVerbs` decides which one the pane offers (R27), so this
-  // handler carries no pane branch of its own.
+  // The issue list's own `t` (#330) — chat moved to the MAIN_GLOBAL `c`
+  // (spec 2026-09-02 D5, Ruling R27 withdrawn), so this handler no longer
+  // shares a letter with `chat` and carries no pane branch of its own.
   it("transcript opens the selected issue's ticket transcript", () => {
     const { api, spies, unmount } = mount({ pane: 2 });
     api["transcript"]?.();

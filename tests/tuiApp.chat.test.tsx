@@ -1,9 +1,9 @@
 /**
- * App-level chat wiring (spec 2026-09-01 §8.1/§8.3/§8.6): the `t` door, the
- * esc state machine, the blurred verbs, the slash router, and the rail's
- * re-subscribe. Every domain piece has its own suite (useChat, useChatDrafts,
- * ChatView, Composer) — these five exercise the COMPOSITION through real
- * rendered frames.
+ * App-level chat wiring (spec 2026-09-01 §8.1/§8.3/§8.6, door key updated by
+ * 2026-09-02 D5): the `c` door, the esc state machine, the blurred verbs, the
+ * slash router, and the rail's re-subscribe. Every domain piece has its own
+ * suite (useChat, useChatDrafts, ChatView, Composer) — these five exercise
+ * the COMPOSITION through real rendered frames.
  *
  * Keystroke discipline (CLAUDE.md + tests/helpers/until.ts): every write is
  * gated on an `until` that proves the previous one committed. The opening
@@ -102,11 +102,11 @@ function chatClient(): {
 const LOADED = "First issue";
 
 describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
-  it("t on a repo row opens the chat view with the composer focused; typed prose never fires mnemonics; enter sends", async () => {
+  it("c on a repo row opens the chat view with the composer focused; typed prose never fires mnemonics; enter sends", async () => {
     const c = chatClient();
     const r = renderApp({ client: c.client });
     await until(() => r.lastFrame()!.includes(LOADED));
-    r.stdin.write("t");
+    r.stdin.write("c");
     await until(() => r.lastFrame()!.includes("chat · acme/api"));
     r.stdin.write("quit"); // q would quit the dashboard if the mnemonic path saw it
     await until(() => r.lastFrame()!.includes("quit"));
@@ -119,7 +119,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     const c = chatClient();
     const r = renderApp({ client: c.client });
     await until(() => r.lastFrame()!.includes(LOADED));
-    r.stdin.write("t");
+    r.stdin.write("c");
     await until(() => r.lastFrame()!.includes("chat · acme/api"));
     c.push(10, metaLine({ ticketId: "acme__api" }));
     c.push(20, chatPrompt());
@@ -148,7 +148,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     });
     await until(() => r.lastFrame()!.includes(LOADED));
     await until(() => r.lastFrame()!.includes("● 1▣"));
-    r.stdin.write("t");
+    r.stdin.write("c");
     await until(() => r.lastFrame()!.includes("chat · acme/api"));
     c.push(10, metaLine({ ticketId: "acme__api" }));
     c.push(20, chatDraft());
@@ -166,7 +166,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     const c = chatClient();
     const r = renderApp({ client: c.client });
     await until(() => r.lastFrame()!.includes(LOADED));
-    r.stdin.write("t");
+    r.stdin.write("c");
     await until(() => r.lastFrame()!.includes("chat · acme/api"));
     r.stdin.write("/pr 42");
     await until(() => r.lastFrame()!.includes("/pr 42"));
@@ -197,7 +197,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     };
     const r = renderApp({ client });
     await until(() => r.lastFrame()!.includes(LOADED));
-    r.stdin.write("t");
+    r.stdin.write("c");
     await until(() => r.lastFrame()!.includes("chat · acme/api"));
     r.stdin.write("\x1b"); // blur the composer (idle)
     await until(() => r.lastFrame()!.includes("i compose"));
