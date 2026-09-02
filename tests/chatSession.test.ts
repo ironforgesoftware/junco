@@ -105,6 +105,39 @@ function laggingChatSession(): ChatSessionLike & { prompts: string[]; steers: st
   };
 }
 
+/**
+ * A ChatSession whose SDK-session build is parked on a gate, so
+ * `ensureSession()` is provably still pending when reset()/drain()/abort()
+ * land — the window in which `inFlight` is not yet set.
+ */
+function makeDeferredSession(root: string) {
+  const inner = fakeChatSession([chatScriptText("hi")]);
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let built: FakeChatSession | null = null;
+  const session = new ChatSession(
+    {
+      cfg,
+      key: "acme/api",
+      kind: "watched",
+      cwd: root,
+      nwo: "acme/api",
+      dir: join(root, "acme__api"),
+    },
+    {
+      makeSessionManager: fakeSm,
+      sessionFactoryFor: () => async () => {
+        await gate;
+        built = await inner();
+        return built;
+      },
+    },
+  );
+  return { session, release, built: () => built };
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 5));
+
 const records = (path: string) =>
   readFileSync(path, "utf8")
     .split("\n")
@@ -442,5 +475,49 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
       .filter((r) => r.type === "junco_chat_turn_aborted")
       .map((r) => r.reason);
     expect(reasons).toEqual(["operator"]);
+  });
+
+  it("reset() during a pending session build disposes it and writes nothing after the archive", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session, release, built } = makeDeferredSession(root);
+    const p = session.prompt("hello", { source: "operator", timeoutMs: 5_000 });
+    await tick(); // the build is parked; `inFlight` is still null
+    const resetting = session.reset("operator_new");
+    await tick();
+    release();
+    await resetting;
+    expect(await p).toMatchObject({ status: "aborted" });
+    expect(built()!.disposed).toBe(true); // never published on this.sdk, never leaked
+    expect(session.degraded).toBe(false); // no write into the archived dir
+    expect(existsSync(session.transcriptPath)).toBe(false);
+    expect(existsSync(join(root, "_archive"))).toBe(true);
+  });
+
+  it("drain() during a pending session build disposes it and stamps daemon_stopped", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session, release, built } = makeDeferredSession(root);
+    const p = session.prompt("hello", { source: "operator", timeoutMs: 5_000 });
+    await tick();
+    const draining = session.drain();
+    await tick();
+    release();
+    await draining;
+    expect(await p).toMatchObject({ status: "aborted" });
+    expect(built()!.disposed).toBe(true);
+    const types = records(session.transcriptPath);
+    expect(types[types.length - 1]).toBe("junco_chat_turn_aborted");
+    const last = JSON.parse(readFileSync(session.transcriptPath, "utf8").trim().split("\n").pop()!);
+    expect(last.reason).toBe("daemon_stopped");
+  });
+
+  it("abort() during a pending session build returns true and the SDK is never prompted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session, release, built } = makeDeferredSession(root);
+    const p = session.prompt("hello", { source: "operator", timeoutMs: 5_000 });
+    await tick();
+    expect(await session.abort()).toBe(true); // a STARTING turn counts
+    release();
+    expect(await p).toMatchObject({ status: "aborted", abortReason: "operator" });
+    expect(built()!.prompts).toEqual([]); // runChatTurn's pre-aborted short-circuit
   });
 });

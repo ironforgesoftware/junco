@@ -95,6 +95,22 @@ export function chatCfgFor(cfg: Config): Config {
  * usage the steered text contributed to. */
 const ZERO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
 
+/**
+ * Thrown by a session build that finished AFTER reset()/drain() bumped the
+ * generation. The built session has already been disposed by the builder and
+ * must never be published on `this.sdk`: it would outlive `disposeSdk()` (a
+ * live, never-disposed SDK session) and, on the reset path, stay bound to a
+ * directory that has since been archived. Distinct type because the corrupt
+ * handler in ensureSession() must let it through instead of reading it as
+ * "the session file is unreadable" and archiving a healthy one.
+ */
+class StaleChatSessionError extends Error {
+  constructor() {
+    super("chat session reset while starting");
+    this.name = "StaleChatSessionError";
+  }
+}
+
 const realFs: ChatFs = {
   existsSync,
   readFileSync: (p, enc) => readFileSync(p, enc),
@@ -131,6 +147,12 @@ export class ChatSession {
   private turnAbort: AbortController | null = null;
   private inFlight: Promise<ChatTurnResult> | null = null;
   private drainReason: "daemon_stopped" | null = null;
+  /** Bumped by reset()/drain(). A session build that started under an older
+   *  generation is stale: its dir may be archived and its owner gone. */
+  private generation = 0;
+  /** Turns past prompt()'s entry but not yet on `inFlight` — the window in
+   *  which the SDK session is still being built. abort() must see these. */
+  private starting = 0;
 
   constructor(
     opts: {
@@ -340,15 +362,31 @@ export class ChatSession {
     if (this.sdk) return this.sdk;
     if (this.sdkPending) return this.sdkPending;
     this.sdkPending = (async () => {
+      const gen = this.generation;
       await this.ensureMeta();
       const meta = this.readMeta()!;
       const chatCfg = chatCfgFor(this.cfg);
-      const build = async (manager: unknown): Promise<ChatSessionLike> =>
-        this.factoryFor(chatCfg, this.cwd, {
+      const build = async (manager: unknown): Promise<ChatSessionLike> => {
+        const built = await this.factoryFor(chatCfg, this.cwd, {
           tools: chatCfg.tools,
           thinkingLevel: this.cfg.chat.thinkingLevel ?? this.cfg.model.thinkingLevel,
           sessionManager: manager,
         })();
+        // reset()/drain() landed while this build was in flight. Disposing
+        // here — rather than publishing on `this.sdk` — is the whole point:
+        // the caller's disposeSdk() has already run, so a session assigned
+        // now would leak, and on the reset path it is bound to an archived
+        // dir whose transcript any later write would resurrect.
+        if (this.generation !== gen) {
+          try {
+            built.dispose();
+          } catch {
+            /* best effort */
+          }
+          throw new StaleChatSessionError();
+        }
+        return built;
+      };
       if (!this.fs.existsSync(meta.sdkSessionFile)) {
         if (this.hasCompletedTurn()) {
           log.warn("chat SDK session file missing; starting fresh", { slug: this.slug });
@@ -367,6 +405,9 @@ export class ChatSession {
         this.sdk = await build(manager);
         return this.sdk;
       } catch (e) {
+        // A stale build is not a corrupt file: reading it as one would archive
+        // a perfectly healthy session file and record a false reset.
+        if (e instanceof StaleChatSessionError) throw e;
         log.warn("chat SDK session file corrupt; starting fresh", {
           slug: this.slug,
           error: e instanceof Error ? e.message : String(e),
@@ -401,7 +442,52 @@ export class ChatSession {
       classify?: (message: string) => ProviderFailureClass | null;
     },
   ): Promise<ChatTurnResult> {
-    const sdk = await this.ensureSession();
+    // All of this happens BEFORE the first await. `starting` is what tells
+    // abort()/reset()/drain() that a turn exists during the window in which
+    // the SDK session is still being built — `inFlight` is not set until the
+    // build returns — and `gen` is how we learn, on the far side of that
+    // await, that a reset or drain overtook us. The controller is minted here
+    // for the same reason (an abort() during startup must be able to signal
+    // this turn), but is published on `this.turnAbort` only when this call
+    // owns the turn: a second, concurrent prompt is destined for the steer
+    // path and would otherwise orphan the running turn's abort signal.
+    const gen = this.generation;
+    const startedAt = this.now();
+    const ctl = new AbortController();
+    const owns = this.inFlight === null && this.starting === 0;
+    if (owns) this.turnAbort = ctl;
+    this.starting++;
+    try {
+      return await this.runPrompt(text, opts, gen, startedAt, ctl);
+    } finally {
+      this.starting--;
+    }
+  }
+
+  private async runPrompt(
+    text: string,
+    opts: {
+      source: "operator" | "auto_lint";
+      timeoutMs: number;
+      abortGraceMs?: number;
+      classify?: (message: string) => ProviderFailureClass | null;
+    },
+    gen: number,
+    startedAt: number,
+    ctl: AbortController,
+  ): Promise<ChatTurnResult> {
+    let sdk: ChatSessionLike;
+    try {
+      sdk = await this.ensureSession();
+    } catch (e) {
+      if (e instanceof StaleChatSessionError || gen !== this.generation)
+        return this.abortedWhileStarting(text, opts.source, startedAt);
+      throw e;
+    }
+    // The build succeeded but a reset/drain landed while it ran (or just
+    // after): `this.sdk` has already been disposed and nulled, so this
+    // session must not be prompted.
+    if (gen !== this.generation) return this.abortedWhileStarting(text, opts.source, startedAt);
     const chatCfg = chatCfgFor(this.cfg);
     // A turn is in flight when THIS object owns one (`inFlight`) OR the SDK is
     // mid-run. Testing `sdk.isStreaming` alone loses the same-tick race: two
@@ -431,12 +517,16 @@ export class ChatSession {
       tools: chatCfg.tools,
       timeoutMs: opts.timeoutMs,
     });
-    this.turnAbort = new AbortController();
+    // Take ownership now even if `owns` was false at entry (the turn we would
+    // have steered finished during the build): abort() must reach THIS turn.
+    this.turnAbort = ctl;
     const run = runChatTurn(sdk, {
       text,
       timeoutMs: opts.timeoutMs,
       abortGraceMs: opts.abortGraceMs,
-      abortSignal: this.turnAbort.signal,
+      // Already aborted when an operator abort() landed during startup;
+      // runChatTurn's pre-aborted short-circuit then never prompts the SDK.
+      abortSignal: ctl.signal,
       emit: (e) => this.emitSdk(e),
       now: this.now,
     });
@@ -467,25 +557,66 @@ export class ChatSession {
     }
   }
 
-  /** Operator abort; true when a turn was in flight. */
+  /**
+   * A reset() or drain() landed while this turn was still building its SDK
+   * session. On the DRAIN path the dir still exists, so the turn is recorded
+   * the way any daemon-stopped turn is. On the RESET path the dir has been
+   * archived and nothing may be written: a write would either hit ENOENT (and
+   * latch `degraded` right after reset cleared it) or resurrect the archived
+   * transcript's path with a stray line.
+   */
+  private abortedWhileStarting(
+    text: string,
+    source: "operator" | "auto_lint",
+    startedAt: number,
+  ): ChatTurnResult {
+    if (this.drainReason !== null) {
+      this.writeRecord({ type: "junco_chat_prompt", text, mode: "prompt", source });
+      this.writeRecord({ type: "junco_chat_turn_aborted", reason: "daemon_stopped" });
+    }
+    return {
+      mode: "prompt",
+      status: "aborted",
+      abortReason: "operator",
+      errorMessage: null,
+      usage: ZERO_USAGE,
+      durationMs: this.now() - startedAt,
+      finalText: "",
+      allText: "",
+    };
+  }
+
+  /** Operator abort; true when a turn was starting or in flight. */
   async abort(): Promise<boolean> {
-    if (!this.inFlight) return false;
+    if (!this.inFlight && this.starting === 0) return false;
     this.turnAbort?.abort();
-    await this.inFlight.catch(() => undefined);
+    // Nothing to await while a turn is only starting: the pending build is
+    // reset()/drain()'s to await (this.sdkPending), and an operator abort
+    // lets it finish and be short-circuited by runChatTurn instead.
+    if (this.inFlight) await this.inFlight.catch(() => undefined);
     return true;
   }
 
   /** Graceful stop (spec §2.4): abort, stamp daemon_stopped, end subscribers, dispose. */
   async drain(): Promise<void> {
     this.drainReason = "daemon_stopped";
+    this.generation++;
     await this.abort();
+    // Let an in-flight session build finish and dispose itself (it sees the
+    // bumped generation); without this it would materialize after shutdown
+    // and leak a live SDK session.
+    await this.sdkPending?.catch(() => undefined);
     this.endSubscribers("daemon_stopped");
     this.disposeSdk();
   }
 
   /** /new (spec §2.4): abort, dispose, archive the dir; drafts untouched. */
   async reset(reason: "operator_new"): Promise<void> {
+    this.generation++;
     await this.abort();
+    // Same as drain(): a build still running would otherwise be published
+    // after disposeSdk() and stay bound to the dir archived just below.
+    await this.sdkPending?.catch(() => undefined);
     this.disposeSdk();
     this.endSubscribers("session_reset");
     if (this.fs.existsSync(this.dir)) {
