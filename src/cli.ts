@@ -300,6 +300,7 @@ function parseCli(argv: string[]) {
       thinking: { type: "boolean", default: false },
       tools: { type: "boolean", default: false },
       width: { type: "string" },
+      chat: { type: "string" },
       harness: { type: "string", multiple: true },
       plan: { type: "boolean", default: false },
       repo: { type: "string" },
