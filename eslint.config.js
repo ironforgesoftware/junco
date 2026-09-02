@@ -1,5 +1,6 @@
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
+import vitest from "@vitest/eslint-plugin";
 
 export default tseslint.config(
   { ignores: ["dist/**", "node_modules/**", "docs/**", "worktrees/**"] },
@@ -16,6 +17,16 @@ export default tseslint.config(
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_", ignoreRestSiblings: true },
       ],
+    },
+  },
+  {
+    // `vitest run` under CI=true already hard-fails on a stray `.only`
+    // (vitest's `allowOnly: !isCI` default), so this catches the local-only
+    // gap: `npm test` on a dev machine would silently narrow instead.
+    files: ["tests/**/*.ts", "tests/**/*.tsx"],
+    plugins: { vitest },
+    rules: {
+      "vitest/no-focused-tests": "error",
     },
   },
   {
