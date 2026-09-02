@@ -199,6 +199,12 @@ export function useChat({
   const connect = useCallback(
     (key: string, since: number | null): void => {
       const gen = ++genRef.current;
+      // Mirrors closeChat's discipline: a resubscribe (the timer below
+      // calling connectRef.current again) would otherwise overwrite
+      // unsubRef.current without ever invoking the outgoing subscription's
+      // cleanup — the only thing that runs the transport's ctrl.abort()
+      // (chatClient.ts's `end` path returns without aborting).
+      unsubRef.current?.();
       unsubRef.current = client.chat.subscribe(key, since, {
         record: (offset, line) => {
           if (genRef.current !== gen || !aliveRef.current) return;

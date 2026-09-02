@@ -11,6 +11,7 @@ import { until, wait } from "./helpers/until.js";
 import {
   chatDraft,
   chatPrompt,
+  chatTurnAborted,
   chatTurnEnd,
   chatTurnStart,
   chatTurnRejected,
@@ -74,6 +75,36 @@ function makeResubClient(drafts: unknown[] = []) {
     },
   };
   return { client, subscribeCalls, handlersLog };
+}
+
+/** Fix round 1 (IMPORTANT): a resubscribe must run the outgoing
+ * subscription's cleanup — the only thing that calls the transport's
+ * ctrl.abort() (chatClient.ts's `end` path returns without aborting) —
+ * before subscribing again. Tracks one ordered event log across
+ * subscribe/unsubscribe calls so the ordering itself is assertable. */
+function makeOrderedClient() {
+  const events: string[] = [];
+  const handlersLog: ChatSubscribeHandlers[] = [];
+  let n = 0;
+  const client: DashboardClient = {
+    ...stubClient,
+    listChatDrafts: async () => ({ ok: true, value: [] as never }),
+    chat: {
+      ...stubClient.chat,
+      subscribe: (_key, _since, on) => {
+        n++;
+        const id = n;
+        events.push(`subscribe#${id}`);
+        handlersLog.push(on);
+        on.status("live");
+        return () => events.push(`unsub#${id}`);
+      },
+      prompt: async () => ({ ok: true, value: { mode: "prompt" as const } }),
+      abort: async () => ({ ok: true, value: { aborted: true } }),
+      fresh: async () => ({ ok: true, value: null }),
+    },
+  };
+  return { client, events, handlersLog };
 }
 
 function Probe({
@@ -217,11 +248,26 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
 
   // Ruling R21: the hook owns re-subscription after a terminal `end`.
   it("session_reset ends → state resets and the hook resubscribes from offset 0", async () => {
-    const { client, subscribeCalls, handlersLog } = makeResubClient();
+    const draft = {
+      id: "acme__api-20260901-130000-1",
+      key: "acme/api",
+      slug: "acme__api",
+      kind: "ticket",
+      files: [],
+      cwd: "/r",
+      nwo: "acme/api",
+      createdAt: "t",
+      lintFailed: false,
+      blocked: null,
+      routeOverride: "auto",
+      commandArgs: null,
+    };
+    const { client, subscribeCalls, handlersLog } = makeResubClient([draft]);
     let api!: ReturnType<typeof useChat>;
     render(<Probe client={client} onReady={(a) => (api = a)} resubscribeMs={5} />);
     api.openChat("acme/api");
     await until(() => api.chat?.connection === "live");
+    await until(() => api.chat!.drafts.length === 1);
     handlersLog[0]!.record(10, metaLine());
     handlersLog[0]!.record(20, chatPrompt());
     handlersLog[0]!.record(30, chatTurnStart());
@@ -235,8 +281,20 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     expect(api.chat!.lastOffset).toBeNull();
     expect(api.chat!.endReason).toBe("session_reset");
     expect(api.chat!.composer).toBe("draft text");
+    expect(api.chat!.drafts.length).toBe(1);
     handlersLog[1]!.record(40, chatTurnStart());
     await until(() => api.chat!.endReason === null);
+  });
+
+  it("a resubscribe unsubscribes the outgoing subscription before subscribing again", async () => {
+    const { client, events, handlersLog } = makeOrderedClient();
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={client} onReady={(a) => (api = a)} resubscribeMs={5} />);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    handlersLog[0]!.end("daemon_stopped");
+    await until(() => events.length === 3);
+    expect(events).toEqual(["subscribe#1", "unsub#1", "subscribe#2"]);
   });
 
   it("daemon_stopped ends → resubscribes from the last offset", async () => {
@@ -280,6 +338,38 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     handlersLog[0]!.status("live");
     handlersLog[0]!.record(10, metaLine());
     expect(api.chat).toBeNull();
+  });
+
+  // Fix round 1 (MINOR 1): junco_chat_turn_aborted (liveText cleared,
+  // ||-combined with turn_end) and junco_chat_transcript_degraded (degraded:
+  // true) were untested branches.
+  it("turn_aborted clears live text/streaming; transcript_degraded sets degraded", async () => {
+    const c = makeClient();
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    c.push(10, chatTurnStart());
+    c.push(
+      null,
+      JSON.stringify({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "hi" },
+      }),
+    );
+    await until(() => api.chat!.liveText === "hi");
+    c.push(20, chatTurnAborted());
+    await until(() => api.chat!.streaming === false);
+    expect(api.chat!.liveText).toBe("");
+    // No fixture builder for this record — built inline per the review note.
+    c.push(
+      30,
+      JSON.stringify({
+        type: "junco_chat_transcript_degraded",
+        ts: "2026-08-16T00:00:00.000Z",
+      }),
+    );
+    await until(() => api.chat!.degraded === true);
   });
 
   // Coverage: walk every remaining callback branch through one transcript
