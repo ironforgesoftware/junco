@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Repo-level policy files (#383). None of them is code, so nothing else in
 // the suite would notice if one went missing or lost the line that matters —
@@ -74,5 +76,19 @@ describe(".editorconfig", () => {
 
   it("does not set max_line_length, which prettier would honor over printWidth", () => {
     expect(ec).not.toMatch(/^\s*max_line_length/m);
+  });
+});
+
+describe("eslint.config.js", () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+
+  // #354: `any` in src/ is an enforced error, not a convention — the remaining
+  // ones are SDK-boundary casts carrying an eslint-disable with a reason.
+  it("enforces no-explicit-any on src/", async () => {
+    const { ESLint } = await import("eslint");
+    const cfg = await new ESLint({ cwd: root }).calculateConfigForFile(
+      join(root, "src/agent/guardManager.ts"),
+    );
+    expect(cfg.rules["@typescript-eslint/no-explicit-any"][0]).toBe(2);
   });
 });
