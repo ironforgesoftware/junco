@@ -56,8 +56,10 @@ vitest.e2e.config.ts  include tests/e2e/**/*.e2e.ts; fileParallelism false; test
 - `npm run test:e2e:live` →
   `JUNCO_E2E_LIVE=1 vitest run -c vitest.e2e.config.ts tests/e2e/live.e2e.ts`.
   The script sets the gate; the operator supplies the endpoint vars (§7.3).
-  Scenario test names contain their §6 slug verbatim (`pr-happy-path`, …) so
-  `-t <slug>` selects one scenario (§7.2 relies on this).
+  Scenario test names contain their §6 slug verbatim (`pr-happy-path`, …), but
+  selection is by FILE with `-t <slug>` as a secondary filter, never `-t`
+  alone: `vitest run -t <slug>` with zero matches exits 0, so `-t` by itself
+  cannot guard against a renamed test (§7.2 relies on this).
 - The `.e2e.ts` suffix never matches the unit glob (`tests/**/*.test.ts`).
   `vitest.config.ts` additionally gains `exclude: ["tests/e2e/**"]` so the
   intent is visible in the unit config, not just implied by naming.
@@ -174,7 +176,8 @@ primary assertion.
 
 `startDaemon(sb)` / `stopDaemon(handle)` (daemon-lifecycle only) spawn
 `start`, poll `http://127.0.0.1:<healthPort>/health` with the existing
-`until` helper, and stop via `junco stop`, asserting the pidfile is gone.
+`until` helper, and stop it with `SIGTERM` — there is no `junco stop`
+subcommand — asserting the pidfile is gone.
 
 ### 4.6 Readers and cleanup
 
@@ -257,16 +260,20 @@ Each is the smallest ticket that proves one end-to-end property.
    `CLAUDE.md`, proven at the wire.
 3. **`transient-requeue`** (`requeue.e2e.ts`). Script: `error 503` first.
    Assert: ticket back in `inbox/` with `retry_count: 1` and a `not_before`
-   in the future; no `junco/*` branch on the remote; exit 0. This exercises
-   `src/providerFailure.ts` classification through the SDK's real retry
-   path. If a 503 does not classify as transient at that boundary, that is a
-   product finding to surface, not a test to bend.
+   in the future; no `junco/*` branch on the remote; exit 0. The scenario sets
+   `model.retry.maxRetries: 0`, so this exercises `src/providerFailure.ts`
+   classification at the SDK's error boundary with the SDK's own retries
+   disabled, not through its retry/backoff path — the sticky 503 (`times:
+   Infinity`) already makes the stub retry-proof regardless, and retries are
+   disabled purely to keep the run fast and deterministic. If a 503 does not
+   classify as transient at that boundary, that is a product finding to
+   surface, not a test to bend.
 4. **`daemon-lifecycle`** (`daemon.e2e.ts`; last plan task). `start` →
-   `/health` responds → drop the happy-path ticket → `until(done/)` → `stop` →
-   pidfile gone, exit clean. The only way to cover the singleton lock, signal
-   handling, and health server across the process boundary. Flakiest by
-   nature; polls via `until` with generous bounds; never gates the earlier
-   tasks.
+   `/health` responds → drop the happy-path ticket → `until(done/)` →
+   `SIGTERM` → pidfile gone, exit clean. The only way to cover the singleton
+   lock, signal handling, and health server across the process boundary.
+   Flakiest by nature; polls via `until` with generous bounds; never gates the
+   earlier tasks.
 
 ## 7. CI, packaging, live layer
 
@@ -290,13 +297,16 @@ unchanged — it already depends on `env_gate`.
 `scripts/package-smoke.sh` gains, after its existing checks:
 
 ```bash
-JUNCO_E2E_BIN="$JUNCO" npx vitest run -c vitest.e2e.config.ts -t pr-happy-path
+JUNCO_E2E_BIN="$JUNCO" npx vitest run -c vitest.e2e.config.ts tests/e2e/prFlow.e2e.ts -t pr-happy-path
 ```
 
-run from the repo root (the script already `cd`s there). The
-tarball-installed binary runs the identical happy-path scenario — no second
-harness — so a `files`-allowlist or bin-wiring regression fails at full
-ticket depth.
+run from the repo root (the script already `cd`s there). Selection is by FILE,
+with `-t` as a secondary filter: `-t <slug>` alone exits 0 on zero matches, so
+a renamed test would silently turn this check into a no-op, where a
+non-existent file argument exits 1 ("No test files found") and actually fails
+the smoke test. The tarball-installed binary runs the identical happy-path
+scenario — no second harness — so a `files`-allowlist or bin-wiring regression
+fails at full ticket depth.
 
 ### 7.3 Live layer
 

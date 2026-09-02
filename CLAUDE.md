@@ -11,7 +11,7 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 | Action    | Command                                                                                              |
 | --------- | ---------------------------------------------------------------------------------------------------- |
 | Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                        |
-| All tests | `npm test` (vitest, ~3,100 tests, ~25s)                                                              |
+| All tests | `npm test` (vitest, ~4,250 tests, ~50s)                                                              |
 | One file  | `npx vitest run tests/<name>.test.ts`                                                                |
 | E2E       | `npm run test:e2e` (needs `dist/`; spawns the built CLI in a sandboxed HOME against a scripted model stub; not part of `npm test`) |
 | Coverage  | `npx vitest run --coverage` (floor pinned by `vitest.config.ts` thresholds; CI job `coverage`)       |
