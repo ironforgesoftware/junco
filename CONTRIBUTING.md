@@ -10,6 +10,7 @@
 npm install          # install dependencies
 npm run build        # tsc -p tsconfig.json → dist/
 npm test             # run the full vitest suite (~4,300 tests, ~40 s)
+npm run test:e2e     # end-to-end: the built CLI in a sandboxed HOME against a scripted model stub (needs dist/)
 npm run test:watch   # re-run on file changes
 ```
 
@@ -20,7 +21,7 @@ The CLI entry point after building is `dist/cli.js`. You can run it directly wit
 Before opening a PR, run the full gate. It is exactly what CI (`.github/workflows/quality-gate.yml`) runs on every PR, and the aggregate `quality-gate` check is required to merge:
 
 ```bash
-npm run lint && npm run format:check && npm run typecheck && npm run build && npm test
+npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run test:e2e
 ```
 
 `npm run lint` and `npm run typecheck` cover `tests/` as well as `src/` (via `tsconfig.eslint.json`) — vitest does not type-check, so a type error in a test only surfaces here.
