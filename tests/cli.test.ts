@@ -1339,6 +1339,26 @@ describe("run(['bogus']) — unknown subcommand", () => {
     await run(["bogus"], deps);
     expect(deps.runOnceFn).not.toHaveBeenCalled();
   });
+
+  // The subcommand dispatch is a Record lookup, so an Object.prototype key
+  // (`toString`, `constructor`, `valueOf`) resolves to a real function on the
+  // table's prototype chain unless the lookup is own-property gated. Without
+  // that gate `junco toString` calls Object.prototype.toString and "succeeds"
+  // with a non-number exit code. Every inherited key must land on the same
+  // unknown-subcommand path as `bogus`.
+  it.each(["toString", "constructor", "valueOf", "hasOwnProperty", "__proto__"])(
+    "treats the inherited key %s as an unknown subcommand (exit 2)",
+    async (key) => {
+      const deps = makeDeps();
+      const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        expect(await run([key], deps)).toBe(2);
+      } finally {
+        errSpy.mockRestore();
+      }
+      expect(deps.mainLoopFn).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
