@@ -3403,8 +3403,10 @@ it("wires chat routes + chatStatus into the health server (spec 2026-09-01 §2.4
   const stop = new StopFlag();
   const handle = makeFakeHealthHandle();
   const startHealthServerFn = vi.fn(async (_opts: HealthServerOpts) => handle);
+  const makeChatRoutesFn = vi.fn(makeChatRoutes);
   const { deps } = makeDeps({
     startHealthServerFn,
+    makeChatRoutesFn,
     runOnceFn: vi.fn(async () => false),
     sleep: vi.fn(async () => {
       stop.requestStop();
@@ -3414,6 +3416,8 @@ it("wires chat routes + chatStatus into the health server (spec 2026-09-01 §2.4
   const arg = startHealthServerFn.mock.calls[0]![0]!;
   expect(typeof arg.chat?.handle).toBe("function");
   expect(arg.chatStatus!()).toMatchObject({ enabled: true, sessions: [], turns: 0 });
+  // R12: the routes are built with the configured health host on the Host allowlist.
+  expect(makeChatRoutesFn).toHaveBeenCalledWith(expect.anything(), { allowedHost: cfg.healthHost });
 });
 
 it("drains chat BEFORE closing the health server on shutdown", async () => {
@@ -3448,7 +3452,7 @@ it("drains chat BEFORE closing the health server on shutdown", async () => {
 });
 ```
 
-(add `import type { ChatManager } from "../src/chat/chatManager.js";` at the top).
+(add `import type { ChatManager } from "../src/chat/chatManager.js";` and `import { makeChatRoutes } from "../src/chat/chatRoutes.js";` at the top).
 
 In `tests/tuiGhClient.test.ts`, the `health()` case (~line 515–560) asserts the up/down objects with `toEqual` — add `chats: null` to both expected literals (the `fetchOk` body has no `chats`, so it maps to `null`), and add beside it, using the same `makeGhDashboardClient(cfg, { ...fakes(), fetchFn })` pattern:
 
@@ -3488,6 +3492,8 @@ import type { ChatSessionDeps } from "./chat/chatSession.js";
 `MainLoopDeps` gains:
 
 ```ts
+  /** Route builder seam (tests assert the Host allowlist wiring, R12). */
+  makeChatRoutesFn?: typeof makeChatRoutes;
   /** Dashboard chat (spec 2026-09-01). Absent → mainLoop builds a ChatManager
    *  over the same gate/spend/activeCfg closures the poll loop uses. Tests
    *  inject a fake to assert wiring + drain order. */
@@ -3515,7 +3521,10 @@ const chat =
 In the `startHealthServerFn({...})` call add:
 
 ```ts
-        chat: makeChatRoutes(chat),
+        // allowedHost: the Host allowlist half of the /chat/* boundary (spec
+        // §5.3, R12) admits the configured health host besides the loopback
+        // names, so a dashboard pointed at healthHost is never refused.
+        chat: (deps.makeChatRoutesFn ?? makeChatRoutes)(chat, { allowedHost: cfg.healthHost }),
         chatStatus: () => chat.health(),
 ```
 
