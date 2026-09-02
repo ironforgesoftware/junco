@@ -176,6 +176,16 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     expect(t.calls).toEqual([]);
   });
 
+  it("the composer only owns the keys while the CHAT pane holds the focus", () => {
+    // `openChat` (the rail-switch effect) resets composerFocused while pane 1
+    // still has the focus — ChatView's Composer is inactive there, so the
+    // cascade must read it as blurred or nothing owns the keys at all.
+    const h = mount({ chat: chatState({ composerFocused: true }), pane: 1 });
+    expect(h.api.handleChatKey("j", K())).toBe(true);
+    h.api.handleChatKey("i", K());
+    expect(h.calls).toEqual(["rail:1", "focus:true", "pane:2"]);
+  });
+
   it("blurred: the movement/scroll/expand keys and the pane doors", () => {
     const h = mount();
     const api = h.api;
@@ -187,11 +197,16 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     api.handleChatKey("]", K());
     api.handleChatKey("[", K());
     api.handleChatKey("h", K());
+    api.handleChatKey("", K({ leftArrow: true }));
     api.handleChatKey("", K({ rightArrow: true }));
+    api.handleChatKey("", K({ tab: true }));
     api.handleChatKey("G", K());
     api.handleChatKey("g", K());
     expect(h.calls).toEqual([
+      // `i` takes the pane back with the focus (the Composer's hook is gated
+      // on both), which is why this reads as two calls.
       "focus:true",
+      "pane:2",
       "cursor:1",
       "cursor:-1",
       "expand",
@@ -199,11 +214,18 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
       "scroll:1",
       "scroll:-1",
       "pane:1",
+      "pane:1",
       "pane:2",
+      "pane:1", // tab toggles: this mount sits on pane 2
       "follow:true",
       "follow:false",
       "scroll:-1000000",
     ]);
+    // …and back the other way from pane 1, so the help modal's "tab switches
+    // panes" line holds in this view too.
+    const t = mount({ pane: 1 });
+    t.api.handleChatKey("", K({ tab: true }));
+    expect(t.calls).toEqual(["pane:2"]);
   });
 
   it("blurred: [ on a followed chat lands at the tail first, then steps up", () => {
@@ -244,10 +266,12 @@ describe("useChatInput — the verbs (spec §8.6)", () => {
     expect(h.calls).toEqual(["submit:d1", "edit:d1", "route:d1", "discard:d1"]);
   });
 
-  it("a draft verb with no card under the cursor toasts instead", () => {
-    const h = mount({ draft: null });
-    h.api.chatHandlers["submit"]!();
-    expect(h.calls).toEqual(["toast:info:no draft under the cursor"]);
+  it("every draft verb with no card under the cursor toasts instead", () => {
+    for (const id of ["submit", "edit", "route", "discard"]) {
+      const h = mount({ draft: null });
+      h.api.chatHandlers[id]!();
+      expect(h.calls, id).toEqual(["toast:info:no draft under the cursor"]);
+    }
   });
 
   it("thinking, follow (pausing at the tail), and close", () => {
@@ -264,11 +288,15 @@ describe("useChatInput — the verbs (spec §8.6)", () => {
 });
 
 describe("useChatInput — the slash router (spec §8.2)", () => {
-  it("plain prose sends as-is; an empty composer sends nothing", () => {
+  it("plain prose sends as-is; an empty composer — or a bare slash — sends nothing", () => {
     const h = mount();
     h.api.onComposerSubmit("  why is the build slow?  ");
     h.api.onComposerSubmit("   ");
-    expect(h.calls).toEqual(["send:why is the build slow?"]);
+    h.api.onComposerSubmit("/"); // the slash list, dismissed — not a message
+    h.api.onComposerSubmit("  /  ");
+    // Prose that merely opens with a path is still prose.
+    h.api.onComposerSubmit("/usr/bin/env is missing");
+    expect(h.calls).toEqual(["send:why is the build slow?", "send:/usr/bin/env is missing"]);
   });
 
   it("/draft, /audit and /investigate N send their standing requests", () => {
@@ -301,17 +329,35 @@ describe("useChatInput — the slash router (spec §8.2)", () => {
     expect(h.calls[1]).toBe("send:Context, issue #9 on acme/api:\n\nISSUE acme/api#9 body");
   });
 
-  it("/pr refuses a bad number or an unwatched row, and relays a fetch failure", async () => {
+  it("/pr refuses a missing, non-numeric or unwatched target, and relays a fetch failure", async () => {
     const bad = mount({ currentNwo: "acme/api" });
     bad.api.onComposerSubmit("/pr");
+    // Strictly digits: parseInt would read "7abc" as 7 and fetch a PR the
+    // operator never asked for.
+    bad.api.onComposerSubmit("/pr 7abc");
+    bad.api.onComposerSubmit("/pr 7 8");
     const unwatched = mount();
     unwatched.api.onComposerSubmit("/pr 42");
-    expect(bad.calls).toEqual(["toast:error:usage: /pr N (watched repo only)"]);
+    expect(bad.calls).toEqual(
+      Array<string>(3).fill("toast:error:usage: /pr N (watched repo only)"),
+    );
     expect(unwatched.calls).toEqual(["toast:error:usage: /pr N (watched repo only)"]);
     const boom = mount({ currentNwo: "acme/api", prContextFails: true });
     boom.api.onComposerSubmit("/pr 42");
     await until(() => boom.calls.length === 1);
     expect(boom.calls).toEqual(["toast:error:gh boom"]);
+  });
+
+  it("/issue refuses the same way (its own arm of the shared branch)", () => {
+    const h = mount({ currentNwo: "acme/api" });
+    h.api.onComposerSubmit("/issue");
+    h.api.onComposerSubmit("/issue nine");
+    const unwatched = mount();
+    unwatched.api.onComposerSubmit("/issue 9");
+    expect(h.calls).toEqual(
+      Array<string>(2).fill("toast:error:usage: /issue N (watched repo only)"),
+    );
+    expect(unwatched.calls).toEqual(["toast:error:usage: /issue N (watched repo only)"]);
   });
 
   it("/abort and /new map to their verbs; an unknown command toasts", () => {

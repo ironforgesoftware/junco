@@ -40,6 +40,13 @@ export interface ChatInputApi {
   onComposerSubmit(raw: string): void;
 }
 
+/** A slash command's issue/PR number: digits and nothing else, so `/pr 7abc`
+ * (which `parseInt` would happily read as 7) gets the usage toast instead of a
+ * fetch for a number the operator never typed. */
+function issueNumber(arg: string | undefined): number | null {
+  return arg !== undefined && /^\d+$/.test(arg) ? Number.parseInt(arg, 10) : null;
+}
+
 /**
  * The chat view's input half (Ruling R15), lifted out of App so the nav spine
  * keeps only the wiring: the esc state machine and the blurred key recipes
@@ -118,9 +125,11 @@ export function useChatInput({
   const onComposerSubmit = useCallback(
     (raw: string): void => {
       const text = raw.trim();
-      if (text === "") return;
+      // A bare `/` is the slash-list being dismissed, not a message: sending
+      // it would spend a turn on a lone slash.
+      if (text === "" || text === "/") return;
       const m = /^\/(\w+)(?:\s+(.*))?$/.exec(text);
-      if (!m) return void send(text);
+      if (!m) return void send(text); // prose, including prose that opens with a path
       const [, cmd, arg] = m;
       switch (cmd) {
         case "draft":
@@ -132,8 +141,8 @@ export function useChatInput({
             "Request a read-only audit of this repository: emit a junco-ticket fence whose frontmatter has an `audit:` block.",
           );
         case "investigate": {
-          const n = Number.parseInt(arg ?? "", 10);
-          if (!Number.isInteger(n)) return void showToast("error", "usage: /investigate N");
+          const n = issueNumber(arg);
+          if (n === null) return void showToast("error", "usage: /investigate N");
           return void send(
             `Request an investigation of issue #${n}: emit a junco-ticket fence whose frontmatter has an \`investigate:\` block with \`issue: ${n}\`.`,
           );
@@ -142,8 +151,8 @@ export function useChatInput({
         case "issue": {
           // Injected as a USER message: the fetch is the dashboard's (the
           // agent's tools are read-only and local), the agent only sees text.
-          const n = Number.parseInt(arg ?? "", 10);
-          if (!Number.isInteger(n) || currentNwo === undefined)
+          const n = issueNumber(arg);
+          if (n === null || currentNwo === undefined)
             return void showToast("error", `usage: /${cmd} N (watched repo only)`);
           const nwo = currentNwo;
           void (cmd === "pr" ? client.prContext(nwo, n) : client.issueContext(nwo, n)).then((r) => {
@@ -173,7 +182,14 @@ export function useChatInput({
 
   const handleChatKey = (input: string, key: Key): boolean => {
     if (view !== "chat" || chat === null) return false;
-    if (chat.composerFocused) {
+    // `pane === 2` is half the condition on purpose: ChatView hands the
+    // Composer `focused && composerFocused`, so its useGuardedInput is live
+    // only while the CHAT pane holds the focus. Reading `composerFocused`
+    // alone here would claim the keys for a hook that isn't listening —
+    // every key swallowed, nothing typed, only esc out. That state is
+    // reachable: `openChat` from the rail-switch effect resets
+    // `composerFocused` to true while pane 1 still holds the focus.
+    if (chat.composerFocused && pane === 2) {
       // The Composer's own useGuardedInput handles typing/enter/chords/slash.
       // Only esc is App's: streaming → abort, idle → blur (spec §8.3). Every
       // other key is swallowed so no cascade layer below sees typed prose.
@@ -193,11 +209,20 @@ export function useChatInput({
       if (input === "G") return took(() => moveRailTo(railCount - 1));
     }
     if (key.escape) return took(close);
-    if (input === "i") return took(() => focusComposer(true));
+    // `i` composes — which means the CHAT pane, not just the composer flag:
+    // focusing it from the rail without taking the pane back would leave the
+    // Composer's hook inactive (see the pane check above).
+    if (input === "i")
+      return took(() => {
+        focusComposer(true);
+        setPane(2);
+      });
     // The pane doors: this view swallows ↑/↓ for its own cursor (as every
-    // overlay does), so the rail needs an explicit way in and back out.
+    // overlay does), so the rail needs an explicit way in and back out. `tab`
+    // toggles them, keeping the help modal's "←/→ · h/l · tab" line true here.
     if (input === "h" || key.leftArrow) return took(() => setPane(1));
     if (input === "l" || key.rightArrow) return took(() => setPane(2));
+    if (key.tab) return took(() => setPane(pane === 1 ? 2 : 1));
     if (input === "j" || key.downArrow) return took(() => moveCursor(1));
     if (input === "k" || key.upArrow) return took(() => moveCursor(-1));
     if (key.return || input === " ") return took(toggleExpanded);
