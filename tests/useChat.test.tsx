@@ -312,7 +312,11 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     api.setComposer("draft text");
     await until(() => api.chat!.composer === "draft text");
     handlersLog[0]!.end("session_reset");
-    await until(() => subscribeCalls.length === 2);
+    // The resubscribe timer issues the state reset (a React commit, async)
+    // and THEN calls subscribe (synchronous, observable at once) — gate on the
+    // committed state, not on the subscribe call, or a loaded runner reads the
+    // pre-reset summary (this flaked the macOS gate on PR #445).
+    await until(() => subscribeCalls.length === 2 && api.chat?.summary === null);
     expect(subscribeCalls[1]).toBeNull();
     expect(api.chat!.summary).toBeNull();
     expect(api.chat!.lastOffset).toBeNull();
@@ -346,7 +350,8 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     await until(() => api.chat!.lastOffset === 30);
     const summaryBefore = api.chat!.summary;
     handlersLog[0]!.end("daemon_stopped");
-    await until(() => subscribeCalls.length === 2);
+    // Same gate discipline as the session_reset case: `endReason` is a commit.
+    await until(() => subscribeCalls.length === 2 && api.chat?.endReason === "daemon_stopped");
     expect(subscribeCalls[1]).toBe(30);
     expect(api.chat!.summary).toBe(summaryBefore);
     expect(api.chat!.endReason).toBe("daemon_stopped");
