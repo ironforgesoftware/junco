@@ -3,7 +3,11 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatSession, chatCfgFor } from "../src/chat/chatSession.js";
-import type { ChatSessionLike, SessionManagerMode } from "../src/agent/session.js";
+import type {
+  ChatSessionLike,
+  SessionManagerMode,
+  SessionOverrides,
+} from "../src/agent/session.js";
 import { makeConfig, READ_ONLY_TOOLS } from "./helpers/config.js";
 import { fakeChatSession, chatScriptText, type FakeChatSession } from "./helpers/fakeSession.js";
 import { parseTranscriptLine } from "../src/agent/transcriptSchema.js";
@@ -175,6 +179,32 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
     const meta = JSON.parse(readFileSync(session.metaPath, "utf8"));
     expect(meta.key).toBe("acme/api");
     expect(meta.sdkSessionFile.startsWith(session.dir)).toBe(true);
+  });
+
+  it("ensureSession passes the drafting-contract append prompt and readOnly:true to the factory (Ruling R14)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    let captured: { overrides: SessionOverrides } | undefined;
+    const session = new ChatSession(
+      {
+        cfg,
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        dir: join(root, "acme__api"),
+      },
+      {
+        makeSessionManager: fakeSm,
+        sessionFactoryFor: (_cfg, _cwd, overrides) => {
+          captured = { overrides };
+          return fakeChatSession([chatScriptText("hi")]);
+        },
+      },
+    );
+    await session.ensureSession();
+    if (!captured) throw new Error("the chat session factory was never called");
+    expect(captured.overrides.appendSystemPrompt).toContain("--- DRAFTING CONTRACT ---");
+    expect(captured.overrides.readOnly).toBe(true);
   });
 
   it("prompt writes prompt/turn_start/SDK events/turn_end — never message_update — and fans out everything", async () => {

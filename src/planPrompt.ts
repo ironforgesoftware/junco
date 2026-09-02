@@ -32,7 +32,10 @@ export function loadDispatchTemplate(): string {
   return templateCache;
 }
 
-function loadExample(): string | null {
+/** Read EXAMPLE.md, a worked-shape anchor. Null when unreadable — it never
+ * blocks planning. Exported so the dashboard chat (chat/chatPrompt.ts) can
+ * append the same anchor to its own prompt without a second copy. */
+export function loadExample(): string | null {
   try {
     return readFileSync(EXAMPLE_PATH, "utf8");
   } catch {
@@ -40,19 +43,10 @@ function loadExample(): string | null {
   }
 }
 
-export function buildPlannerPrompt(opts: {
-  title: string;
-  body: string;
-  nwo: string;
-  parent: { title: string; body: string | null } | null;
-  planSets?: boolean;
-}): string {
-  const template = loadDispatchTemplate();
-  const example = loadExample();
-  const issueBody = opts.body.trim();
-
-  const planSetRule = opts.planSets
-    ? `
+/** Rule 6 — the plan-set alternative. Shared by the planner (buildPlannerPrompt)
+ * and the dashboard chat (chat/chatPrompt.ts) so the two never drift. */
+export function planSetRuleText(): string {
+  return `
 
 6. IF AND ONLY IF the issue naturally decomposes into 2–10 tasks with real
    dependency ordering, you may instead emit ONE fenced block tagged
@@ -78,8 +72,21 @@ tasks:
 
    Each task becomes its own ticket and pull request, executed in dependency
    order (a task starts only after its dependencies' PRs are merged). Prefer
-   the single junco-ticket fence whenever the work fits one PR.`
-    : "";
+   the single junco-ticket fence whenever the work fits one PR.`;
+}
+
+export function buildPlannerPrompt(opts: {
+  title: string;
+  body: string;
+  nwo: string;
+  parent: { title: string; body: string | null } | null;
+  planSets?: boolean;
+}): string {
+  const template = loadDispatchTemplate();
+  const example = loadExample();
+  const issueBody = opts.body.trim();
+
+  const planSetRule = opts.planSets ? planSetRuleText() : "";
 
   const parts: string[] = [
     `You are the PLANNER for the junco worker. A GitHub issue on \`${opts.nwo}\` has been

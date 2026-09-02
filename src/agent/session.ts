@@ -456,6 +456,11 @@ export interface SessionOverrides {
    *  makeSessionManager. Absent → SessionManager.inMemory(cwd), unchanged for
    *  every other caller. Opaque here; typed at the SDK boundary only. */
   sessionManager?: unknown;
+  /** Chat (spec 2026-09-01 §6.5): appended to pi's default coding prompt
+   *  (never a replacement) via the resource loader's
+   *  `appendSystemPromptOverride` + `reload()`. Absent → the loader is built
+   *  exactly as before (sandboxed) or skipped entirely (unsandboxed). */
+  appendSystemPrompt?: string;
 }
 
 export interface ResolveSandboxDeps {
@@ -835,9 +840,39 @@ export function makePiSessionFactory(
         backend: resolved.backend,
         policy: resolved.policy,
         home: homedir(),
+        appendSystemPrompt: overrides?.appendSystemPrompt,
       });
       sandboxTools = built.customTools;
       sandboxLoader = built.resourceLoader;
+      // The SDK only reloads a resource loader it constructs itself
+      // (createAgentSession, sdk.js: `if (!resourceLoader) { … await
+      // resourceLoader.reload(); }`) — a caller-supplied loader, which this
+      // always is, is used exactly as-is. `appendSystemPromptOverride` is
+      // materialized only inside `reload()` (resource-loader.js), so without
+      // this call an appended chat prompt would silently never appear. Gated
+      // on `appendSystemPrompt` so the ticket path's loader — built the same
+      // way today as before this feature — is never reloaded and its
+      // behavior stays byte-identical.
+      if (overrides?.appendSystemPrompt)
+        await (sandboxLoader as { reload(): Promise<void> }).reload();
+    } else if (overrides?.appendSystemPrompt) {
+      // Sandbox off, but chat still needs its prompt appended: build the same
+      // inert loader directly (noExtensions + the other four no* flags) so
+      // chat never picks up ambient extensions/skills/prompts/themes/context
+      // files even unsandboxed — it is read-only by contract regardless of
+      // sandbox.enabled.
+      const { DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
+      sandboxLoader = new DefaultResourceLoader({
+        cwd,
+        agentDir: join(homedir(), ".pi", "agent"),
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+        appendSystemPromptOverride: () => [overrides.appendSystemPrompt!],
+      });
+      await (sandboxLoader as { reload(): Promise<void> }).reload();
     }
 
     const { session } = await createAgentSession({

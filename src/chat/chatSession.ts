@@ -34,6 +34,7 @@ import { READ_ONLY_TOOLS } from "../runOnce.js";
 import { log } from "../logging.js";
 import { chatSlug } from "./chatKey.js";
 import { runChatTurn, type ChatTurnResult } from "./chatTurn.js";
+import { buildChatPrompt } from "./chatPrompt.js";
 
 export interface ChatMeta {
   key: string;
@@ -371,6 +372,16 @@ export class ChatSession {
           tools: chatCfg.tools,
           thinkingLevel: this.cfg.chat.thinkingLevel ?? this.cfg.model.thinkingLevel,
           sessionManager: manager,
+          appendSystemPrompt: buildChatPrompt({
+            cwd: this.cwd,
+            nwo: this.nwo,
+            planSetsEnabled: this.cfg.planSets.enabled,
+          }),
+          // Ruling R14: chat is read-only by contract — the cwd is the
+          // operator's live checkout, never a disposable worktree — so the
+          // sandbox keeps scratch as the only writable root (the same seam
+          // Q&A uses, runOnce.ts ~451).
+          readOnly: true,
         })();
         // reset()/drain() landed while this build was in flight. Disposing
         // here — rather than publishing on `this.sdk` — is the whole point:
