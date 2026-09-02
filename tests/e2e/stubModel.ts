@@ -222,6 +222,14 @@ export async function startStubModel(script: Turn[]): Promise<StubModel> {
 
   const server = createServer((req, res) => {
     void handle(req, res).catch((e: unknown) => {
+      // `handle` can throw after `res.writeHead` (mid-SSE-stream) — at that
+      // point the response is committed and a second `json(res, 500, ...)`
+      // would throw ERR_HTTP_HEADERS_SENT, turning this catch into an
+      // unhandled rejection in the vitest process. Just end the response.
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
       json(res, 500, { error: { message: `stub: ${e instanceof Error ? e.message : String(e)}` } });
     });
   });

@@ -4,9 +4,15 @@
  * One `createSandbox()` gives a scenario the four ingredients the spec names
  * (docs/superpowers/specs/2026-09-01-e2e-testing-design.md §4): a sandboxed
  * HOME with a hand-written config.json, a real bare git remote + clone, a
- * fake `gh` that logs every call, and the scripted model stub — then spawns
- * the binary under test with a SCRUBBED environment so nothing here can reach
- * the maintainer's live ~/.junco.
+ * fake `gh` that logs every scripted call (the built-in `repo view
+ * --json nameWithOwner` answer is not logged — it is answered by `ghCases`
+ * itself, ahead of the logged case table), and the scripted model stub — then
+ * spawns the binary under test with a SCRUBBED environment so nothing here
+ * can reach the maintainer's live ~/.junco. The one exception: the `remote.*`
+ * readers below shell out to `git` via `tests/helpers/gitHarness.ts`'s `run`,
+ * which spreads the parent `process.env` (so it sees the real `HOME`) rather
+ * than the scrubbed child env — but they are read-only queries against the
+ * sandbox's own bare repo, so there is no live-runtime risk.
  *
  * Reuses the unit suite's fixtures on purpose: `cloneHarness` (bare remote +
  * seeded clone) and `ghCases` (case-table fake gh with no permissive default —
@@ -110,7 +116,8 @@ export interface CliResult {
 
 /** The on-disk diagnostic sources `registerDiagnostics` prints — see `snapshotDiagnostics`. */
 export interface DiagnosticsSnapshot {
-  queue: Record<QueueDir, string[]>;
+  /** Per queue dir, each file's name and its frontmatter block ("" if none). */
+  queue: Record<QueueDir, Array<{ name: string; frontmatter: string }>>;
   ghLog: string;
   workerLogTail: string;
 }
@@ -181,6 +188,14 @@ function tail(s: string, lines = 80): string {
   return all.slice(Math.max(0, all.length - lines)).join("\n");
 }
 
+/** Prefix every line of `s` with `prefix` — used to indent a frontmatter block under its filename in the diagnostics dump. */
+function indent(s: string, prefix: string): string {
+  return s
+    .split("\n")
+    .map((l) => `${prefix}${l}`)
+    .join("\n");
+}
+
 function readIfExists(p: string): string {
   return existsSync(p) ? readFileSync(p, "utf8") : "";
 }
@@ -236,7 +251,13 @@ function registerDiagnostics(sb: Sandbox): void {
         ? "on-disk state below was snapshotted at sandbox close (post-run)"
         : "on-disk state below is a LIVE read (sandbox not yet closed)",
     );
-    out.push(`queue: ${JSON.stringify(snap.queue)}`);
+    out.push("queue:");
+    for (const dir of QUEUE_DIRS) {
+      for (const f of snap.queue[dir]) {
+        out.push(`  ${dir}/${f.name}`);
+        if (f.frontmatter) out.push(indent(f.frontmatter, "    "));
+      }
+    }
     out.push(
       `stub: requests=${sb.stub?.requests.length ?? "n/a"} exhausted=${String(sb.stub?.exhausted ?? "n/a")}`,
     );
@@ -460,7 +481,13 @@ export function writeTicket(
   const inbox = join(sb.queueRoot, "inbox");
   mkdirSync(inbox, { recursive: true });
   const path = join(inbox, `${t.id}.md`);
-  const fm = stringifyYaml({ id: t.id, ...t.frontmatter }).trimEnd();
+  // `id: t.id` must win over a caller-supplied `frontmatter.id` — the file is
+  // named after `t.id`, so a frontmatter override would desync the two. Strip
+  // any `id` from a copy of frontmatter first so `t.id` can neither be
+  // shadowed by the spread nor duplicated, and stays first in the emitted YAML.
+  const rest = { ...(t.frontmatter ?? {}) };
+  delete rest.id;
+  const fm = stringifyYaml({ id: t.id, ...rest }).trimEnd();
   writeFileSync(path, `---\n${fm}\n---\n\n${t.body.trimEnd()}\n`);
   return path;
 }
@@ -501,13 +528,26 @@ export function queueState(
   return { dir: null, frontmatter: {}, body: "" };
 }
 
-/** Every ticket file per queue dir — for the diagnostics dump. */
-function listQueue(sb: Sandbox): Record<QueueDir, string[]> {
-  const out = { inbox: [], processing: [], done: [], failed: [] } as Record<QueueDir, string[]>;
+/** The text between a ticket file's first `---` pair, or "" if it has no frontmatter block. */
+function readFrontmatterBlock(path: string): string {
+  const m = /^---\s*\n([\s\S]*?)\n---\s*\n?/.exec(readIfExists(path));
+  return m ? m[1] : "";
+}
+
+/** Every ticket file per queue dir, with its frontmatter — for the diagnostics dump. */
+function listQueue(sb: Sandbox): Record<QueueDir, Array<{ name: string; frontmatter: string }>> {
+  const out = { inbox: [], processing: [], done: [], failed: [] } as Record<
+    QueueDir,
+    Array<{ name: string; frontmatter: string }>
+  >;
   if (!sb.queueRoot) return out;
   for (const dir of QUEUE_DIRS) {
     const p = join(sb.queueRoot, dir);
-    if (existsSync(p)) out[dir] = readdirSync(p);
+    if (existsSync(p))
+      out[dir] = readdirSync(p).map((name) => ({
+        name,
+        frontmatter: readFrontmatterBlock(join(p, name)),
+      }));
   }
   return out;
 }

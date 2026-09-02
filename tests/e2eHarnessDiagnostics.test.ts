@@ -32,7 +32,7 @@ describe("snapshotDiagnostics (e2e harness)", () => {
     expect(snap.queue).toEqual({
       inbox: [],
       processing: [],
-      done: ["2026-01-01T0000Z__t1.md"],
+      done: [{ name: "2026-01-01T0000Z__t1.md", frontmatter: "id: t1" }],
       failed: [],
     });
     expect(snap.ghLog).toBe("gh call 1\ngh call 2\n");
