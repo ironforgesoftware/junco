@@ -54,6 +54,7 @@
   "sandbox": {
     "enabled": true,
     "backend": "auto",
+    "requireBackend": false,
     "network": "deny",
     "extraDenyRead": [],
     "extraAllowWrite": [],

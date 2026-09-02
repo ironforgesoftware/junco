@@ -275,6 +275,21 @@ With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog 
 }
 ```
 
+## Sandbox backend
+
+`sandbox.backend` (default `"auto"`) picks the OS isolation layer for agent tool subprocesses: `auto` means "best available" — Seatbelt on macOS, bubblewrap on Linux — while `seatbelt`, `bwrap`, or `none` force one. An explicit backend that is missing or non-functional **fails closed**: every ticket errors with `SandboxUnavailableError` until it is installed. `auto` instead **degrades**: when its probe fails (no `bwrap` on the host, or a kernel that refuses unprivileged user namespaces), the session falls back to the `none` backend and continues — the environment scrub and the in-process filesystem path-jail still apply, but agent `bash` runs with no OS confinement. The daemon logs a warning naming exactly what was lost and `junco doctor` reports `⚠ sandbox`, yet tickets keep flowing and `junco status` looks healthy.
+
+`sandbox.requireBackend` (default `false`) makes `auto` fail closed too. With it on, a failed probe raises the same `SandboxUnavailableError` an explicit backend would, and `junco doctor` reports `✗ sandbox` (exit 1) instead of a warning — so an operator can demand the OS-isolation guarantee on every host without pinning `bwrap` vs `seatbelt` per machine. It has no effect on an explicit backend (already fail-closed) or on `backend: "none"` (no OS isolation by design). Both are live-reload levers.
+
+```json
+{
+  "sandbox": {
+    "backend": "auto",
+    "requireBackend": true
+  }
+}
+```
+
 ## Plan sets
 
 `planSets` gates the plan-set compiler — one fenced `junco-plan` document compiled into a dependency-ordered set of tickets and pull requests (see [Tickets § Plan sets](tickets.md#plan-sets-the-junco-plan-fence)). Off by default. With it off, `junco submit --plan` and the GitHub bridge's `junco-plan` door refuse; the dependency machinery every plan set runs on (`depends_on:` claim gating, the merge sweep, failure cascade) stays on regardless, so hand-authored `depends_on:` sets never need this section.
