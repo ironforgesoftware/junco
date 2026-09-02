@@ -48,6 +48,12 @@ fi
 # scripted model stub — the same pr-happy-path scenario the e2e suite runs
 # against dist/. HOME is still the sandbox here; the harness overrides it per
 # run anyway. The repo root is the vitest cwd (config, node_modules).
-(cd "$ROOT" && JUNCO_E2E_BIN="$JUNCO" "$ROOT/node_modules/.bin/vitest" run -c vitest.e2e.config.ts -t pr-happy-path)
+#
+# Selected by FILE, not `-t` alone: `vitest run -t <no-match>` exits 0 with
+# everything skipped, so a renamed test would turn this into a silent no-op
+# under `set -euo pipefail`. A non-existent file argument exits 1 with "No
+# test files found" instead — that's the real guard; `-t` stays on as the belt
+# so a matching but wrong-file test can't slip through either.
+(cd "$ROOT" && JUNCO_E2E_BIN="$JUNCO" "$ROOT/node_modules/.bin/vitest" run -c vitest.e2e.config.ts tests/e2e/prFlow.e2e.ts -t pr-happy-path)
 
 echo "package smoke OK (config: $CONFIG, inbox: $INBOX)"
