@@ -3,7 +3,13 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, statSync 
 import { EventEmitter } from "node:events";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { runAgent, apiBaseUrl, splitModelId, defaultTranscriptSink } from "../src/agent/session.js";
+import {
+  runAgent,
+  apiBaseUrl,
+  splitModelId,
+  defaultTranscriptSink,
+  sdkRegistryOps,
+} from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
 import { inMemoryCredentialStore } from "../src/agent/credentialStore.js";
 import { resolveModelViaRegistries, type RegistryOps } from "../src/agent/modelSetup.js";
@@ -884,16 +890,11 @@ describe("models.json file path — SDK resolution", () => {
   // reads the in-memory credential; the ambient env-var fallback the SDK's
   // anthropic provider would otherwise consult is neutralized below so the
   // seed is the only path to a result).
-  // `sdkRegistryOps` itself is module-private in session.ts, so this rebuilds
-  // its exact four-option `ModelRuntime.create` bridge locally rather than
-  // widening session.ts's export surface for the test.
+  // Drives production's own `ModelRuntime.create` bridge (`sdkRegistryOps`)
+  // against the real SDK, so the four-option literal this depends on is the
+  // shipped one; its own invariants are pinned in sessionFactoryInvariants.
   it("the seeded credential resolves into request auth on the catalog path", async () => {
     const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-    const NOOP_MODELS_STORE = {
-      read: async () => undefined,
-      write: async () => {},
-      delete: async () => {},
-    };
     // Ambient-fallback guard: resolveProviderAuth only consults these env
     // vars when the credential store has NO entry for the provider. Clearing
     // them means an unseeded store resolves to `undefined`, not a host key —
@@ -909,21 +910,7 @@ describe("models.json file path — SDK resolution", () => {
 
     try {
       const credentials = inMemoryCredentialStore({ anthropic: "sk-catalog-secret" });
-      const make = async (modelsPath: string | null) => {
-        const runtime = await ModelRuntime.create({
-          credentials,
-          modelsPath,
-          refreshOnCreate: false,
-          modelsStore: NOOP_MODELS_STORE,
-        });
-        return {
-          find: (provider: string, modelId: string) => runtime.getModel(provider, modelId),
-          registerProvider: (name: string, config: Record<string, unknown>) =>
-            runtime.registerProvider(name, config),
-          backing: runtime,
-        };
-      };
-      const ops: RegistryOps = { fromFile: (p) => make(p), inMemory: () => make(null) };
+      const ops: RegistryOps = sdkRegistryOps(ModelRuntime, credentials);
 
       const cfg = makeConfig(
         {
