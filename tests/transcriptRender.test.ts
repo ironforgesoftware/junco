@@ -9,12 +9,24 @@ import {
 } from "../src/transcriptRender.js";
 import { summarizeTranscript, type RunSummary } from "../src/transcriptSummary.js";
 import {
+  agentEnd,
   agentStart,
+  chatDraft,
+  chatPrompt,
+  chatReset,
+  chatTurnEnd,
+  chatTurnRejected,
+  chatTurnStart,
+  compactionEnd,
+  compactionStart,
   guardDecision,
+  j,
+  metaLine,
   runEnd,
   runStart,
   toolStartId,
   turnEndFull,
+  v2RunLines as v2Lines,
 } from "./helpers/transcriptFixtures.js";
 
 const opts = (over: { width?: number; showThinking?: boolean; expanded?: Set<string> } = {}) => ({
@@ -39,6 +51,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   turns: [],
   guardDecisions: [],
   toolCallCount: 0,
+  prompt: null,
+  notes: [],
   ...over,
 });
 
@@ -99,6 +113,12 @@ describe("fmtRunOutcome", () => {
       },
     });
     expect(fmtRunOutcome(r, false)).toEqual({ text: "timeout", tone: "warn" });
+  });
+  it("a chat turn's aborted:<reason> stopReason renders as 'aborted (<reason>)' with warn tone", () => {
+    const r = run({
+      end: { ...run().end!, stopReason: "aborted:timeout", durationMs: 5000, usage: null },
+    });
+    expect(fmtRunOutcome(r, false)).toEqual({ text: "aborted (timeout) · 5s", tone: "warn" });
   });
 });
 
@@ -329,5 +349,95 @@ describe("renderTranscriptRows — newline-padded model output", () => {
     ]);
     const rows = renderTranscriptRows(s, opts());
     expect(rows.map((r) => r.text)).toContain("   ✗ 123");
+  });
+});
+
+describe("chat rows (spec 2026-09-01 §1.3)", () => {
+  it("renders the prompt as a `you:` row before the run header and notes as rows; the draft note carries its anchor", () => {
+    const s = summarizeTranscript([
+      metaLine({ ticketId: "acme__api" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({
+        thinking: null,
+        text: "because of X",
+        calls: [],
+        usage: { input: 3, output: 4 },
+      }),
+      agentEnd(),
+      chatTurnEnd(),
+      chatDraft(),
+      chatTurnRejected(),
+    ]);
+    const rows = renderTranscriptRows(s, opts({ width: 80 }));
+    const texts = rows.map((r) => r.text);
+    expect(texts[0]).toBe("you: why is the build slow?");
+    expect(texts[1]).toMatch(/^── run 1\/1 · chat · local\/m1/);
+    const draftRow = rows.find((r) => r.anchor === "draft:acme__api-20260901-120000-1");
+    expect(draftRow?.text).toContain("draft parked · ticket · add-cache");
+    expect(
+      rows.some((r) => r.text.includes("turn rejected: rate limited") && r.tone === "warn"),
+    ).toBe(true);
+  });
+  it("a ticket transcript renders byte-identically to before", () => {
+    const before = renderTranscriptRows(summarizeTranscript(v2Lines()), opts({ width: 80 }));
+    expect(before[0]!.text).toMatch(/^── run 1\/1 · audit/);
+    expect(before.some((r) => r.text.startsWith("you:"))).toBe(false);
+  });
+  it("draft note text and tone vary by status; destination shown once submitted", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      agentEnd(),
+      chatTurnEnd(),
+      chatDraft({ status: "lint_failed" }),
+      chatDraft({ status: "submitted", destination: "inbox" }),
+      chatDraft({ status: "discarded" }),
+    ]);
+    const rows = renderTranscriptRows(s, opts({ width: 80 }));
+    const draftRows = rows.filter((r) => r.anchor?.startsWith("draft:"));
+    expect(draftRows.map((r) => r.tone)).toEqual(["warn", "success", "bold"]);
+    expect(draftRows[0]!.text).toContain("draft parked (lint failed)");
+    expect(draftRows[1]!.text).toContain("draft submitted → inbox");
+    expect(draftRows[2]!.text).toContain("draft discarded");
+  });
+  it("session-reset and transcript-degraded notes render as warn rows", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      agentEnd(),
+      chatTurnEnd(),
+      chatReset({ reason: "missing" }),
+      j({ type: "junco_chat_transcript_degraded", ts: "2026-09-01T00:00:00.000Z" }),
+    ]);
+    const rows = renderTranscriptRows(s, opts({ width: 80 }));
+    expect(rows.some((r) => r.text.includes("session reset (missing)") && r.tone === "warn")).toBe(
+      true,
+    );
+    expect(
+      rows.some(
+        (r) =>
+          r.text.includes("transcript disabled — history will not survive a reconnect") &&
+          r.tone === "warn",
+      ),
+    ).toBe(true);
+  });
+  it("compaction notes render distinct start/end text", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      compactionStart(),
+      compactionEnd(),
+    ]);
+    const rows = renderTranscriptRows(s, opts({ width: 80 }));
+    expect(rows.some((r) => r.text.includes("compacting context…"))).toBe(true);
+    expect(rows.some((r) => r.text.includes("context compacted"))).toBe(true);
   });
 });

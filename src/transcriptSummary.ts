@@ -17,6 +17,9 @@
 import type { Usage } from "./types.js";
 import {
   parseTranscriptLine,
+  type ChatDraftRecord,
+  type ChatSessionResetRecord,
+  type DraftKind,
   type FlowKind,
   type GuardDecisionRecord,
   type RunStartRecord,
@@ -61,6 +64,22 @@ export interface RunEnd {
   usage: Usage | null;
 }
 
+/** Chat-only side records (spec 2026-09-01 §1.3), rendered one row each. */
+export type ChatNote =
+  | { kind: "rejected"; reason: string; until: string | null; ts: string }
+  | {
+      kind: "draft";
+      draftId: string;
+      draftKind: DraftKind;
+      status: ChatDraftRecord["status"];
+      ids: string[];
+      destination: ChatDraftRecord["destination"];
+      ts: string;
+    }
+  | { kind: "reset"; reason: ChatSessionResetRecord["reason"]; ts: string }
+  | { kind: "degraded"; ts: string }
+  | { kind: "compaction"; phase: "start" | "end"; ts: string | null };
+
 export interface RunSummary {
   /** 1-based, for "run 2/4". */
   index: number;
@@ -72,6 +91,10 @@ export interface RunSummary {
   turns: TurnSummary[];
   guardDecisions: GuardDecisionRecord[];
   toolCallCount: number;
+  /** junco_chat_prompt text that opened this run (chat runs only). */
+  prompt: string | null;
+  /** Chat-only side records attached to this run, rendered one row each. */
+  notes: ChatNote[];
 }
 
 export interface TranscriptSummary {
@@ -130,10 +153,18 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
   };
   // Reducer state lives on one object (not `let`s) so the closures below
   // never trip TS's captured-variable narrowing.
-  const st: { open: RunSummary | null; framed: boolean; provisional: TurnSummary | null } = {
+  const st: {
+    open: RunSummary | null;
+    framed: boolean;
+    provisional: TurnSummary | null;
+    /** Set by junco_chat_prompt, consumed by the NEXT junco_chat_turn_start
+     * (a steer prompt lands on the already-open run instead — spec §1.3). */
+    pendingPrompt: string | null;
+  } = {
     open: null,
     framed: false, // opened by junco_run_start → agent_end must not close it
     provisional: null,
+    pendingPrompt: null,
   };
 
   const closeRun = (end: RunEnd | null): void => {
@@ -154,6 +185,8 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
       turns: [],
       guardDecisions: [],
       toolCallCount: 0,
+      prompt: null,
+      notes: [],
     };
     out.runs.push(run);
     st.open = run;
@@ -161,6 +194,19 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
     return run;
   };
   const ensureRun = (): RunSummary => st.open ?? openRun(null);
+  // A note lands on the open run, else on the last run (a draft record
+  // follows its turn's end record, spec §3); a note before ANY run gets a
+  // prompt-less run that is closed immediately, so it renders and the
+  // transcript is not reported live.
+  const noteRun = (): RunSummary => {
+    if (st.open !== null) return st.open;
+    const last = out.runs[out.runs.length - 1];
+    if (last !== undefined) return last;
+    const run = openRun(null);
+    run.flow = "chat";
+    closeRun(V1_END);
+    return run;
+  };
 
   for (const line of lines) {
     if (line.trim() === "") continue;
@@ -193,6 +239,69 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
         case "junco_guard_decision":
           ensureRun().guardDecisions.push(r);
           break;
+        case "junco_chat_prompt":
+          // A prompt opens the NEXT run's frame; a steer lands on the open one.
+          if (r.mode === "steer" && st.open !== null) break;
+          st.pendingPrompt = r.text;
+          break;
+        case "junco_chat_turn_start": {
+          const run = openRun({
+            type: "junco_run_start",
+            flow: "chat",
+            body: "",
+            cwd: "",
+            modelId: r.modelId,
+            tools: r.tools,
+            timeoutMs: r.timeoutMs,
+            guard: { enabled: false },
+            ts: r.ts,
+          });
+          run.prompt = st.pendingPrompt;
+          st.pendingPrompt = null;
+          break;
+        }
+        case "junco_chat_turn_end":
+          ensureRun();
+          closeRun({
+            stopReason: r.status === "ok" ? "stop" : "error",
+            errorMessage: r.errorMessage,
+            timedOut: false,
+            abortedByGuard: false,
+            durationMs: r.durationMs,
+            usage: r.usage,
+          });
+          break;
+        case "junco_chat_turn_aborted":
+          ensureRun();
+          closeRun({
+            stopReason: `aborted:${r.reason}`,
+            errorMessage: null,
+            timedOut: r.reason === "timeout",
+            abortedByGuard: false,
+            durationMs: null,
+            usage: null,
+          });
+          break;
+        case "junco_chat_turn_rejected":
+          noteRun().notes.push({ kind: "rejected", reason: r.reason, until: r.until, ts: r.ts });
+          break;
+        case "junco_chat_draft":
+          noteRun().notes.push({
+            kind: "draft",
+            draftId: r.draftId,
+            draftKind: r.kind,
+            status: r.status,
+            ids: r.ids,
+            destination: r.destination,
+            ts: r.ts,
+          });
+          break;
+        case "junco_chat_session_reset":
+          noteRun().notes.push({ kind: "reset", reason: r.reason, ts: r.ts });
+          break;
+        case "junco_chat_transcript_degraded":
+          noteRun().notes.push({ kind: "degraded", ts: r.ts });
+          break;
         default:
           break; // forward compat: an unknown junco_* record is ignored
       }
@@ -205,6 +314,14 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
         break;
       case "agent_end":
         if (st.open !== null && !st.framed) closeRun(V1_END);
+        break;
+      case "compaction_start":
+      case "compaction_end":
+        ensureRun().notes.push({
+          kind: "compaction",
+          phase: e.type === "compaction_start" ? "start" : "end",
+          ts: null,
+        });
         break;
       case "tool_execution_start": {
         const run = ensureRun();
@@ -288,4 +405,16 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
 /** Every tool call id in file order — the transcript view's cursor index space. */
 export function toolCallIds(s: TranscriptSummary): string[] {
   return s.runs.flatMap((r) => r.turns.flatMap((t) => t.toolCalls.map((c) => c.id)));
+}
+
+export const draftAnchor = (draftId: string): string => `draft:${draftId}`;
+
+/** Tool ids ∪ draft anchors in file order — the chat view's cursor space. */
+export function anchorIds(s: TranscriptSummary): string[] {
+  const out: string[] = [];
+  for (const r of s.runs) {
+    for (const t of r.turns) for (const c of t.toolCalls) out.push(c.id);
+    for (const n of r.notes) if (n.kind === "draft") out.push(draftAnchor(n.draftId));
+  }
+  return out;
 }
