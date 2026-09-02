@@ -8,11 +8,35 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**"],
-      // Floor = the pre-consolidation baseline (90.70/83.33/87.64/92.86 measured
-      // 2026-07-21), rounded down to whole percent. Raising these is a reviewable
-      // edit; lowering them is a visible one — a silent drop cannot happen.
-      // docs/superpowers/specs/2026-07-21-test-suite-consolidation-design.md §5
-      thresholds: { statements: 90, branches: 83, functions: 87, lines: 92 },
+      // Global floor = the whole suite measured 2026-09-01 (92.51/85.46/90.63/
+      // 94.39), rounded down to whole percent. The round-down is the slack that
+      // absorbs ordinary churn; raising these is a reviewable edit and lowering
+      // them is a visible one, so a silent drop cannot happen. Ratchet them
+      // whenever the measured numbers clear the next whole percent.
+      // (Previous floor: 90/83/87/92, the 2026-07-21 baseline —
+      // docs/superpowers/specs/2026-07-21-test-suite-consolidation-design.md §5.)
+      //
+      // The glob keys below are per-tree floors for the security-critical code,
+      // where the global number is blind: one file falling from 95% to 0% moves
+      // 15k statements by a fraction of a percent — that is how sandbox/fsOps.ts
+      // reached 0% branch coverage (#362) — but it moves a ~400-statement tree by
+      // several points. Each is its own measurement, set ~2 points under, so a
+      // few uncovered additions still pass and a collapse fails. A glob does NOT
+      // carve its files out of the global set; both checks see every file.
+      thresholds: {
+        statements: 92,
+        branches: 85,
+        functions: 90,
+        lines: 94,
+        // measured 2026-09-01: 96.85 / 92.02 / 99.19 / 98.27
+        "src/agent/sandbox/**": { statements: 95, branches: 90, functions: 97, lines: 96 },
+        // measured 2026-09-01: 83.61 / 64.75 / 70.27 / 84.52 — low on purpose.
+        // This is the one module that reaches the real Pi SDK (the runtime
+        // `await import` plus the doctor/wizard helpers around it), so the
+        // uncovered remainder is SDK-bound code the unit suite cannot enter.
+        // The floor exists to stop that remainder from growing.
+        "src/agent/session.ts": { statements: 82, branches: 63, functions: 67, lines: 83 },
+      },
     },
   },
 });
