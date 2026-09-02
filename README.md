@@ -160,7 +160,7 @@ auto-forked and provisioned the same way `junco import` does.
 Requires **Node ≥ 22.19**, plus `git` and an authenticated `gh` for PR flows. The execution sandbox is on by default: macOS uses the built-in Seatbelt (nothing to install); **Linux needs `bubblewrap`** (`apt install bubblewrap` / `dnf install bubblewrap`) — or set `sandbox.backend: "none"` / `sandbox.enabled: false`.
 
 ```bash
-npx @ironforgesoftware/junco   # first run → setup wizard; afterwards → starts the daemon
+npx @ironforgesoftware/junco   # first run → setup wizard; afterwards → dashboard (daemon ensured)
 ```
 
 `junco dashboard` (or bare `junco` on a first run) opens a full-screen guided
@@ -191,6 +191,14 @@ frontmatter contract, `examples/` has templates, and the bundled
 **junco-dispatch** skill teaches coding agents to write well-formed tickets.
 → [Tickets guide](docs/tickets.md)
 
+When the exact bytes are already known, skip the agent: an **apply ticket**
+carries a `git format-patch` series in a `junco-patch` fence — or
+`junco submit --patch <series.patch> --repo <path>` composes one for you — and
+Junco lands it with `git am --3way` and opens the PR with zero model turns.
+Verification still gates the PR; a series that no longer applies cleanly
+escalates to a single agent session that treats the patch as a spec.
+→ [Apply tickets](docs/tickets.md#apply-tickets)
+
 ## Documentation
 
 | Guide                                      | What's inside                                                                                               |
@@ -211,6 +219,9 @@ frontmatter contract, `examples/` has templates, and the bundled
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `junco start` / `junco restart`                              | run the daemon / restart the installed service                                                                       |
 | `junco submit <file>`                                        | queue a ticket (also reads stdin)                                                                                    |
+| `junco submit --patch <file> --repo <path>`                  | compose an apply ticket from a `git format-patch` series — zero model turns (`--title`, `--why`, `--verify`)         |
+| `junco submit --plan <file> --repo <path>`                   | compile a `junco-plan` fence into a dependency-ordered ticket set, one PR per task (needs `planSets.enabled`)        |
+| `junco submit --as-issue <file>`                             | file the ticket as a parked, unlabeled issue via the bot account — your trigger label launches it (also `--plan`)    |
 | `junco lint <file>`                                          | validate a ticket (plan-lint + repo/branch preflight) without submitting                                             |
 | `junco submit --dry-run <file>`                              | report destination, discarded frontmatter, and lint without submitting                                               |
 | `junco dashboard`                                            | the fullscreen TUI                                                                                                   |
