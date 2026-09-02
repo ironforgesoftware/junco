@@ -75,8 +75,8 @@ export type DraftKind =
   | "ticket"
   | "amend"
   | "apply"
-  | "assess"
-  | "analyze"
+  | "audit"
+  | "investigate"
   | "ticketSet"
   | "planSet";
 
@@ -123,9 +123,9 @@ export interface ChatDraftRecord {
   draftId: string;
   kind: DraftKind;
   status: "parked" | "lint_failed" | "submitted" | "discarded";
-  /** Ticket ids / assess-analyze ids once known. */
+  /** Ticket ids / audit-investigate ids once known. */
   ids: string[];
-  /** null until submitted; "command" for assess/analyze. */
+  /** null until submitted; "command" for audit/investigate. */
   destination: "inbox" | "issue" | "command" | null;
   ts: string;
 }
