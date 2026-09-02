@@ -5044,7 +5044,7 @@ append. Chat **appends** — pi's default prompt is what teaches the read/grep/f
 
 - `src/agent/session.ts`: `SessionOverrides` gains `appendSystemPrompt?: string`. `resolveSandbox`/`buildSandbox` get it through a new `BuildSandboxOpts.appendSystemPrompt?: string`; `buildSandbox` (`src/agent/sandbox/index.ts:146-150`) constructs the loader with, when set, `appendSystemPromptOverride: () => [appendSystemPrompt]` plus `noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true` (with `noExtensions: true` already there, a reload then does nothing but resolve the prompt). `SdkToolFactories.DefaultResourceLoader`'s constructor type (`index.ts:50-54`) gains those optional keys. In `makePiSessionFactory`, after `buildSandbox`, `if (overrides?.appendSystemPrompt) await (sandboxLoader as { reload(): Promise<void> }).reload();`. When the sandbox is **off** and `appendSystemPrompt` is set, build the same inert loader directly: `const { DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent"); sandboxLoader = new DefaultResourceLoader({ cwd, agentDir: join(homedir(), ".pi", "agent"), noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, appendSystemPromptOverride: () => [overrides.appendSystemPrompt] }); await sandboxLoader.reload();` — chat never loads ambient extensions even unsandboxed (it is read-only by contract).
 - `tests/sandboxBuild.test.ts`: one case — with `appendSystemPrompt: "X"` the fake `DefaultResourceLoader` receives `appendSystemPromptOverride` returning `["X"]` and the four `no*` flags; without it, the constructor args are byte-identical to today's.
-- `ChatSession.ensureSession` (Task 6) passes `appendSystemPrompt: buildChatPrompt({ cwd: this.cwd, nwo: this.nwo, planSetsEnabled: this.cfg.planSets.enabled })` in the factory overrides. Add one assertion to `tests/chatSession.test.ts`: the factory receives `overrides.appendSystemPrompt` containing `--- DRAFTING CONTRACT ---`.
+- `ChatSession.ensureSession` (Task 6) passes `appendSystemPrompt: buildChatPrompt({ cwd: this.cwd, nwo: this.nwo, planSetsEnabled: this.cfg.planSets.enabled })` AND `readOnly: true` (Ruling R14 — upstream's `SessionOverrides.readOnly`, the seam Q&A uses at `runOnce.ts:451` so the sandbox keeps the checkout unwritable; chat is a read-only session by contract) in the factory overrides. Add assertions to `tests/chatSession.test.ts`: the factory receives `overrides.appendSystemPrompt` containing `--- DRAFTING CONTRACT ---` and `overrides.readOnly === true`.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -5882,7 +5882,9 @@ export async function postChat(
 }
 ```
 
-`src/tui/ghClient.ts` — imports: `subscribeChat, postChat, type ChatSubscribeHandlers` from `./chatClient.js`; `listChatDrafts, readChatDraft, writeChatDraft, archiveChatDraft, draftFilePath, type PendingDraft` from `../chat/draftStore.js`; `type ChatDraftRecord` from `../agent/transcriptSchema.js`. `DashboardClient` gains the members listed under Interfaces. In `makeGhDashboardClient`:
+**Lint ratchet (Ruling R15):** `makeGhDashboardClient` is pinned at 438 lines by `eslint.config.js`'s `GRANDFATHERED_FUNCTION_LINES` (max-lines-per-function, #438) — it may not grow. Put every new method body in a new module `src/tui/chatClientMethods.ts` exporting `chatClientMethods(cfg, deps): Pick<DashboardClient, "chat" | "listChatDrafts" | "readChatDraftFile" | "updateChatDraft" | "discardChatDraft" | "archiveSubmittedChatDraft" | "prContext" | "issueContext">` (with `attempt`, `ghFn`, `readFileFn`, `fetchFn`, `healthBase` passed in), and spread it into the client object with one line (`...chatClientMethods(cfg, { attempt, ghFn, readFileFn, fetchFn, healthBase })`). The code below is what goes in that module.
+
+`src/tui/ghClient.ts` — imports: `subscribeChat, postChat, type ChatSubscribeHandlers` from `./chatClient.js` move to `chatClientMethods.ts`; `listChatDrafts, readChatDraft, writeChatDraft, archiveChatDraft, draftFilePath, type PendingDraft` from `../chat/draftStore.js`; `type ChatDraftRecord` from `../agent/transcriptSchema.js`. `DashboardClient` gains the members listed under Interfaces. In `makeGhDashboardClient`:
 
 ```ts
     chat: {
@@ -7689,7 +7691,7 @@ const showCmdResult = useCallback(
 
 and return it.
 
-`src/tui/ghClient.ts` — `relintChatDraft(id)`:
+`src/tui/chatClientMethods.ts` (NOT `makeGhDashboardClient`, which is pinned at 438 lines — Ruling R15) — `relintChatDraft(id)` joins the chat methods module:
 
 ```ts
     relintChatDraft(id) {
@@ -8215,6 +8217,8 @@ Run: `npx vitest run tests/tuiViewActions.test.ts tests/tuiApp.chat.test.tsx tes
 - `structuralOnly` gains `case "chatCompose": return [s("type", "message"), s("enter", "send"), s("ctrl+j", "newline"), s("/", "commands"), s("esc", "blur/abort")];`.
 
 `src/tui/components/UnifiedRail.tsx` — prop `chatBadge?: (key: string) => string | null`; in the repo row, after the lifecycle `badges`: `const chatB = chatBadge?.(repo.key) ?? "";` rendered as `{chatB ? \` ${chatB}\` : ""}`inside the label`Text`.
+
+**Lint ratchet (Ruling R15):** `App` is pinned at 1796 lines by `eslint.config.js`'s `GRANDFATHERED_FUNCTION_LINES` (#438) and upstream #428 already split the action handlers into `src/tui/hooks/`. Put items 5–7 below (the chat action handlers, the input cascade block, and the slash router) in a new hook `src/tui/hooks/useChatInput.ts` that takes the nav spine + `chatApi` + `chatDraftActions` + `client` + `showToast` + `currentNwo` + `scrollBy`/`toEnd`/`setView`/`setPane`/`moveRail`/`moveRailTo` as read-only inputs and returns `{ handleChatKey(input, key): boolean; chatHandlers: Record<string, () => void>; onComposerSubmit(raw: string): void }` — App calls `handleChatKey` at the head of its cascade and spreads `chatHandlers` into the `case "chat"` branch. If App still crosses 1796 after that, raise the pin in `eslint.config.js` with a one-line justification comment (the config states a raised pin is a deliberate, reviewer-visible diff line).
 
 `src/tui/App.tsx`:
 
