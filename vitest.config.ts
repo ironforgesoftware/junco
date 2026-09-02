@@ -1,7 +1,10 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, configDefaults } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    // tests/e2e/ is its own project (vitest.e2e.config.ts): it spawns the
+    // built CLI and must never ride along with the unit run.
+    exclude: [...configDefaults.exclude, "tests/e2e/**"],
     // vi.restoreAllMocks() before every test: a vi.spyOn left behind by a
     // failed (or forgetful) test must not leak into the next one.
     restoreMocks: true,
