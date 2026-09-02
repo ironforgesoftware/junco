@@ -263,7 +263,7 @@ describe("review view: mouse", () => {
 });
 
 describe("footer chips: mouse", () => {
-  it("footer chip: clicking the 'queue' mnemonic jumps to the queue row; '← back' returns to the rail", async () => {
+  it("footer chip: clicking the 'queue' mnemonic jumps to the queue row and focuses its body", async () => {
     const r = renderApp();
     // Mount lands on pane 1 (rail), whose chip row carries the bare "queue"
     // label (mnemonic char colored — invisible in stripped frames).
@@ -275,58 +275,22 @@ describe("footer chips: mouse", () => {
     // idempotent (re-selecting the queue row is a no-op).
     await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("running"));
     // The chip parked the cursor on the queue system row + focused its body.
-    const f2 = r.lastFrame() ?? "";
-    const x2 = f2.split("\n")[footerY].indexOf("← back");
-    // Back on the rail: its hint set (with the add-repo chip) returns. A re-sent
-    // press lands on the rail hint row at worst (a harmless toast), never a
-    // destructive chip.
-    await fireUntil(r.stdin, press(x2, footerY), () =>
-      ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("add repo"),
-    );
+    // Clicking the OLD "back" structural chip to return to the rail is Task
+    // 3's to restore (see docs/superpowers/plans dated 2026-09-02, footer
+    // redesign): footerModel.ts now owns that hint (design spec section 3.2)
+    // and the OLD Footer here no longer renders — or makes clickable — any
+    // main-view structural chip until the new Footer is wired in.
   });
 
-  it("pane 3 focused: the 'enter detail' chip opens the PR overlay, not the issue detail", async () => {
-    // One junco PR for the selected repo so pane 3 has a selected row.
-    const pr = {
-      number: 100,
-      title: "Some PR",
-      url: "https://github.com/acme/api/pull/100",
-      headRefName: "junco/some-slug",
-      baseRefName: "main",
-      isDraft: false,
-      state: "OPEN",
-      reviewDecision: null,
-      mergeable: "MERGEABLE",
-      mergeStateStatus: "CLEAN",
-      checks: { pass: 1, fail: 0, pending: 0, total: 1 },
-      additions: 10,
-      deletions: 2,
-      changedFiles: 3,
-      createdAt: "2026-07-05T10:00:00Z",
-      updatedAt: "2026-07-06T10:00:00Z",
-      mergedAt: null,
-      author: "junco-bot",
-      labels: [],
-      nwo: "acme/api",
-    };
-    const client = {
-      ...stubClient,
-      listPrs: async (nwo: string) => okv({ prs: nwo === "acme/api" ? [pr] : [], staleAt: null }),
-    };
-    const r = renderApp({ client });
-    await until(() => (r.lastFrame() ?? "").includes("#100")); // PR row loaded in pane 3
-    r.stdin.write("\u001b[C"); // → pane 2
-    r.stdin.write("\u001b[C"); // → pane 3 (wide layout)
-    await until(() => (r.lastFrame() ?? "").includes("enter detail")); // pane-3 hint set
-    const f = r.lastFrame() ?? "";
-    const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("enter detail");
-    // Landing opens the PR overlay (unmounts the chip row's main-view set, so
-    // the retry self-terminates); the issue-detail overlay would say
-    // "preview · #1" instead — assert the PR one specifically.
-    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("pr · #100"));
-    expect(r.lastFrame() ?? "").not.toContain("preview · #");
-  });
+  // Removed (footer redesign Task 2): clicked pane 3's structural "enter
+  // detail" chip, which lived in viewActions.ts's now-deleted mainStructural.
+  // footerModel.ts's pure model owns that hint now (tests/footerModel.test.ts
+  // pins pane 3's structural enter/detail pairing), and the same navigation
+  // is still covered via the keyboard in tests/tuiApp.test.tsx's "enter in
+  // pane 3 opens the prDetail overlay" test — but the CLICK is only
+  // restorable once Task 3 wires buildFooterRows into Chrome.tsx's Footer
+  // (its own tuiChrome.test.tsx already covers clicking a chipActions entry
+  // by id or key).
 
   it("pane 1 (mount default): the 'o browser' chip opens the REPO, never the selected issue", async () => {
     let repoOpens = 0;

@@ -66,7 +66,10 @@ export type Chip =
     };
 
 export interface ContextBindings {
-  /** Render order: structural chips (key-first form) + visible mnemonics. */
+  /** Render order: structural chips (key-first form) + visible mnemonics for
+   * overlays/logOverlay/structuralOnly contexts; mnemonics only for `main`
+   * contexts (footerModel.ts's `navigateChips` owns the main view's
+   * structural vocabulary — a second copy here would drift from it). */
   chips: Chip[];
   /** key → action id — the FULL context map (hidden variants included). */
   keymap: ReadonlyMap<string, string>;
@@ -202,34 +205,11 @@ const LOG_OVERLAY_OPTIONS: MnemonicOption[] = [
 const LOG_OVERLAY_EXCLUDED: ReadonlySet<string> = new Set(["G"]);
 
 // ── structural chip sets (today's key-first hints, unchanged wording) ──────
-
-function mainStructural(body: MainBody, pane: 1 | 2 | 3, mode: LayoutMode): Chip[] {
-  const s = (key: string, label: string): Chip => ({ kind: "structural", key, label });
-  if (pane === 1) return [s("↑/↓", "move")];
-  if (pane === 3) return [s("↑/↓", "move"), s("enter", "detail"), s("←", "issues")];
-  switch (body) {
-    case "issues":
-      // No `,` config chip: the pane-2 row is width-budgeted at 120 cols
-      // (Footer clips, never wraps) — config stays on the key + help modal.
-      return [
-        s("↑/↓", "move"),
-        mode === "wide" ? s("←/→", "panes") : s("←", "repos"),
-        s("enter", "preview"),
-        s("/", "filter"),
-      ];
-    case "repoDetail":
-      return [s("[ ]", "scroll"), s("←", "back")];
-    case "queue":
-      return [s("↑/↓", "move"), s("enter", "transcript"), s("←", "back")];
-    case "outbox":
-    case "worktrees":
-      return [s("↑/↓", "move"), s("←", "back")];
-    case "daemon":
-      return [s("[/]", "scroll"), s("←", "back")];
-    case "logs":
-      return [s("enter", "open log"), s("←", "back")];
-  }
-}
+// Main contexts have no entry here: footerModel.ts's `navigateChips` /
+// `mainBodyNav` are the one source for the main view's structural
+// vocabulary (spec 2026-09-02 §3.2) — `viewStructural` / `structuralOnly` /
+// `LOG_OVERLAY_STRUCTURAL` remain because the model reads THEM verbatim for
+// non-main contexts.
 
 function viewStructural(view: OverlayView): Chip[] {
   const s = (key: string, label: string): Chip => ({ kind: "structural", key, label });
@@ -296,9 +276,10 @@ const LOG_OVERLAY_STRUCTURAL: Chip[] = [
 /** Which mnemonic ids render as chips per main pane, in CHIP ORDER (verbs
  * before globals on pane 2 — the derivation order is globals-first, which
  * reads wrong in the footer). The keymap always carries everything — chips
- * are the pane-relevant subset, like the old pane-filtered hint sets. Task 2
- * re-groups these into the two-row footer model; these lists just need to
- * carry the right ids in the meantime (spec 2026-09-02 §4). */
+ * are the pane-relevant subset, like the old pane-filtered hint sets. This is
+ * the input footerModel.ts's `buildFooterRows` re-groups into the two-row
+ * footer's actions row: pill, then this order's non-go verbs, │, then its
+ * go-globals (spec 2026-09-02 §4). */
 const RAIL_CHIP_ORDER = [
   "chat",
   "assess",
@@ -343,7 +324,11 @@ function toKeymap(all: DerivedMnemonic[]): ReadonlyMap<string, string> {
   return new Map(all.map((d) => [d.key, d.id]));
 }
 
-export function buildContextBindings(context: BindingContext, mode: LayoutMode): ContextBindings {
+/** `_mode`: kept for call-site compatibility (App.tsx and the test suite
+ * always pass layout mode here); unread now that main contexts carry no
+ * structural chips — footerModel.ts's `navigateChips` is what actually
+ * varies by mode (spec 2026-09-02 §3.2, the medium-width drops). */
+export function buildContextBindings(context: BindingContext, _mode: LayoutMode): ContextBindings {
   switch (context.kind) {
     case "main": {
       // The ONE pane this call knows about (it used to arrive as a second
@@ -363,9 +348,10 @@ export function buildContextBindings(context: BindingContext, mode: LayoutMode):
             : context.body === "issues"
               ? ISSUES_CHIP_ORDER
               : // Section/RepoDetail bodies: the body's own verbs, then the
-                // go-somewhere globals (spec 2026-09-02 §3.1) — chat is not
-                // among them yet (Task 2's pill promotion adds it to the
-                // footer row; the keymap already carries `c`).
+                // go-somewhere globals (spec 2026-09-02 §3.1). Chat is not
+                // among them: these bodies never have a repo in context, so
+                // footerModel's chat-pill promotion is a no-op here anyway —
+                // the keymap already carries `c` regardless.
                 [
                   ...BODY_VERBS[context.body].filter((o) => !o.hidden).map((o) => o.id),
                   "review",
@@ -373,13 +359,13 @@ export function buildContextBindings(context: BindingContext, mode: LayoutMode):
                 ];
       const byId = new Map(visible.map((d) => [d.id, d]));
       return {
-        chips: [
-          ...mainStructural(context.body, pane, mode),
-          ...chipOrder.flatMap((id) => {
-            const d = byId.get(id);
-            return d !== undefined ? [mnemonicChip(d)] : [];
-          }),
-        ],
+        // Mnemonics only (spec 2026-09-02 §3.2): footerModel.ts's
+        // `navigateChips` is the one source for this context's structural
+        // vocabulary now — see the docstring on `chips` above.
+        chips: chipOrder.flatMap((id) => {
+          const d = byId.get(id);
+          return d !== undefined ? [mnemonicChip(d)] : [];
+        }),
         keymap: toKeymap(all),
         all,
       };

@@ -172,10 +172,6 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       c: "chat",
     });
   });
-  it("main:queue structural chips offer enter → transcript", () => {
-    const chips = buildContextBindings(main("queue"), "wide").chips;
-    expect(chips).toContainEqual({ kind: "structural", key: "enter", label: "transcript" });
-  });
   it("logOverlay", () => {
     expect(km({ kind: "logOverlay" })).toEqual({
       f: "follow",

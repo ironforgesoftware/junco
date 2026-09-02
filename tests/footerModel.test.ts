@@ -1,0 +1,415 @@
+import { describe, it, expect } from "vitest";
+import { buildContextBindings, type BindingContext } from "../src/tui/viewActions.js";
+import {
+  buildFooterRows,
+  footerSegments,
+  keyGlyph,
+  TARGET_WIDTH,
+  type FooterChip,
+  type FooterInput,
+} from "../src/tui/footerModel.js";
+
+const rows = (
+  context: BindingContext,
+  over: { target?: string; chatReachable?: boolean; mode?: "wide" | "medium" } = {},
+) =>
+  buildFooterRows({
+    context,
+    bindings: buildContextBindings(context, over.mode ?? "wide"),
+    target: over.target ?? "acme/api",
+    chatReachable: over.chatReachable ?? true,
+    mode: over.mode ?? "wide",
+  });
+const texts = (chips: FooterChip[]): string[] =>
+  chips.map((c) => (c.kind === "separator" ? "│" : `${c.kind}:${c.id}:${c.label}`));
+
+describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
+  it("rail, repo row: pill, repo verbs, │, go-globals; navigate has the stable vocabulary", () => {
+    const r = rows({ kind: "main", body: "issues", pane: 1 });
+    expect(r.actions.label).toBe("acme/api");
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:chat:chat",
+      "mnemonic:assess:audit",
+      "mnemonic:browser:browser",
+      "mnemonic:refresh:refresh",
+      "mnemonic:addRepo:add repo",
+      "mnemonic:unwatch:unwatch",
+      "│",
+      "mnemonic:queue:queue",
+      "mnemonic:review:review",
+      "mnemonic:prs:PRs",
+    ]);
+    expect(r.navigate.label).toBe("navigate");
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:→:issues",
+      "structural:enter:detail",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+    expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:quit:quit"]);
+  });
+  it("issue list (pane 2): pill first, body verbs, browser, │, go-globals; / filter and ←→ panes on navigate", () => {
+    const r = rows({ kind: "main", body: "issues", pane: 2 }, { target: "issue #46" });
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:chat:chat",
+      "mnemonic:dispatch:import",
+      "mnemonic:approve:approve",
+      "mnemonic:analyze:investigate",
+      "mnemonic:transcript:transcript",
+      "mnemonic:assess:audit",
+      "mnemonic:browser:browser",
+      "│",
+      "mnemonic:prs:PRs",
+      "mnemonic:review:review",
+      "mnemonic:queue:queue",
+    ]);
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←/→:panes",
+      "structural:enter:preview",
+      "structural:/:filter",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+  it("PR pane (pane 3): pill, browser │ PRs, review", () => {
+    const r = rows({ kind: "main", body: "issues", pane: 3 }, { target: "PR #12" });
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:chat:chat",
+      "mnemonic:browser:browser",
+      "│",
+      "mnemonic:prs:PRs",
+      "mnemonic:review:review",
+    ]);
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:enter:detail",
+      "structural:←:issues",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+  it("a system body has no pill (chatReachable false) and lists its own verbs │ review, PRs", () => {
+    const r = rows(
+      { kind: "main", body: "queue", pane: 2 },
+      { target: "queue", chatReachable: false },
+    );
+    expect(texts(r.actions.chips)).toEqual([
+      "mnemonic:retry:retry",
+      "mnemonic:delete:delete",
+      "│",
+      "mnemonic:review:review",
+      "mnemonic:prs:PRs",
+    ]);
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:enter:transcript",
+      "structural:←:rail",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+  it("medium width drops g/G, : and , from navigate and nothing from actions", () => {
+    const r = rows({ kind: "main", body: "issues", pane: 2 }, { mode: "medium" });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←:repos",
+      "structural:enter:preview",
+      "structural:/:filter",
+    ]);
+    expect(r.actions.chips[0]!.kind).toBe("pill");
+  });
+  it("the target label is truncated to TARGET_WIDTH", () => {
+    const r = rows({ kind: "main", body: "issues", pane: 1 }, { target: "x".repeat(40) });
+    expect(r.actions.label).toHaveLength(TARGET_WIDTH);
+    expect(r.actions.label.endsWith("…")).toBe(true);
+  });
+
+  // Compact coverage: the remaining main body arms of mainBodyNav, each on
+  // pane 2 so the generic (non-rail/pane3/issues) path is exercised.
+  it("repoDetail body: [ ] scroll, ← rail", () => {
+    const r = rows({ kind: "main", body: "repoDetail", pane: 2 });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:[/]:scroll",
+      "structural:←:rail",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+  it("outbox body: ↑/↓ move, ← rail", () => {
+    const r = rows({ kind: "main", body: "outbox", pane: 2 });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←:rail",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+  it("worktrees body: ↑/↓ move, ← rail", () => {
+    const r = rows({ kind: "main", body: "worktrees", pane: 2 });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←:rail",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+  it("daemon body: [ ] scroll, ← rail", () => {
+    const r = rows({ kind: "main", body: "daemon", pane: 2 });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:[/]:scroll",
+      "structural:←:rail",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+  it("logs body: enter open log, ← rail", () => {
+    const r = rows({ kind: "main", body: "logs", pane: 2 });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:enter:open log",
+      "structural:←:rail",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+
+  it("the empty-go case: a hand-rolled main body with no go-globals in its chips", () => {
+    const context: BindingContext = { kind: "main", body: "logs", pane: 2 };
+    const r = buildFooterRows({
+      context,
+      bindings: {
+        chips: [
+          { kind: "mnemonic", id: "flush", key: "f", label: "flush", charIndex: 0, guarded: false },
+        ],
+        keymap: new Map(),
+        all: [],
+      },
+      target: "logs",
+      chatReachable: false,
+      mode: "wide",
+    });
+    expect(texts(r.actions.chips)).toEqual(["mnemonic:flush:flush"]);
+  });
+});
+
+describe("buildFooterRows — overlays and text-owning contexts", () => {
+  it("issue detail: pill, browser, transcript; navigate scroll + esc; pinned help + close", () => {
+    const r = rows({ kind: "view", view: "detail" }, { target: "#46" });
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:chat:chat",
+      "mnemonic:browser:browser",
+      "mnemonic:transcript:transcript",
+    ]);
+    expect(texts(r.navigate.chips)).toEqual(["structural:↑/↓:scroll", "structural:esc:back"]);
+    expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:close:close"]);
+  });
+  it("review: pill leads when the selected item has a repo, absent otherwise", () => {
+    expect(texts(rows({ kind: "view", view: "review" }).actions.chips)[0]).toBe("pill:chat:chat");
+    expect(
+      texts(rows({ kind: "view", view: "review" }, { chatReachable: false }).actions.chips)[0],
+    ).toBe("mnemonic:all:all");
+  });
+  it("chat view, composer focused: ⏎ send is the pill; navigate is the blurred-keys reminder", () => {
+    const r = rows({ kind: "structuralOnly", view: "chatCompose" }, { target: "chat · acme/api" });
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:enter:send",
+      "structural:ctrl+j:newline",
+      "structural:/:commands",
+      "structural:esc:blur/abort",
+    ]);
+    expect(r.navigate.label).toBe("");
+    expect(r.navigate.chips.map((c) => c.label).join(" ")).toContain("esc, then");
+  });
+  it("chat view, blurred: draft verbs on actions, i compose + movement on navigate", () => {
+    const r = rows({ kind: "view", view: "chat" }, { target: "chat · acme/api" });
+    expect(texts(r.actions.chips)).toEqual([
+      "mnemonic:submit:submit",
+      "mnemonic:edit:edit",
+      "mnemonic:discard:discard",
+      "mnemonic:route:route",
+      "mnemonic:thinking:thinking",
+      "mnemonic:follow:follow",
+    ]);
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:i:compose",
+      "structural:↑/↓:move",
+      "structural:enter:expand",
+      "structural:[/]:scroll",
+      "structural:esc:back",
+    ]);
+  });
+  it("palette / filtering / config / help: structural chips on navigate, actions carries only the label", () => {
+    const r = rows({ kind: "structuralOnly", view: "palette" }, { target: "palette" });
+    expect(r.actions.chips).toEqual([]);
+    expect(r.actions.label).toBe("palette");
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:type:filter",
+      "structural:↑/↓:move",
+      "structural:enter:run",
+      "structural:esc:close",
+    ]);
+    expect(r.navigate.pinned).toEqual([]);
+  });
+  it("log overlay: verbs on actions, search/scroll/bottom/close on navigate", () => {
+    const r = rows({ kind: "logOverlay" }, { target: "logs", chatReachable: false });
+    expect(texts(r.actions.chips)).toEqual([
+      "mnemonic:follow:follow",
+      "mnemonic:level:level",
+      "mnemonic:ticket:ticket",
+    ]);
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:/:search",
+      "structural:[ ]:scroll",
+      "structural:G:bottom",
+      "structural:esc:close",
+    ]);
+  });
+});
+
+describe("keyGlyph and footerSegments (spec §3.4)", () => {
+  it("maps dispatch key strings to glyphs without changing the strings", () => {
+    expect(keyGlyph("enter")).toBe("⏎");
+    expect(keyGlyph("↑/↓")).toBe("↑↓");
+    expect(keyGlyph("←/→")).toBe("←→");
+    expect(keyGlyph("[/]")).toBe("[ ]");
+    expect(keyGlyph("esc/p")).toBe("esc·p");
+    expect(keyGlyph("g/G")).toBe("g G");
+    expect(keyGlyph("esc")).toBe("esc");
+  });
+  it("a mnemonic lights one letter: accent + underline; the rest plain", () => {
+    expect(
+      footerSegments({
+        kind: "mnemonic",
+        id: "refresh",
+        key: "r",
+        label: "refresh",
+        charIndex: 0,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: "r", accent: true, underline: true, keycap: false, pill: false, dim: false },
+      { text: "efresh", accent: false, underline: false, keycap: false, pill: false, dim: false },
+    ]);
+  });
+  it("a guarded mnemonic uppercases the lit letter in place", () => {
+    const segs = footerSegments({
+      kind: "mnemonic",
+      id: "unwatch",
+      key: "U",
+      label: "unwatch",
+      charIndex: 0,
+      guarded: true,
+    });
+    expect(segs[0]).toMatchObject({ text: "U", accent: true, underline: true });
+  });
+  it("a mnemonic with charIndex null renders the key then the label plain", () => {
+    expect(
+      footerSegments({
+        kind: "mnemonic",
+        id: "reRun",
+        key: "r",
+        label: "re-run",
+        charIndex: null,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: "r", accent: true, underline: true, keycap: false, pill: false, dim: false },
+      { text: " re-run", accent: false, underline: false, keycap: false, pill: false, dim: false },
+    ]);
+  });
+  it("a pill is every segment pill-flagged, with the lit letter underlined", () => {
+    expect(
+      footerSegments({
+        kind: "pill",
+        id: "chat",
+        key: "c",
+        label: "chat",
+        charIndex: 0,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: " ", accent: false, underline: false, keycap: false, pill: true, dim: false },
+      { text: "c", accent: false, underline: true, keycap: false, pill: true, dim: false },
+      { text: "hat ", accent: false, underline: false, keycap: false, pill: true, dim: false },
+    ]);
+  });
+  it("a pill with a mid-label lit letter yields the split prefix/suffix segments", () => {
+    expect(
+      footerSegments({
+        kind: "pill",
+        id: "send",
+        key: "t",
+        label: "chat",
+        charIndex: 3,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: " cha", accent: false, underline: false, keycap: false, pill: true, dim: false },
+      { text: "t", accent: false, underline: true, keycap: false, pill: true, dim: false },
+      { text: " ", accent: false, underline: false, keycap: false, pill: true, dim: false },
+    ]);
+  });
+  it("a pill with charIndex null renders one pill-flagged segment: key, label, padding", () => {
+    expect(
+      footerSegments({
+        kind: "pill",
+        id: "enter",
+        key: "enter",
+        label: "send",
+        charIndex: null,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: " ⏎ send ", accent: false, underline: false, keycap: false, pill: true, dim: false },
+    ]);
+  });
+  it("a structural chip is a keycap glyph then a plain label", () => {
+    expect(
+      footerSegments({
+        kind: "structural",
+        id: "enter",
+        key: "enter",
+        label: "preview",
+        charIndex: null,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: " ⏎ ", accent: false, underline: false, keycap: true, pill: false, dim: false },
+      { text: " preview", accent: false, underline: false, keycap: false, pill: false, dim: false },
+    ]);
+  });
+  it("a separator is one dim │", () => {
+    expect(
+      footerSegments({
+        kind: "separator",
+        id: "|",
+        key: "",
+        label: "",
+        charIndex: null,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: "│", accent: false, underline: false, keycap: false, pill: false, dim: true },
+    ]);
+  });
+});
+
+// Type-only smoke: FooterInput must accept exactly this shape.
+const _typeCheck: FooterInput = {
+  context: { kind: "logOverlay" },
+  bindings: { chips: [], keymap: new Map(), all: [] },
+  target: "logs",
+  chatReachable: false,
+  mode: "wide",
+};
+void _typeCheck;

@@ -2970,8 +2970,7 @@ describe("workspace filter + pane navigation (medium)", () => {
     await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[C"); // →
     await tick();
-    expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint never leaked in
-    expect(r.lastFrame()).toContain("import"); // still on pane 2
+    expect(r.lastFrame()).toContain("import"); // still on pane 2 (pane 3 never reached)
   });
 });
 
@@ -3161,7 +3160,11 @@ describe("workspace wide mode", () => {
     await until(() => (r.lastFrame() ?? "").includes("#10")); // #10 sorts first (newer)
     r.stdin.write(ESC + "[C"); // → pane 2
     r.stdin.write(ESC + "[C"); // → pane 3
-    await until(() => (r.lastFrame() ?? "").includes("← issues"));
+    // Pane 2's own footer verb is gone once pane 3 has focus (footerModel.ts
+    // now owns main-view structural hints — bindings.chips carries mnemonics
+    // only, so pane 3's OLD "← issues" structural hint no longer renders
+    // here; Task 3 wires the new two-row Footer back in).
+    await until(() => !(r.lastFrame() ?? "").includes("import"));
     r.stdin.write("j"); // move down to #11
     await tick();
     r.stdin.write("b");
@@ -3176,19 +3179,27 @@ describe("workspace wide mode", () => {
       title: "PR",
       headRefName: "junco/ten-slug",
     });
-    const { client } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
+    const { client, prCalls } = makeClient({ "acme/api": [] }, { prsByRepo: { "acme/api": [pr] } });
     const r = renderWide(client, wl6());
     await until(() => (r.lastFrame() ?? "").includes("#10"));
     r.stdin.write(ESC + "[C"); // → pane 2
     r.stdin.write(ESC + "[C"); // → pane 3
-    await until(() => (r.lastFrame() ?? "").includes("← issues"));
+    // Pane 3's OLD "← issues" structural hint no longer renders (footerModel.ts
+    // owns it now; Task 3 wires the new Footer back in) — pane 2's own footer
+    // verb disappearing is the available signal that pane 3 has focus.
+    await until(() => !(r.lastFrame() ?? "").includes("import"));
     r.stdin.write("\r"); // enter -> prDetail
     await until(() => (r.lastFrame() ?? "").includes("checks:"));
     expect(r.lastFrame()).toContain("branch:");
     expect(r.lastFrame()).toContain("pr · #10");
     r.stdin.write(ESC);
-    await until(() => (r.lastFrame() ?? "").includes("← issues")); // back to pane-3 footer
+    await until(() => !(r.lastFrame() ?? "").includes("checks:")); // overlay closed
     expect(r.lastFrame()).toContain("#10"); // selection/list intact
+    // Pane 3 still focused, proven behaviorally rather than via the missing
+    // footer hint: its own `b` browser verb still targets the selected PR.
+    r.stdin.write("b");
+    await until(() => prCalls.length > 0);
+    expect(prCalls).toEqual([["acme/api", 10]]);
   });
 
   // This used to focus pane 3 (setPane(3)); the assertion below fails against
@@ -3309,12 +3320,15 @@ describe("workspace wide mode", () => {
     await until(() => (r.lastFrame() ?? "").includes("PRs · acme/api")); // pane 3 mounted, wide
     r.stdin.write(ESC + "[C"); // → pane 2
     r.stdin.write(ESC + "[C"); // → pane 3
-    await until(() => (r.lastFrame() ?? "").includes("← issues")); // pane-3 footer hints
+    // Pane 3's OLD "← issues" structural hint no longer renders (footerModel.ts
+    // owns it now; Task 3 wires the new Footer back in) — pane 2's own footer
+    // verb disappearing is the available signal that pane 3 has focus.
+    await until(() => !(r.lastFrame() ?? "").includes("import"));
     r.rerender(appEl({ columns: 100, rows: 30 })); // shrink below the wide breakpoint
     // Pane 2's footer hint set is back — m import is the reliable marker
-    // regardless of the enter-key wording.
+    // regardless of the enter-key wording. (This alone proves the clamp: pane
+    // 3 cannot be focused once its footer verb, "import"'s absence, reverses.)
     await until(() => (r.lastFrame() ?? "").includes("import"));
-    expect(r.lastFrame()).not.toContain("← issues"); // pane-3's hint is gone
   });
 
   // → is the advertised primary pane-movement key (l is now the quiet alias) —
@@ -3327,8 +3341,10 @@ describe("workspace wide mode", () => {
     r.stdin.write(ESC + "[C"); // → focus issues pane
     await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[C"); // → focuses pane 3
-    await until(() => (r.lastFrame() ?? "").includes("← issues"));
-    expect(r.lastFrame()).toContain("← issues"); // pane 3 footer still carries ←
+    // Pane 3's OLD "← issues" structural hint no longer renders (footerModel.ts
+    // owns it now; Task 3 wires the new Footer back in) — pane 2's own footer
+    // verb disappearing is the available signal that pane 3 has focus.
+    await until(() => !(r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[D"); // ← back to pane 2
     await until(() => (r.lastFrame() ?? "").includes("import"));
     r.stdin.write(ESC + "[D"); // ← back to pane 1
@@ -3472,9 +3488,6 @@ describe("transcript view", () => {
     return line !== undefined && line.includes("▌");
   };
 
-  // SGR press/release at 1-based wire coords (the file's mouse helper).
-  const click = (x1: number, y1: number) => `\u001b[<0;${x1};${y1}M\u001b[<0;${x1};${y1}m`;
-
   /** Queue section open, cursor parked on the recent `assess-x-1` row — the
    * shared prefix of the key flow and the footer-chip flow (which must NOT
    * press enter). */
@@ -3607,22 +3620,15 @@ describe("transcript view", () => {
     await until(() => (r.lastFrame() ?? "").includes("system ▸ queue"));
   });
 
-  it("clicking the enter transcript footer chip opens the transcript", async () => {
-    const { client } = makeClient({ "acme/api": [rawIssue] });
-    const r = await selectRecent(client);
-    // Footer chips row: the chip's ClickableBox spans its own "enter transcript"
-    // segment, so a press on the `e` lands inside it.
-    const lines = (r.lastFrame() ?? "").split("\n");
-    const yIdx = lines.findIndex((l) => l.includes("enter transcript"));
-    expect(yIdx).toBeGreaterThanOrEqual(0);
-    const x = (lines[yIdx] ?? "").indexOf("enter") + 1;
-    expect(x).toBeGreaterThan(0);
-    // fireUntil: a press can race a freshly-mounted ClickableBox's registration,
-    // and this click unmounts its own target (self-terminating — see until.ts).
-    await fireUntil(r.stdin, click(x, yIdx + 1), () =>
-      (r.lastFrame() ?? "").includes("transcript ▸ assess-x-1"),
-    );
-  });
+  // Removed (footer redesign, Task 2 of docs/superpowers/plans/2026-09-02-
+  // footer-redesign.md): this clicked the main-view queue body's structural
+  // "enter transcript" chip, which lived in viewActions.ts's now-deleted
+  // `mainStructural`. footerModel.ts's pure model owns that hint now (see
+  // tests/footerModel.test.ts's queue navigate case) but the OLD Footer here
+  // does not render it — Task 3 wires `buildFooterRows` into Chrome.tsx's
+  // Footer and restores click coverage there (its own tuiChrome.test.tsx
+  // already covers "chips with a chipActions entry are clickable by id
+  // (pill/mnemonic) or key (structural)").
 });
 
 describe("t on an issue opens its ticket transcript (#330)", () => {
