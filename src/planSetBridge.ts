@@ -37,11 +37,8 @@ import {
   type SetState,
 } from "./planSets.js";
 import { log } from "./logging.js";
-import { gh, GitOpError } from "./git.js";
+import { gh, GitOpError, describeError, GH_TIMEOUT_MS } from "./git.js";
 import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
-
-const GH_TIMEOUT = 60_000;
-const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** How long after close a plan-set record keeps being probed for plan-comment
  * edits. Past this, the sweep skips it entirely — the supersede path is for
@@ -179,7 +176,7 @@ async function guardOrQueue(
   } catch (e) {
     log.warn(`plan-set maintenance: ${label} failed (issue state on GitHub may be stale)`, {
       id,
-      error: errMsg(e),
+      error: describeError(e),
     });
   }
 }
@@ -201,7 +198,7 @@ async function postSetComment(
   writeFileSync(file, withCommentMarker(nwo, issueNumber, body), "utf8");
   try {
     await ghFn(cfg, ["issue", "comment", String(issueNumber), "--repo", nwo, "--body-file", file], {
-      timeoutMs: GH_TIMEOUT,
+      timeoutMs: GH_TIMEOUT_MS,
       retryNetwork: true,
     });
   } finally {
@@ -249,7 +246,7 @@ async function upsertDashboard(
             "--jq",
             ".id",
           ],
-          { timeoutMs: GH_TIMEOUT },
+          { timeoutMs: GH_TIMEOUT_MS },
         );
         const id = parseInt(r.stdout.trim(), 10);
         if (!Number.isFinite(id)) {
@@ -263,7 +260,7 @@ async function upsertDashboard(
       } catch (e) {
         log.warn("plan-set dashboard: create failed; will retry next sweep", {
           planId: record.planId,
-          error: errMsg(e),
+          error: describeError(e),
         });
         return false;
       }
@@ -279,7 +276,7 @@ async function upsertDashboard(
           "-F",
           `body=@${file}`,
         ],
-        { timeoutMs: GH_TIMEOUT },
+        { timeoutMs: GH_TIMEOUT_MS },
       );
       return true;
     } catch (e) {
@@ -288,7 +285,7 @@ async function upsertDashboard(
       } else {
         log.warn("plan-set dashboard: update failed; will retry next sweep", {
           planId: record.planId,
-          error: errMsg(e),
+          error: describeError(e),
         });
       }
       return false;
@@ -388,7 +385,7 @@ async function removeApprovedLabel(
       await ghFn(
         cfg,
         ["issue", "edit", String(g.issue), "--repo", g.nwo, "--remove-label", ll.approved],
-        { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+        { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
       );
     },
   );
@@ -446,7 +443,7 @@ async function drainPendingFanout(
   } catch (e) {
     log.warn(
       "plan-set fan-out: materialized plan unreadable; giving up on stranded fan-out children",
-      { planId: record.planId, ids: pending, error: errMsg(e) },
+      { planId: record.planId, ids: pending, error: describeError(e) },
     );
     record.pendingFanout = [];
     writePlanSetRecord(cfg, record);
@@ -535,7 +532,7 @@ async function trySupersede(
   } catch (e) {
     log.warn("plan-set supersede: could not read the plan comment; skipping this sweep", {
       planId: record.planId,
-      error: errMsg(e),
+      error: describeError(e),
     });
     return { kind: "unchanged" };
   }
@@ -556,14 +553,14 @@ async function trySupersede(
       const r = await ghFn(
         cfg,
         ["issue", "view", String(g.issue), "--repo", g.nwo, "--json", "labels"],
-        { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+        { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
       );
       const parsed = JSON.parse(r.stdout) as { labels?: { name: string }[] };
       labels = new Set((parsed.labels ?? []).map((l) => l.name));
     } catch (e) {
       log.warn("plan-set supersede: could not read issue labels; skipping this sweep", {
         planId: record.planId,
-        error: errMsg(e),
+        error: describeError(e),
       });
       return { kind: "unchanged" };
     }
@@ -719,7 +716,7 @@ export async function maintainPlanSets(
   const getLogin = async (): Promise<string> => {
     if (cachedLogin === null) {
       const r = await ghFn(cfg, ["api", "user", "--jq", ".login"], {
-        timeoutMs: GH_TIMEOUT,
+        timeoutMs: GH_TIMEOUT_MS,
         retryNetwork: true,
       });
       cachedLogin = r.stdout.trim();
@@ -840,7 +837,7 @@ export async function maintainPlanSets(
               "--remove-label",
               removeLabel,
             ],
-            { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+            { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
           );
         },
       );

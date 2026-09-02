@@ -24,7 +24,15 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { TERMINAL_DONE_STATUSES, type Config } from "./types.js";
 import { log } from "./logging.js";
-import { gh, git, GitOpError, isNetworkError } from "./git.js";
+import {
+  gh,
+  git,
+  GitOpError,
+  isNetworkError,
+  describeError,
+  GH_TIMEOUT_MS,
+  GH_PUSH_TIMEOUT_MS,
+} from "./git.js";
 import { acquirePidfileLock } from "./pidfileLock.js";
 import { lifecycleLabels } from "./githubInbox.js";
 import { FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
@@ -208,22 +216,11 @@ export function deadCount(cfg: Config, deps: OutboxDeps = {}): number {
 
 export const OUTBOX_MARKER_PREFIX = "<!-- junco:outbox:";
 export const MAX_OP_ATTEMPTS = 3;
-const GH_TIMEOUT = 60_000;
-const PUSH_TIMEOUT = 180_000; // mirrors pushBranch (src/pr.ts:111)
 
 /** GitOpError whose stderr matches the network-failure patterns (src/git.ts
  * isNetworkError) — i.e. "GitHub is unreachable", not "GitHub said no". */
 export function isOffline(e: unknown): boolean {
   return e instanceof GitOpError && isNetworkError(e.stderr);
-}
-
-/** GitOpError's `.message` is often a generic "<bin> <sub> failed (exit N)"
- * (see runCmd in git.ts) — the actionable reason lives in `.stderr`. Prefer
- * it wherever an error gets surfaced as a single string (dead-letter
- * `lastError`, a rethrown permanent failure) so it's actually diagnosable. */
-function describeError(e: unknown): string {
-  if (e instanceof GitOpError) return e.stderr || e.message;
-  return e instanceof Error ? e.message : String(e);
 }
 
 export async function tryOrEnqueue(
@@ -338,7 +335,7 @@ async function fetchOwnCommentBodies(
       "--jq",
       ".[] | {login: .user.login, body: .body}",
     ],
-    { timeoutMs: GH_TIMEOUT },
+    { timeoutMs: GH_TIMEOUT_MS },
   );
   return listed.stdout.split("\n").flatMap((line) => {
     const t = line.trim();
@@ -408,7 +405,7 @@ export async function fetchFindingMarkers(
   const listed = await ghFn(
     cfg,
     ["issue", "list", "--repo", nwo, "--state", "all", "--limit", "500", "--json", "body"],
-    { timeoutMs: GH_TIMEOUT },
+    { timeoutMs: GH_TIMEOUT_MS },
   );
   const bodies = (JSON.parse(listed.stdout) as { body: string | null }[]).map((b) =>
     typeof b.body === "string" ? b.body : "",
@@ -448,7 +445,7 @@ export async function ensureFindingLabels(
         spec.description,
         "--force",
       ],
-      { timeoutMs: GH_TIMEOUT },
+      { timeoutMs: GH_TIMEOUT_MS },
     );
   }
 }
@@ -532,7 +529,9 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
     let loginMemo: string | null = null;
     const ownLogin = async (): Promise<string> => {
       if (loginMemo === null) {
-        const out = await ghFn(cfg, ["api", "user", "--jq", ".login"], { timeoutMs: GH_TIMEOUT });
+        const out = await ghFn(cfg, ["api", "user", "--jq", ".login"], {
+          timeoutMs: GH_TIMEOUT_MS,
+        });
         loginMemo = out.stdout.trim();
       }
       return loginMemo;
@@ -556,7 +555,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
       writeFileSync(file, withCommentMarker(nwo, issue, body), "utf8");
       try {
         await ghFn(cfg, ["issue", "comment", String(issue), "--repo", nwo, "--body-file", file], {
-          timeoutMs: GH_TIMEOUT,
+          timeoutMs: GH_TIMEOUT_MS,
         });
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -644,7 +643,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           const args = ["issue", "edit", String(op.issue), "--repo", op.nwo];
           for (const l of op.add) args.push("--add-label", l);
           for (const l of op.remove) args.push("--remove-label", l);
-          await ghFn(cfg, args, { timeoutMs: GH_TIMEOUT });
+          await ghFn(cfg, args, { timeoutMs: GH_TIMEOUT_MS });
           return;
         }
         case "comment":
@@ -654,7 +653,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
           await gitFn(
             cfg,
             ["-C", op.repoPath, "push", "--set-upstream", op.remote ?? "origin", op.branch],
-            { timeoutMs: PUSH_TIMEOUT },
+            { timeoutMs: GH_PUSH_TIMEOUT_MS },
           );
           return;
         case "pr": {
@@ -662,7 +661,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
             await gitFn(
               cfg,
               ["-C", op.repoPath, "push", "--set-upstream", op.remote ?? "origin", op.branch],
-              { timeoutMs: PUSH_TIMEOUT },
+              { timeoutMs: GH_PUSH_TIMEOUT_MS },
             );
             op.pushed = true;
             rewrite(s);
@@ -689,7 +688,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
               if (op.draft) argv.push("--draft");
               for (const l of op.labels) argv.push("--label", l);
               for (const r of op.reviewers) argv.push("--reviewer", r);
-              const out = await ghFn(cfg, argv, { timeoutMs: GH_TIMEOUT });
+              const out = await ghFn(cfg, argv, { timeoutMs: GH_TIMEOUT_MS });
               const url = out.stdout
                 .trim()
                 .split("\n")
@@ -712,7 +711,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
                     "--jq",
                     ".url",
                   ],
-                  { timeoutMs: GH_TIMEOUT },
+                  { timeoutMs: GH_TIMEOUT_MS },
                 );
                 // `--jq .url` exits 0 with empty stdout or a bare `null` when
                 // the field is missing — same validation as the create path,
@@ -791,7 +790,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
                 "--remove-label",
                 ll.working,
               ],
-              { timeoutMs: GH_TIMEOUT },
+              { timeoutMs: GH_TIMEOUT_MS },
             );
           }
           return;
@@ -848,7 +847,7 @@ export async function flushOutbox(cfg: Config, deps: FlushDeps = {}): Promise<Fl
                 file,
                 ...op.labels.flatMap((l) => ["--label", l]),
               ],
-              { timeoutMs: GH_TIMEOUT },
+              { timeoutMs: GH_TIMEOUT_MS },
             );
             const url =
               out.stdout

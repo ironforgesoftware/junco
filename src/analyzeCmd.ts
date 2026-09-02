@@ -28,7 +28,7 @@ import {
 } from "./commentReview.js";
 import { sanitizeFindingText } from "./findings.js";
 import { slugifyId } from "./slug.js";
-import { gh, GitOpError } from "./git.js";
+import { gh, describeError, GH_TIMEOUT_MS } from "./git.js";
 import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
 
 /** Same slug rule buildExternalTicket applies to compose its ticket id
@@ -255,16 +255,6 @@ export async function runAnalyzeEditCommand(
   }
 }
 
-const GH_TIMEOUT = 60_000;
-
-/** GitOpError's `.message` is often a generic "<bin> <sub> failed (exit N)" —
- * the actionable reason lives in `.stderr`. Same helper as assessFiling.ts /
- * githubOutbox.ts (kept local to avoid a cross-module import for one line). */
-function describeError(e: unknown): string {
-  if (e instanceof GitOpError) return e.stderr || e.message;
-  return e instanceof Error ? e.message : String(e);
-}
-
 /** Post ONE comment live; return the URL gh prints, or null (a comment post
  * can legitimately produce no scrapeable URL). Mirrors createIssueLive's
  * tmpdir + --body-file + reverse-scan shape (assessFiling.ts). The body carries
@@ -284,7 +274,7 @@ async function postCommentLive(
     const out = await ghFn(
       cfg,
       ["issue", "comment", String(issue), "--repo", nwo, "--body-file", file],
-      { timeoutMs: GH_TIMEOUT },
+      { timeoutMs: GH_TIMEOUT_MS },
     );
     return (
       out.stdout

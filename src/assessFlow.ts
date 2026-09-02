@@ -21,7 +21,7 @@ import { resolve, sep } from "node:path";
 import type { Config, Ticket, RunResult } from "./types.js";
 import type { SpendLedger } from "./spendLedger.js";
 import { queuePaths, expandHome } from "./config.js";
-import { gh, git, runCmd, GitOpError, isNetworkError } from "./git.js";
+import { gh, git, runCmd, GitOpError, isNetworkError, describeError } from "./git.js";
 import {
   runAgent,
   makePiSessionFactory,
@@ -29,6 +29,7 @@ import {
   type SessionOverrides,
 } from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
+import { emptyRunResult } from "./agent/runResult.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { READ_ONLY_TOOLS } from "./runOnce.js";
@@ -77,28 +78,6 @@ export interface AssessFlowResult {
   deduped: number; // dropped because already filed on GitHub
   dropped: number; // invalid/hallucinated agent findings dropped
   parked: number; // findings written to the review store awaiting human-confirmed filing
-}
-
-/** Prefer the actionable stderr on a GitOpError, mirroring githubOutbox's
- * describeError — a bare `.message` is often a generic "<bin> failed (exit N)". */
-function describeError(e: unknown): string {
-  if (e instanceof GitOpError) return e.stderr || e.message;
-  return e instanceof Error ? e.message : String(e);
-}
-
-/** A zeroed RunResult for phases that fail before (or instead of) an agent run;
- * errorMessage carries the reason. Port of prFlow.ts emptyRunResult. */
-function emptyRunResult(errorMessage: string): RunResult {
-  return {
-    finalText: "",
-    toolCalls: [],
-    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
-    stopReason: null,
-    errorMessage,
-    timedOut: false,
-    durationMs: 0,
-    abortedByGuard: false,
-  };
 }
 
 export async function runAssessFlow(

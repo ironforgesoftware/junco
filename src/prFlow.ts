@@ -55,6 +55,7 @@ import {
   type SessionOverrides,
 } from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
+import { emptyRunResult } from "./agent/runResult.js";
 import { finalizePr, computePrStatus, type TerminalDirs } from "./finalize.js";
 import { enqueueOp, isOffline } from "./githubOutbox.js";
 import { queuePaths } from "./config.js";
@@ -223,21 +224,6 @@ function sumUsage(base: Usage, extras: Usage[]): Usage {
     }),
     base,
   );
-}
-
-/** Port of worker.py `_empty_run_result`: a synthetic RunResult for phases that
- * fail before (or instead of) an agent run. errorMessage carries the reason. */
-function emptyRunResult(phaseError: string): RunResult {
-  return {
-    finalText: "",
-    toolCalls: [],
-    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
-    stopReason: null,
-    errorMessage: phaseError,
-    timedOut: false,
-    durationMs: 0,
-    abortedByGuard: false,
-  };
 }
 
 /** Port of worker.py `_format_plan_lint_phase_error`. */

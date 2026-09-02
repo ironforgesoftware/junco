@@ -6,15 +6,13 @@
  * docs/superpowers/specs/2026-07-08-external-repo-dispatch-design.md
  */
 
-import { gh } from "./git.js";
+import { gh, GH_TIMEOUT_MS } from "./git.js";
 import { submitTicket } from "./dispatch.js";
 import { ensureExternalClone, type ExternalRepoDeps } from "./externalRepo.js";
 import { readWatchlist, writeWatchlist, watchlistPath, resolveWatchedRepos } from "./watchlist.js";
 import { withBotAuth } from "./ghAuth.js";
 import { classifyRepoAccess, ssoMessage } from "./botAccess.js";
 import type { Config } from "./types.js";
-
-const GH_TIMEOUT = 60_000;
 
 export interface ExternalDispatchDeps extends ExternalRepoDeps {
   submitFn?: typeof submitTicket;
@@ -127,7 +125,7 @@ export async function resolveIssueTarget(
   const view = await ghFn(
     cfg,
     ["issue", "view", String(ref.number), "--repo", ref.nwo, "--json", "title,body"],
-    { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+    { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
   );
   const { title, body } = JSON.parse(view.stdout) as { title: string; body: string | null };
 
