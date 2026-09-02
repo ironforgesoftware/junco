@@ -4,19 +4,33 @@
 // specs exercise the unified surface (issue rows, rail rows — repo AND system
 // — plus footer chips); renderApp mounts at the wide breakpoint
 // (WIDE_COLS_TEST) so the pane bands are stable.
+import React, { useContext } from "react";
 import { describe, it, afterEach, expect } from "vitest";
-import { cleanup } from "ink-testing-library";
+import { render, cleanup } from "ink-testing-library";
 import { until, fireUntil } from "./helpers/until.js";
-import { renderApp, okv, stubClient } from "./helpers/localFixtures.js";
+import { renderApp, makeAppProps, okv, stubClient } from "./helpers/localFixtures.js";
+import { App } from "../src/tui/App.js";
+import { MouseContext, MouseProvider } from "../src/tui/MouseProvider.js";
+import type { MouseStore } from "../src/tui/mouseRegions.js";
 import type { PendingAssess } from "../src/assessReview.js";
 
 afterEach(cleanup);
 
 // SGR mouse sequences at 0-based cell (x,y): ESC [ < b ; col ; row M, cols/rows
-// 1-based on the wire. b=0 press, b=65 wheel-down. `\u001b` (not a raw ESC byte)
-// so file edits never drop it.
+// 1-based on the wire. b=0 press, b=35 button-less motion (hover), b=65
+// wheel-down. `\u001b` (not a raw ESC byte) so file edits never drop it.
 const press = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
+const move = (x: number, y: number): string => `\u001b[<35;${x + 1};${y + 1}M`;
 const wheelDown = (x: number, y: number): string => `\u001b[<65;${x + 1};${y + 1}M`;
+
+/** Exposes the provider's hit-region store. Hover is a background color —
+ * invisible in a colorless frame (chalk emits no ANSI off a TTY, so frames
+ * carry hoverBg on GitHub Actions but not locally) — so the store is the only
+ * environment-independent place a test can see a motion event resolve. */
+function StoreTap({ tap }: { tap: { store: MouseStore | null } }): null {
+  tap.store = useContext(MouseContext)?.store ?? null;
+  return null;
+}
 
 const lineOf = (frame: string, needle: string): number =>
   frame.split("\n").findIndex((l) => l.includes(needle));
@@ -92,14 +106,26 @@ describe("rail system rows: mouse", () => {
     await fireUntil(r.stdin, press(3, y), () => (r.lastFrame() ?? "").includes("retry"));
   });
 
-  it("hovering a rail row does not crash; a click then selects it", async () => {
-    const r = renderApp();
+  it("hovering a rail row lands the hover on that row; a click then selects it", async () => {
+    const tap: { store: MouseStore | null } = { store: null };
+    const r = render(
+      <MouseProvider>
+        <StoreTap tap={tap} />
+        <App {...makeAppProps()} />
+      </MouseProvider>,
+    );
     await until(() => (r.lastFrame() ?? "").includes("beta/two"));
     const y = lineOf(r.lastFrame() ?? "", "beta/two");
-    // b=35 → button-less motion (hover) over the row.
-    r.stdin.write(`\u001b[<35;4;${y + 1}M`);
-    await until(() => (r.lastFrame() ?? "") !== ""); // hover styling is cosmetic — frame stays renderable
-    await fireUntil(r.stdin, press(3, y), () =>
+    const x = 3;
+    // Landed ⇔ the store's hovered region is the one under the pointer AND it
+    // carries an onPress — the row does, the rail's wheel-only wrapper (which
+    // a motion racing the row's registration would resolve to) does not.
+    // Motion is idempotent, so re-sending it is safe.
+    await fireUntil(r.stdin, move(x, y), () => {
+      const hit = tap.store?.resolve(x, y);
+      return hit?.handlers.onPress !== undefined && tap.store?.hoveredId() === hit.id;
+    });
+    await fireUntil(r.stdin, press(x, y), () =>
       (r.lastFrame() ?? "").split("\n").some((l) => l.includes("▌") && l.includes("beta/two")),
     );
   });

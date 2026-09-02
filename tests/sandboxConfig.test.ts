@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../src/config.js";
@@ -27,11 +27,22 @@ describe("sandbox config", () => {
     expect(cfg.sandbox).toEqual({
       enabled: true,
       backend: "auto",
+      requireBackend: false,
       network: "deny",
       extraDenyRead: [],
       extraAllowWrite: [],
       bashTimeoutSeconds: 600,
     });
+  });
+
+  it("accepts sandbox.requireBackend (#344) and rejects a non-boolean", () => {
+    expect(
+      loadConfig(writeConfig({ ...BASE, sandbox: { requireBackend: true } })).sandbox
+        .requireBackend,
+    ).toBe(true);
+    expect(() =>
+      loadConfig(writeConfig({ ...BASE, sandbox: { requireBackend: "yes" } })),
+    ).toThrow();
   });
 
   it("parses an explicit section and expands ~ in path lists", () => {
@@ -80,5 +91,20 @@ describe("sandbox config", () => {
 
   it("rejects an unknown backend", () => {
     expect(() => loadConfig(writeConfig({ ...BASE, sandbox: { backend: "docker" } }))).toThrow();
+  });
+
+  // ARCHITECTURE.md is billed as ground truth; it once documented this default backwards (#370).
+  it("ARCHITECTURE.md documents the sandbox default the schema ships", () => {
+    expect(loadConfig(writeConfig(BASE)).sandbox.enabled).toBe(true);
+    const arch = readFileSync(new URL("../ARCHITECTURE.md", import.meta.url), "utf8");
+    // The Phase-4 prose lives in a hard-wrapped fenced block: collapse the wrap first.
+    const phase4 = arch
+      .slice(arch.indexOf("When [sandbox].enabled"), arch.indexOf("Escalation ladder"))
+      .replace(/\s+/g, " ");
+    expect(phase4).toContain("On by default");
+    expect(phase4).not.toContain("disabled (the default)");
+    const moduleRow = arch.split("\n").find((l) => l.startsWith("| `agent/sandbox/`"));
+    expect(moduleRow).toContain("on by default (opt out via `[sandbox]`)");
+    expect(moduleRow).not.toContain("opt-in");
   });
 });

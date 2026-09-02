@@ -8,7 +8,7 @@
  * here touches the filesystem; the Map dies with the process.
  *
  * Typed structurally against `@earendil-works/pi-ai`'s `CredentialStore`
- * (`dist/auth/types.d.ts:57-79`, verified against 0.84.2) rather than by
+ * (`dist/auth/types.d.ts:57-79`, verified against 0.84.4) rather than by
  * importing it: this module stays SDK-free so it is unit-testable. No cast to
  * the SDK's `CredentialStore` type exists anywhere in this codebase.
  * Conformance is checked twice at `sdkRegistryOps` (session.ts): its

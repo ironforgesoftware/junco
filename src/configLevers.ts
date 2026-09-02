@@ -474,6 +474,14 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description: "Labels applied to every PR Junco opens.",
   },
+  {
+    path: "pr.secretScan",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "live",
+    description: "Scan the diff about to be pushed for secret shapes; fail the ticket on a hit.",
+  },
 
   // --- verify.* ---
   {
@@ -501,6 +509,15 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description: "Block PR creation when verify fails (vs. warn and continue).",
   },
+  {
+    path: "verify.sandboxed",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "live",
+    description:
+      "Run ## Verification blocks under the ticket's sandbox (false = your repo's code runs unconfined).",
+  },
 
   // --- sandbox.* ---
   {
@@ -520,6 +537,15 @@ export const LEVERS: Lever[] = [
     reload: "live",
     description:
       "Sandbox backend: auto (seatbelt on macOS, bwrap on Linux), a forced one, or none.",
+  },
+  {
+    path: "sandbox.requireBackend",
+    type: "boolean",
+    default: false,
+    editable: true,
+    reload: "live",
+    description:
+      "With backend=auto, fail closed when the OS backend probe fails (tickets refuse, doctor ✗) instead of degrading to none.",
   },
   {
     path: "sandbox.network",

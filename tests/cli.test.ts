@@ -1339,6 +1339,26 @@ describe("run(['bogus']) — unknown subcommand", () => {
     await run(["bogus"], deps);
     expect(deps.runOnceFn).not.toHaveBeenCalled();
   });
+
+  // The subcommand dispatch is a Record lookup, so an Object.prototype key
+  // (`toString`, `constructor`, `valueOf`) resolves to a real function on the
+  // table's prototype chain unless the lookup is own-property gated. Without
+  // that gate `junco toString` calls Object.prototype.toString and "succeeds"
+  // with a non-number exit code. Every inherited key must land on the same
+  // unknown-subcommand path as `bogus`.
+  it.each(["toString", "constructor", "valueOf", "hasOwnProperty", "__proto__"])(
+    "treats the inherited key %s as an unknown subcommand (exit 2)",
+    async (key) => {
+      const deps = makeDeps();
+      const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        expect(await run([key], deps)).toBe(2);
+      } finally {
+        errSpy.mockRestore();
+      }
+      expect(deps.mainLoopFn).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -2991,6 +3011,22 @@ describe("run(['restart']) — routing", () => {
     expect(code).toBe(0);
     expect(loaded).toBe(true); // broken config fails fast before any kick
     expect(gotPath).toBe(join("/x", ".junco", "config.json"));
+  });
+
+  it("`--force` reaches runRestartFn as {force: true}; a plain restart as {force: false} (#384)", async () => {
+    const { cfg } = freshDispatchVault();
+    const seen: boolean[] = [];
+    const deps = {
+      env: { HOME: "/x" },
+      loadConfigFn: () => cfg,
+      runRestartFn: async (_p: string, opts: { force: boolean }) => {
+        seen.push(opts.force);
+        return 0;
+      },
+    };
+    expect(await run(["restart", "--force"], deps)).toBe(0);
+    expect(await run(["restart"], deps)).toBe(0);
+    expect(seen).toEqual([true, false]);
   });
 
   it("a broken config aborts before the restart fn runs", async () => {

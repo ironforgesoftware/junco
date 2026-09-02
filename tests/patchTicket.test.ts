@@ -89,6 +89,93 @@ describe("parsePatchSeries", () => {
   });
 });
 
+// #339: git emits `diff --git "a/…" "b/…"` (C-quoted) whenever a path holds a
+// quote, backslash, tab, or non-ASCII byte under the default core.quotePath.
+// The plain-form regex never matched that line, so such a hunk's path never
+// reached unsafePatchPaths — a silent blind spot in a containment check.
+describe("parsePatchSeries — fails closed on any diff --git line that is not the plain a/… b/… form (#339)", () => {
+  const QUOTED = 'diff --git "a/g\\303\\251me.js" "b/g\\303\\251me.js"';
+
+  it("rejects a series whose only hunk carries a C-quoted header", () => {
+    const quoted = ONE.replace("diff --git a/game.js b/game.js", QUOTED);
+    expect(parsePatchSeries(fence(quoted))).toBe(null);
+  });
+
+  it("rejects a mixed series — one ordinary hunk must not carry a quoted-path hunk along unchecked", () => {
+    const second = ONE.replace("diff --git a/game.js b/game.js", QUOTED).replace("1/1", "2/2");
+    // Before the fix this parsed with files === ["game.js"]: the quoted hunk
+    // simply vanished from the file list.
+    expect(parsePatchSeries(fence(ONE + second))).toBe(null);
+  });
+
+  it("rejects a header quoted on one side only (rename onto a path that needs quoting)", () => {
+    const half = ONE.replace(
+      "diff --git a/game.js b/game.js",
+      'diff --git a/game.js "b/ren amed \\303\\251.js"',
+    );
+    expect(parsePatchSeries(fence(half))).toBe(null);
+  });
+
+  it("rejects a header with no a/ b/ prefix (diff.noprefix / --no-prefix output)", () => {
+    const noPrefix = ONE.replace("diff --git a/game.js b/game.js", "diff --git game.js game.js");
+    expect(parsePatchSeries(fence(noPrefix))).toBe(null);
+  });
+});
+
+const RENAME = `From 9f3a1c2e0000000000000000000000000000abcd Mon Sep 17 00:00:00 2001
+From: Dispatcher <d@example.com>
+Date: Sun, 31 Aug 2026 12:00:00 -0700
+Subject: [PATCH 1/1] refactor: move game.js
+
+---
+ game.js => level.js | 0
+ 1 file changed, 0 insertions(+), 0 deletions(-)
+
+diff --git a/game.js b/level.js
+similarity index 100%
+rename from game.js
+rename to level.js
+`;
+
+// #339: `git apply` takes a rename/copy header's path over the `diff --git`
+// line's (apply.c gitdiff_renamesrc/renamedst/copysrc/copydst overwrite
+// old_name/new_name), so a crafted series can say one thing on the header
+// line and rename somewhere else in the extended headers. The paths git will
+// actually use must be the ones unsafePatchPaths sees.
+describe("parsePatchSeries — rename/copy extended headers (#339)", () => {
+  it("adds `rename to` / `rename from` paths to files even when the diff --git line disagrees", () => {
+    const crafted = RENAME.replace("rename to level.js", "rename to ../level.js");
+    const s = parsePatchSeries(fence(crafted));
+    expect(s).not.toBe(null);
+    expect(s!.files).toEqual(["../level.js", "game.js", "level.js"]);
+    expect(unsafePatchPaths(s!.files)).toEqual(["../level.js"]);
+  });
+
+  it("adds `copy to` / `copy from` paths the same way", () => {
+    const crafted = RENAME.replace("rename from game.js", "copy from ../game.js").replace(
+      "rename to level.js",
+      "copy to level.js",
+    );
+    const s = parsePatchSeries(fence(crafted));
+    expect(s!.files).toEqual(["../game.js", "game.js", "level.js"]);
+    expect(unsafePatchPaths(s!.files)).toEqual(["../game.js"]);
+  });
+
+  it("fails closed on a C-quoted rename/copy header", () => {
+    const quoted = RENAME.replace("rename to level.js", 'rename to "l\\303\\251vel.js"');
+    expect(parsePatchSeries(fence(quoted))).toBe(null);
+  });
+
+  it("reads rename/copy headers only from a hunk's extended-header block, not from commit-message prose", () => {
+    const prose = RENAME.replace(
+      "Subject: [PATCH 1/1] refactor: move game.js\n\n",
+      "Subject: [PATCH 1/1] refactor: move game.js\n\nrename to ../whatever the message says\n\n",
+    );
+    const s = parsePatchSeries(fence(prose));
+    expect(s!.files).toEqual(["game.js", "level.js"]);
+  });
+});
+
 describe("unsafePatchPaths", () => {
   it("flags traversal, absolute, and empty paths; passes ordinary ones", () => {
     expect(unsafePatchPaths(["src/a.ts", "docs/b.md"])).toEqual([]);

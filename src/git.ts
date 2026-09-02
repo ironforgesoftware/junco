@@ -3,10 +3,12 @@
  *
  * Provides:
  *   - GitOpError           — typed error carrying stderr + returncode
+ *   - describeError        — the one caught-unknown → string spelling (#356)
  *   - runCmd               — thin spawn wrapper (check, timeout, capture)
  *   - NETWORK_ERROR_PATTERNS / isNetworkError — network-failure detection
  *   - runWithRetry         — exponential-backoff retry on network GitOpError
  *   - git / gh             — high-level wrappers that accept a Config-like cfg
+ *   - GH_TIMEOUT_MS / GH_PUSH_TIMEOUT_MS — the shared call/push budgets
  */
 
 import { spawn } from "node:child_process";
@@ -26,6 +28,17 @@ export class GitOpError extends Error {
     super(message);
     this.name = "GitOpError";
   }
+}
+
+/** The one spelling for "turn a caught unknown into a surfaceable string".
+ * A GitOpError's `.message` is a generic "<bin> <sub> failed (exit N)" that
+ * runCmd built — the actionable reason lives in `.stderr`, so prefer it
+ * wherever an error becomes a single string (a dead-letter `lastError`, a
+ * ticket's errorMessage, a dashboard toast). Strictly dominates the plain
+ * `e instanceof Error ? e.message : String(e)` form for every other input. */
+export function describeError(e: unknown): string {
+  if (e instanceof GitOpError) return e.stderr || e.message;
+  return e instanceof Error ? e.message : String(e);
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +140,7 @@ export async function runCmd(argv: string[], opts: RunOpts = {}): Promise<CmdRes
  * The exact 10 lowercased substrings from worker.py `_NETWORK_ERROR_PATTERNS`.
  * Patterns are intentionally lower-cased and matched via substring search.
  */
-export const NETWORK_ERROR_PATTERNS: readonly string[] = [
+const NETWORK_ERROR_PATTERNS: readonly string[] = [
   "i/o timeout",
   "dial tcp",
   "could not resolve host",
@@ -209,6 +222,14 @@ export async function runWithRetry<T>(
  * overrides runWithRetry's base backoff (default 1000ms) — it exists so tests
  * that script network failures don't eat seconds of real backoff. */
 export type GitCallOpts = RunOpts & { retryNetwork?: boolean; retryBaseDelayMs?: number };
+
+/** Default budget for a single `gh` API/CLI call — generous enough for a cold
+ * network round trip, short enough that a hung call can't stall a poll cycle. */
+export const GH_TIMEOUT_MS = 60_000;
+
+/** Budget for pushing a branch: minutes, not seconds. A first push of a large
+ * worktree over a slow uplink legitimately outlasts GH_TIMEOUT_MS. */
+export const GH_PUSH_TIMEOUT_MS = 180_000;
 
 /** Child-env for bot-authenticated gh/git calls: point gh (and gh's git
  * credential helper, which inherits the child env) at the bot's isolated

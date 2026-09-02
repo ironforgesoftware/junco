@@ -27,7 +27,7 @@ Set `JUNCO_CONFIG` to point junco at a specific config file, bypassing the canon
 }
 ```
 
-`tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `sandbox`, `critic`, `planLint`, `observability`, `github`, `assess` — is a sectioned object with sensible defaults; set only the keys you want to override. The queue and every other on-disk directory Junco keeps default to a location under `dataDir` (below) — nothing here needs to be set to get a working queue.
+`tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `sandbox`, `critic`, `planLint`, `observability`, `github`, `botAccount`, `planSets`, `assess`, `skills` — is a sectioned object with sensible defaults; set only the keys you want to override. The queue and every other on-disk directory Junco keeps default to a location under `dataDir` (below) — nothing here needs to be set to get a working queue.
 
 ## Unified data root
 
@@ -156,6 +156,8 @@ external                → clones/external         github-watchlist.json → wa
 
 ### `junco data migrate` — the opt-in full unification
 
+> **Sunset (#360): `junco data migrate` — and the pre-0.10 `flat`-layout / `vaultRoot` migration path it exists for — is removed in 1.0.** Every 0.x release keeps it, so the upgrade path for an older install is: run `junco data migrate` on a 0.x release _before_ moving to 1.0. Nothing is ever deleted — a root that was never migrated stays exactly where it is — but from 1.0 on, nothing in junco relocates it any more.
+
 Two things never move on their own: a `vaultRoot` queue, and the root itself while it's still the legacy `~/.local/state/junco` (or an explicit `dataDir` that predates the `v2` shape) — leaving either alone is always safe, and nothing silently relocates live data. `junco data migrate` is the explicit, opt-in command that unifies all of it in one run, in order:
 
 1. Moves the `vaultRoot` queue (if set) into `<targetRoot>/queue` (rename, falling back to copy+verify+fsync+delete across filesystems).
@@ -269,6 +271,65 @@ With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog 
 {
   "worker": {
     "applyFallbackToAgent": false
+  }
+}
+```
+
+## Sandbox backend
+
+`sandbox.backend` (default `"auto"`) picks the OS isolation layer for agent tool subprocesses: `auto` means "best available" — Seatbelt on macOS, bubblewrap on Linux — while `seatbelt`, `bwrap`, or `none` force one. An explicit backend that is missing or non-functional **fails closed**: every ticket errors with `SandboxUnavailableError` until it is installed. `auto` instead **degrades**: when its probe fails (no `bwrap` on the host, or a kernel that refuses unprivileged user namespaces), the session falls back to the `none` backend and continues — the environment scrub and the in-process filesystem path-jail still apply, but agent `bash` runs with no OS confinement. The daemon logs a warning naming exactly what was lost and `junco doctor` reports `⚠ sandbox`, yet tickets keep flowing and `junco status` looks healthy.
+
+`sandbox.requireBackend` (default `false`) makes `auto` fail closed too. With it on, a failed probe raises the same `SandboxUnavailableError` an explicit backend would, and `junco doctor` reports `✗ sandbox` (exit 1) instead of a warning — so an operator can demand the OS-isolation guarantee on every host without pinning `bwrap` vs `seatbelt` per machine. It has no effect on an explicit backend (already fail-closed) or on `backend: "none"` (no OS isolation by design). Both are live-reload levers.
+
+```json
+{
+  "sandbox": {
+    "backend": "auto",
+    "requireBackend": true
+  }
+}
+```
+
+## Pre-push secret scan
+
+`pr.secretScan` (default `true`) scans the added lines of the diff junco is about to push — `<base>..HEAD`, i.e. exactly what leaves the host — for a short list of high-confidence secret shapes: PEM private-key headers, GitHub tokens (`ghp_`/`gho_`/`github_pat_`…), AWS access-key IDs, Anthropic and Stripe live keys, Slack and npm tokens, and credentials embedded in a URL (`://user:password@host`, the shape a copied `.netrc`, `.npmrc`, or git remote takes). It exists because `sandbox.network: deny` governs the **agent's** tool calls and is never consulted when junco itself commits the worktree and pushes it under its own credential — so the push is an egress channel no sandbox rule sees.
+
+On a hit the push is refused: the ticket fails, the worktree is **preserved** for inspection, and the failure note names `path:line` and the rule that matched — **never the matched content**, which is not logged, stored, or copied into the ticket record. The rule set is deliberately narrow (fixed prefix + token-length body), so a match is almost never a false positive; it is a choke-point net, not a full secret scanner. Turn it off globally for a repo that legitimately vendors credential-shaped test fixtures. Live-reload lever.
+
+```json
+{
+  "pr": {
+    "secretScan": false
+  }
+}
+```
+
+## Plan sets
+
+`planSets` gates the plan-set compiler — one fenced `junco-plan` document compiled into a dependency-ordered set of tickets and pull requests (see [Tickets § Plan sets](tickets.md#plan-sets-the-junco-plan-fence)). Off by default. With it off, `junco submit --plan` and the GitHub bridge's `junco-plan` door refuse; the dependency machinery every plan set runs on (`depends_on:` claim gating, the merge sweep, failure cascade) stays on regardless, so hand-authored `depends_on:` sets never need this section.
+
+| Key                         | Default | Reload  | Effect                                                                                                                                                                                                                                                                                             |
+| --------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `planSets.enabled`          | `false` | restart | Compile `junco-plan` fences into ticket sets — `junco submit --plan <file> --repo <path>` locally, and the bridge's plan-set door (a vouched issue body or an approved plan comment carrying the fence).                                                                                           |
+| `planSets.mergePollSeconds` | `60`    | live    | Cadence (min 5) of the daemon's dependency sweep, which stamps `deps_satisfied` once a dependency is done and its PR merged, and cascades the dependents of a failed one to `failed/`. Runs with the bridge disabled too — it is what unblocks any `depends_on:` ticket, compiled or hand-written. |
+| `planSets.maxTasks`         | `10`    | live    | Cap (min 1) on tasks per plan; a larger plan is refused whole at compile time, with every validation error printed at once.                                                                                                                                                                        |
+
+```json
+{
+  "planSets": {
+    "enabled": true
+  }
+}
+```
+
+## Verification sandbox
+
+`verify.sandboxed` (default `true`) runs a ticket's `## Verification` bash blocks under the same execution sandbox as the agent's own `bash` tool — the ticket's backend and policy (Seatbelt on macOS, bubblewrap on Linux; network per `sandbox.network` and the ticket's `network:` opt-in; writes limited to the worktree, its scratch dir, the linked worktree's git metadata, and `sandbox.extraAllowWrite`; the built-in secret paths denied). The blocks matter because they execute whatever the agent left in the worktree — a `package.json` `scripts.test`, a Makefile target, a `conftest.py`, a test runner's global setup — and the environment scrub alone cannot keep that code away from what lives on disk (`~/.ssh`, the bot account's `gh` credential, every other checkout on the host). Set it to `false` only for a suite that genuinely must leave the sandbox (an integration test that talks to a real service, say), and understand what the opt-out means: **verification runs your repo's code unconfined**, as the daemon user, with the network and the whole filesystem available to it. Prefer the per-ticket `network: true` opt-in when egress is all that's missing. Inert when `sandbox.enabled` is `false` (there is no sandbox to run under), and a live-reload lever.
+
+```json
+{
+  "verify": {
+    "sandboxed": false
   }
 }
 ```

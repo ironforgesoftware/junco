@@ -9,7 +9,8 @@ import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { NWO_MAX_WIDTH } from "../src/tui/components/PrList.js";
 import { readWatchlist, writeWatchlist } from "../src/watchlist.js";
 import { githubTicketId } from "../src/githubInbox.js";
-import type { DashboardClient, HealthInfo, Result } from "../src/tui/ghClient.js";
+import type { DashboardClient, HealthInfo } from "../src/tui/ghClient.js";
+import type { Result } from "../src/types.js";
 import type { DashIssue } from "../src/tui/state.js";
 import type { DashPr } from "../src/tui/prState.js";
 import type { CliRunResult } from "../src/tui/cliRunner.js";
@@ -17,7 +18,7 @@ import type { QueueSnapshot } from "../src/tui/queueSnapshot.js";
 import type { LocalCheap } from "../src/tui/localSnapshot.js";
 import type { AssessHistory } from "../src/assessHistory.js";
 import type { UnwatchPlan } from "../src/unwatchCmd.js";
-import { until, fireUntil } from "./helpers/until.js";
+import { until, fireUntil, tick, wait } from "./helpers/until.js";
 import { makeDashPr, makeDashIssue } from "./helpers/dashFixtures.js";
 import { summarizeTranscript } from "../src/transcriptSummary.js";
 import {
@@ -440,8 +441,6 @@ function renderApp(
     </MouseProvider>,
   );
 }
-const tick = () => new Promise((r) => setTimeout(r, 30));
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Fake `runCliFn` for the unwatch flow, standing in for `junco unwatch`:
  * the `--plan` call answers with a one-line `PlanOutcome` JSON (override any
@@ -519,10 +518,7 @@ describe("App", () => {
     // The poll fires on mount and lands via setState. Loop-until-condition with a
     // bounded retry — never one fixed tick: a slow CI runner races React's commit
     // and a fixed timeout flakes (CLAUDE.md Ink gotcha; this flaked a release gate).
-    for (let i = 0; i < 50; i++) {
-      if ((r.lastFrame() ?? "").includes("4⚠")) break;
-      await new Promise((res) => setTimeout(res, 10));
-    }
+    await until(() => (r.lastFrame() ?? "").includes("4⚠"));
     expect(r.lastFrame()).toContain("4⚠");
   });
 
@@ -554,10 +550,7 @@ describe("App", () => {
       () => {},
       async () => [h],
     );
-    for (let i = 0; i < 50; i++) {
-      if ((r.lastFrame() ?? "").includes("0✓")) break;
-      await new Promise((res) => setTimeout(res, 10));
-    }
+    await until(() => (r.lastFrame() ?? "").includes("0✓"));
     expect(r.lastFrame()).toContain("0✓");
   });
 

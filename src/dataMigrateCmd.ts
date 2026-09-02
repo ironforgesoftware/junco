@@ -93,6 +93,10 @@
  * renaming, then remove the redundant legacy file — order-independent, and
  * correct whether the target journal is fresh or already holds entries from
  * an earlier run.
+ *
+ * Sunset (#360): this module, and migratePathRewrite.ts with it, serve only
+ * pre-0.10 flat-layout / vaultRoot installs and are removed in 1.0 — see
+ * docs/configuration.md § `junco data migrate`.
  */
 import {
   existsSync,
@@ -117,13 +121,14 @@ import {
   HEALTH_TIMEOUT_MS,
   queuePaths,
   configDeprecations,
-  validateConfigObject,
   expandHome,
   juncoHome,
   legacyConfigPath,
   defaultUserConfigPath,
   configPathOverride,
 } from "./config.js";
+import { updateConfigFile, type ConfigWriteDeps } from "./configWrite.js";
+import { describeError } from "./git.js";
 import {
   migrateStateTree,
   pendingStateTreeMigrations,
@@ -532,10 +537,6 @@ class PartialCopyError extends Error {
   }
 }
 
-function describeError(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 /** The receipt line for a pair whose cross-device copy was interrupted —
  * pushed BEFORE the error propagates (the same receipt-then-journal order the
  * data-root loop and phase 9 use), because the catch-path receipt is the
@@ -644,8 +645,8 @@ function moveDataRootPair(
 }
 
 /** Read → mutate → validate → atomic tmp+rename write of the RAW config.json
- * (same read/validate/atomic-write shape as `junco config set` in
- * src/configCmd.ts). Deleting `juncoSubdir` always accompanies `vaultRoot` —
+ * (updateConfigFile, configWrite.ts — the same path `junco config set`
+ * takes). Deleting `juncoSubdir` always accompanies `vaultRoot` —
  * the pair is meaningless without each other. Deleting
  * `observability.stateDir` deletes an emptied `observability` object too,
  * rather than leaving a stray `"observability": {}` behind. `dataDir` is
@@ -657,41 +658,33 @@ function moveDataRootPair(
  * expanded default, so an operator who never customized it gets no new
  * top-level key. Returns the list of human-readable changes made (empty when
  * nothing needed changing). */
-function rewriteConfig(
-  configPath: string,
-  targetRoot: string,
-  readFileFn: (p: string) => string,
-  writeFileFn: (p: string, s: string) => void,
-  renameFn: (from: string, to: string) => void,
-): string[] {
-  const raw = JSON.parse(readFileFn(configPath)) as Record<string, unknown>;
+function rewriteConfig(configPath: string, targetRoot: string, deps: ConfigWriteDeps): string[] {
   const receipt: string[] = [];
+  updateConfigFile(
+    configPath,
+    (raw) => {
+      if ("vaultRoot" in raw || "juncoSubdir" in raw) {
+        delete raw.vaultRoot;
+        delete raw.juncoSubdir;
+        receipt.push("removed vaultRoot/juncoSubdir — queue now lives under dataDir");
+      }
 
-  if ("vaultRoot" in raw || "juncoSubdir" in raw) {
-    delete raw.vaultRoot;
-    delete raw.juncoSubdir;
-    receipt.push("removed vaultRoot/juncoSubdir — queue now lives under dataDir");
-  }
+      const obs = raw.observability;
+      if (obs !== null && typeof obs === "object" && !Array.isArray(obs) && "stateDir" in obs) {
+        const obsRec = obs as Record<string, unknown>;
+        delete obsRec.stateDir;
+        if (Object.keys(obsRec).length === 0) delete raw.observability;
+        receipt.push("removed observability.stateDir — use top-level dataDir");
+      }
 
-  const obs = raw.observability;
-  if (obs !== null && typeof obs === "object" && !Array.isArray(obs) && "stateDir" in obs) {
-    const obsRec = obs as Record<string, unknown>;
-    delete obsRec.stateDir;
-    if (Object.keys(obsRec).length === 0) delete raw.observability;
-    receipt.push("removed observability.stateDir — use top-level dataDir");
-  }
-
-  const defaultDataDir = expandHome(DEFAULT_DATA_DIR);
-  if (targetRoot !== defaultDataDir) {
-    raw.dataDir = targetRoot;
-    receipt.push(`set dataDir = ${targetRoot}`);
-  }
-
-  validateConfigObject(raw);
-
-  const tmp = join(dirname(configPath), `.config.json.tmp-${process.pid}`);
-  writeFileFn(tmp, JSON.stringify(raw, null, 2) + "\n");
-  renameFn(tmp, configPath);
+      const defaultDataDir = expandHome(DEFAULT_DATA_DIR);
+      if (targetRoot !== defaultDataDir) {
+        raw.dataDir = targetRoot;
+        receipt.push(`set dataDir = ${targetRoot}`);
+      }
+    },
+    deps,
+  );
   return receipt;
 }
 
@@ -1549,8 +1542,11 @@ export async function runDataMigrate(
       }
     }
 
-    // 8. Config rewrite.
-    configReceipt = rewriteConfig(configPath, targetRoot, readFileFn, writeFileFn, renameFn);
+    // 8. Config rewrite. `deps` is passed whole: its readFileFn/writeFileFn/
+    // renameFn/unlinkFn members ARE the ConfigWriteDeps seam, and an unset
+    // writeFileFn gets configWrite's 0600 default (#343) rather than this
+    // module's plain-utf8 one.
+    configReceipt = rewriteConfig(configPath, targetRoot, deps);
 
     // 9. Config relocation (I-2 — see the module doc comment). Only when
     // THIS run's config actually lives at the legacy XDG path; a canonical-

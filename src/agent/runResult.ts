@@ -1,6 +1,21 @@
 import type { RunResult, ToolCall, Usage } from "../types.js";
 import type { AgentEvent } from "./session.js";
 
+/** Port of worker.py `_empty_run_result`: a synthetic RunResult for phases that
+ * fail before (or instead of) an agent run. errorMessage carries the reason. */
+export function emptyRunResult(errorMessage: string): RunResult {
+  return {
+    finalText: "",
+    toolCalls: [],
+    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+    stopReason: null,
+    errorMessage,
+    timedOut: false,
+    durationMs: 0,
+    abortedByGuard: false,
+  };
+}
+
 export class RunAccumulator {
   private text = "";
   /** Last COMPLETED non-empty assistant message (see message_start below). */
@@ -19,6 +34,7 @@ export class RunAccumulator {
     // The PUBLIC boundary is typed (AgentEvent — callers and fakes are checked
     // at the subscribe layer); internally we parse defensively against partial
     // shapes (test fakes, older servers), so access goes through one local cast.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- defensive read of a partial SDK event shape
     const e = event as any;
     switch (e?.type) {
       case "message_start":

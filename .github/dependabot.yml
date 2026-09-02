@@ -7,7 +7,8 @@ updates:
     commit-message:
       prefix: "chore(ci)"
   # npm is security-only: open-pull-requests-limit: 0 disables version-update
-  # PRs (deps are exact-pinned and updated manually), while security updates
+  # PRs (deps are exact-pinned and updated manually; the monthly cadence for
+  # that is .github/workflows/deps-sweep.yml), while security updates
   # still open — grouped, so one advisory wave arrives as ONE PR instead of
   # overlapping per-alert PRs (e.g. "bump esbuild and vitest" + "bump vite
   # and vitest" for the same vitest bump).

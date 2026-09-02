@@ -4,15 +4,16 @@
  * through the outbox seam (githubOutbox.ts) so offline runs converge, then
  * stamps per-finding `filed` records and keeps the batch parked (explicit
  * discard is the batch's only end-of-life). Labels are owned-only best-effort
- * DATA (external batches file label-free); dedup is author-scoped +
- * marker-based, identical for owned and unowned. This module is the seam
- * SP-2 (comment) / SP-3 (issue-context) build on.
+ * DATA (external batches file label-free); dedup is marker-based across the
+ * repo's most recent 500 issues (any author, closed included), identical for
+ * owned and unowned. This module is the seam SP-2 (comment) / SP-3
+ * (issue-context) build on.
  */
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config } from "./types.js";
-import { gh, GitOpError, isNetworkError } from "./git.js";
+import { gh, GitOpError, isNetworkError, describeError, GH_TIMEOUT_MS } from "./git.js";
 import {
   tryOrEnqueue,
   fetchFindingMarkers,
@@ -23,8 +24,6 @@ import {
 import { buildIssueTitle, buildIssueBody, findingLabels, type Finding } from "./findings.js";
 import { writePending, type FiledRecord, type PendingAssess } from "./assessReview.js";
 import { log } from "./logging.js";
-
-const GH_TIMEOUT = 60_000;
 
 export interface FileFindingsDeps {
   ghFn?: typeof gh;
@@ -40,11 +39,6 @@ export interface FileResult {
   /** The batch as persisted after this pass — filed stamps merged in. The
    * batch STAYS parked; explicit discard is the only end-of-life. */
   batch: PendingAssess;
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof GitOpError) return e.stderr || e.message;
-  return e instanceof Error ? e.message : String(e);
 }
 
 /** Create ONE issue live; return the URL gh prints, or null. Moved verbatim from
@@ -74,7 +68,7 @@ export async function createIssueLive(
         file,
         ...labels.flatMap((l) => ["--label", l]),
       ],
-      { timeoutMs: GH_TIMEOUT },
+      { timeoutMs: GH_TIMEOUT_MS },
     );
     return (
       out.stdout
@@ -91,7 +85,7 @@ export async function createIssueLive(
 /** File the SELECTED findings from a parked batch, stamping per-finding filed
  * records; the batch stays parked. Owned → labelled (best-effort ensure; on
  * failure, file label-free rather than fail the issue). External →
- * label-free by construction. Author-scoped dedup skips anything already
+ * label-free by construction. Marker-based dedup skips anything already
  * filed. Offline → durable outbox op. */
 export async function fileFindings(
   cfg: Config,

@@ -15,6 +15,7 @@ import {
   symlinkSync,
   chmodSync,
   writeFileSync,
+  readFileSync,
   readlinkSync,
   lstatSync,
 } from "node:fs";
@@ -38,6 +39,7 @@ import type { RepoContext } from "../src/repoContext.js";
 import type { Config } from "../src/types.js";
 import { setupForkHarness } from "./helpers/forkHarness.js";
 import { makeConfig as baseConfig } from "./helpers/config.js";
+import { gitLogShim } from "./helpers/ghScript.js";
 import { run, cloneHarness } from "./helpers/gitHarness.js";
 
 // ---------------------------------------------------------------------------
@@ -383,6 +385,47 @@ describe("prepareWorktree — fresh mode", () => {
 });
 
 // ---------------------------------------------------------------------------
+// prepareWorktree — end-of-options (issue #347)
+// ---------------------------------------------------------------------------
+
+// Every ref/path junco hands git goes after `--`, so a ref that ever slipped
+// past isSafeGitRef with a leading dash is read as a positional, never a flag.
+
+describe("prepareWorktree — `--` before positional refs/paths (fresh mode)", () => {
+  it("terminates options before the fetch refspec and the worktree add operands", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const logFile = join(tmpRoot, "git-fresh.log");
+    const cfg: Config = {
+      ...makeConfig(work, wtsRoot),
+      gitBin: gitLogShim(tmpRoot, "git-log-fresh.sh", logFile),
+    };
+    const ctx = makeContext(work, { branchName: "junco/eoo-fresh" });
+
+    const wtPath = await prepareWorktree(cfg, ctx, "eoo-fresh-task");
+
+    const argvs = readFileSync(logFile, "utf8").trim().split("\n");
+    expect(argvs).toContain("fetch origin -- main");
+    expect(argvs).toContain(`worktree add -b junco/eoo-fresh -- ${wtPath} origin/main`);
+  }, 30000);
+
+  it("terminates options on the forced (-B) worktree add fallback", async () => {
+    const { work, wtsRoot } = setupGitHarness(tmpRoot);
+    const logFile = join(tmpRoot, "git-forced.log");
+    const cfg: Config = {
+      ...makeConfig(work, wtsRoot),
+      gitBin: gitLogShim(tmpRoot, "git-log-forced.sh", logFile),
+    };
+    const ctx = makeContext(work, { branchName: "junco/eoo-forced" });
+    run(["git", "-C", work, "branch", "junco/eoo-forced", "origin/main"]);
+
+    const wtPath = await prepareWorktree(cfg, ctx, "eoo-forced-task");
+
+    const argvs = readFileSync(logFile, "utf8").trim().split("\n");
+    expect(argvs).toContain(`worktree add -B junco/eoo-forced -- ${wtPath} origin/main`);
+  }, 30000);
+});
+
+// ---------------------------------------------------------------------------
 // prepareWorktree — bot commit identity (per-worktree git config)
 // ---------------------------------------------------------------------------
 
@@ -653,6 +696,30 @@ describe("prepareWorktree — amend mode (fork)", () => {
     const ctx = forkCtx({ amendsPr: 9, branchName: "junco/amend-me" });
     const wt = await prepareWorktree(cfg, ctx, "t-amend");
     expect(run(["git", "-C", wt, "log", "-1", "--format=%s"]).trim()).toBe("fork tip");
+  }, 30000);
+
+  it("passes `--` before the fetch, branch -f and worktree add operands (issue #347)", async () => {
+    run(["git", "-C", h.work, "checkout", "-b", "junco/eoo-amend"]);
+    writeFileSync(join(h.work, "f.txt"), "fork tip\n");
+    run(["git", "-C", h.work, "add", "f.txt"]);
+    run(["git", "-C", h.work, "commit", "-m", "fork tip"]);
+    run(["git", "-C", h.work, "push", "fork", "junco/eoo-amend"]);
+    run(["git", "-C", h.work, "checkout", "main"]);
+    run(["git", "-C", h.work, "branch", "-D", "junco/eoo-amend"]);
+
+    const logFile = join(forkTmp, "git-amend.log");
+    const logCfg: Config = {
+      ...cfg,
+      gitBin: gitLogShim(forkTmp, "git-log-amend.sh", logFile),
+    };
+    const ctx = forkCtx({ amendsPr: 9, branchName: "junco/eoo-amend" });
+
+    const wt = await prepareWorktree(logCfg, ctx, "t-eoo-amend");
+
+    const argvs = readFileSync(logFile, "utf8").trim().split("\n");
+    expect(argvs).toContain("fetch fork -- junco/eoo-amend");
+    expect(argvs).toContain("branch -f -- junco/eoo-amend fork/junco/eoo-amend");
+    expect(argvs).toContain(`worktree add -- ${wt} junco/eoo-amend`);
   }, 30000);
 });
 

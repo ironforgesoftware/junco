@@ -5,27 +5,19 @@
  * without this module touching stdin/Ink itself.
  */
 
-import {
-  writeFileSync,
-  readFileSync,
-  renameSync,
-  mkdirSync,
-  existsSync,
-  unlinkSync,
-} from "node:fs";
-import { resolve, dirname, join } from "node:path";
-import type { Config } from "./types.js";
+import { readFileSync, mkdirSync, existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import type { Config, Result } from "./types.js";
 import {
   loadConfig,
   queuePaths,
   expandHome,
-  validateConfigObject,
   resolveBotGhConfigDir,
   resolveDataRoot,
 } from "./config.js";
+import { writeConfigFile } from "./configWrite.js";
 import {
   defaultAnswers,
-  renderConfigJson,
   buildConfigObject,
   answersFromConfig,
   diffAnswers,
@@ -54,8 +46,8 @@ export interface WizardDeps {
   listCatalogProvidersFn?: () => Promise<CatalogEntry[]>;
   writeFileFn?: (path: string, content: string) => void;
   renameFn?: (from: string, to: string) => void;
-  /** Best-effort cleanup of the PID-suffixed temp file when renameFn throws
-   * after the temp write succeeded. */
+  /** Best-effort cleanup of the PID-suffixed temp file when the write or the
+   * rename throws (writeConfigFile, configWrite.ts). */
   unlinkFn?: (p: string) => void;
   readFileFn?: (path: string) => string;
   existsFn?: (path: string) => boolean;
@@ -69,9 +61,7 @@ export interface WizardDeps {
   ensureSkillLinksFn?: (cfg: Config) => SkillLinksReport;
 }
 
-export type WizardIoResult =
-  | { ok: true; io: WizardIO; mode: "fresh" | "rerun" }
-  | { ok: false; error: string };
+export type WizardIoResult = Result<{ io: WizardIO; mode: "fresh" | "rerun" }>;
 
 /** Builds the WizardIO (fresh-scaffold or rerun-prefill, plus the atomic
  * write path) without touching stdin/Ink — the standalone entry point the
@@ -80,11 +70,12 @@ export type WizardIoResult =
 export function buildWizardIO(configPath: string, deps: WizardDeps = {}): WizardIoResult {
   const resolved = resolve(configPath);
   const existsFn = deps.existsFn ?? existsSync;
-  const mkdirFn = deps.mkdirFn ?? ((p) => mkdirSync(p, { recursive: true }));
-  const writeFileFn = deps.writeFileFn ?? ((p, c) => writeFileSync(p, c, "utf8"));
+  // Owner-only (#343): the config's parent dir is the data root by default —
+  // created here, before the daemon's ensureDataTree, so the mode has to be
+  // right here. (The config file itself is 0600 via writeConfigFile's default
+  // writer, configWrite.ts.)
+  const mkdirFn = deps.mkdirFn ?? ((p) => mkdirSync(p, { recursive: true, mode: 0o700 }));
   const readFileFn = deps.readFileFn ?? ((p) => readFileSync(p, "utf8"));
-  const renameFn = deps.renameFn ?? renameSync;
-  const unlinkFn = deps.unlinkFn ?? unlinkSync;
   const loadConfigFn = deps.loadConfigFn ?? loadConfig;
 
   const ensureDirs = (cfg: Config): string => {
@@ -161,42 +152,22 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
     write: (a: WizardAnswers) => {
       let written = false;
       let changes: AnswerDiff[] = [];
-      // Atomic temp+rename, PID-suffixed (ConfigView/configCmd pattern) — a
-      // crash mid-write must never leave a truncated config.json where a
-      // full one used to not exist. If the rename itself throws (e.g. EPERM
-      // on the destination) after the temp write already succeeded, don't
-      // leave the temp file behind — best-effort unlink, then rethrow so the
-      // caller still sees the original failure.
-      const renameOrCleanup = (tmp: string, dest: string): void => {
-        try {
-          renameFn(tmp, dest);
-        } catch (e) {
-          try {
-            unlinkFn(tmp);
-          } catch {
-            /* best effort */
-          }
-          throw e;
-        }
-      };
+      // Both branches are whole-object writes through writeConfigFile
+      // (configWrite.ts): validate before the file is touched — so a
+      // schema-invalid answer set never leaves a half-written file (or none
+      // at all) for the caller to trip over — then atomic PID-suffixed
+      // temp+rename, with the temp file unlinked best-effort and the original
+      // error rethrown when the rename fails (e.g. EPERM on the destination).
+      // Fresh mode creates the parent dir first: that is the data root, which
+      // the daemon would create anyway, and the temp file needs it to exist.
       if (mode === "fresh") {
-        // Validate before touching disk — mirrors rerun mode's ordering
-        // below, so a schema-invalid answer set never leaves a half-written
-        // file (or none at all) for the caller to trip over.
-        validateConfigObject(buildConfigObject(a));
         mkdirFn(dirname(resolved));
-        const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
-        writeFileFn(tmp, renderConfigJson(a));
-        renameOrCleanup(tmp, resolved);
+        writeConfigFile(resolved, buildConfigObject(a), deps);
         written = true;
       } else {
         changes = diffAnswers(raw as Record<string, unknown>, a);
         if (changes.length > 0) {
-          const next = applyAnswers(raw as Record<string, unknown>, a);
-          validateConfigObject(next);
-          const tmp = join(dirname(resolved), `.config.json.tmp-${process.pid}`);
-          writeFileFn(tmp, JSON.stringify(next, null, 2) + "\n");
-          renameOrCleanup(tmp, resolved);
+          writeConfigFile(resolved, applyAnswers(raw as Record<string, unknown>, a), deps);
           written = true;
         }
       }
@@ -228,7 +199,7 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
     runGhLogin: () => (deps.runGhLoginFn ?? runGhLogin)(wizGhBin, botGhConfigDir),
   };
 
-  return { ok: true, io, mode };
+  return { ok: true, value: { io, mode } };
 }
 
 export function summary(configPath: string, queueRoot: string, wrote: boolean): string {

@@ -47,11 +47,11 @@ export type AgentEvent = AgentSessionEvent;
  * surface this small lets `runAgent` be exercised with a fake (see
  * tests/session.test.ts) and isolates the real SDK to `makePiSessionFactory`.
  *
- * Verified against the installed SDK 0.84.2 (`dist/core/agent-session.d.ts`):
- *   - subscribe(listener): () => void   (line 276)
- *   - prompt(text, options?): Promise<void>  (line 355; resolves after the agent loop finishes)
- *   - dispose(): void   (line 283)
- *   - abort(): Promise<void>   (line 433)
+ * Verified against the installed SDK 0.84.4 (`dist/core/agent-session.d.ts`):
+ *   - subscribe(listener): () => void   (line 285)
+ *   - prompt(text, options?): Promise<void>  (line 364; resolves after the agent loop finishes)
+ *   - dispose(): void   (line 292)
+ *   - abort(): Promise<void>   (line 449)
  */
 export interface AgentSessionLike {
   subscribe(listener: (event: AgentEvent) => void): () => void;
@@ -63,10 +63,9 @@ export interface AgentSessionLike {
 /**
  * The chat seam (spec 2026-09-01 §2.1): the interactive subset of the SDK
  * session the dashboard chat drives. Extends — never mutates — AgentSessionLike
- * so every existing fake keeps compiling. Verified against SDK 0.84.2
- * `dist/core/agent-session.d.ts`: steer(text) line 371; isStreaming line 291,
- * isIdle line 293; messages getter line 318. (queueMessage is declared there
- * too but is `undefined` on the runtime object — deliberately not used.)
+ * so every existing fake keeps compiling. Verified against SDK 0.84.4
+ * `dist/core/agent-session.d.ts`: steer(text) line 380; isStreaming line 300,
+ * isIdle line 302; messages getter line 327.
  */
 export interface ChatSessionLike extends AgentSessionLike {
   steer(text: string): Promise<void>;
@@ -102,12 +101,14 @@ export type TranscriptSinkFactory = (path: string) => TranscriptSink | null;
  * The default fs-backed transcript sink. Creates the parent dir and appends to
  * the file; open/write failures degrade to a warning and drop the transcript
  * (subsequent writes become no-ops) rather than crashing the ticket.
+ * Dir 0700 / file 0600 (#343): a transcript carries every `read` tool result,
+ * i.e. verbatim contents of private-repo files.
  */
 export const defaultTranscriptSink: TranscriptSinkFactory = (path) => {
   let stream: WriteStream | null;
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    stream = createWriteStream(path, { flags: "a" });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    stream = createWriteStream(path, { flags: "a", mode: 0o600 });
   } catch (e) {
     log.warn("transcript disabled (path not writable)", {
       path,
@@ -415,7 +416,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  * `credentials` explicitly is load-bearing: `ModelRuntime.create`'s own
  * default is a store file-backed at `authPath`, and that backend CREATES the
  * file (`CreateModelRuntimeOptions.credentials`/`.authPath`, `dist/core/
- * model-runtime.d.ts:4-6`, verified against 0.84.2 — `AuthStorage` itself is
+ * model-runtime.d.ts:4-6`, verified against 0.84.4 — `AuthStorage` itself is
  * no longer exported from the SDK's root; only `readStoredCredential` is,
  * per `dist/index.d.ts:4`). A null `cfg.model.apiKey` seeds nothing and
  * defers to the SDK's own provider env-var fallback at request time.
@@ -447,6 +448,10 @@ export interface SessionOverrides {
   thinkingLevel?: ThinkingLevel | string;
   /** Per-ticket egress opt-in; overrides cfg.sandbox.network for this session. */
   network?: boolean;
+  /** #346: scratch is the session's only writable root. Set by the read-only
+   *  flows (Q&A, audit, investigate), whose cwd is the operator's live
+   *  checkout — the sandbox enforces read-only independently of `tools`. */
+  readOnly?: boolean;
   /** Chat (spec 2026-09-01 §2.1): a file-backed SDK SessionManager built by
    *  makeSessionManager. Absent → SessionManager.inMemory(cwd), unchanged for
    *  every other caller. Opaque here; typed at the SDK boundary only. */
@@ -498,7 +503,12 @@ export async function resolveSandbox(
   let backend = selectBackend(cfg.sandbox.backend, platform);
   const availability: BackendAvailability =
     backend.name === "none" ? { available: true } : await backend.checkAvailability(probe);
-  const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, availability.available);
+  const outcome = classifyAvailability(
+    cfg.sandbox.backend,
+    backend.name,
+    availability.available,
+    cfg.sandbox.requireBackend,
+  );
   // #312: the probe's own words, when it had any. "Install bubblewrap" is
   // actively misleading when bubblewrap IS installed and the kernel refused
   // (ubuntu-24.04's kernel.apparmor_restrict_unprivileged_userns=1), so the
@@ -507,10 +517,15 @@ export async function resolveSandbox(
   const why = availability.reason === undefined ? "" : ` Probe said: ${availability.reason}.`;
   if (outcome === "fail-closed") {
     // Explicit backend the operator demanded is unavailable — never silently
-    // run less-sandboxed than they asked. (auto degrades instead; see below.)
+    // run less-sandboxed than they asked. (auto degrades instead, see below —
+    // unless sandbox.requireBackend turned that degrade into this refusal, in
+    // which case the opt-out to name is that lever, not the whole sandbox.)
+    const optOut =
+      cfg.sandbox.backend === "auto"
+        ? `sandbox.requireBackend is on — install it, or set sandbox.requireBackend=false to degrade to backend="none".`
+        : `Install it, or set sandbox.backend="none" / sandbox.enabled=false.`;
     throw new SandboxUnavailableError(
-      `sandbox backend "${backend.name}" unavailable (binary missing or non-functional).${why} ` +
-        `Install it, or set sandbox.backend="none" / sandbox.enabled=false.`,
+      `sandbox backend "${backend.name}" unavailable (binary missing or non-functional).${why} ${optOut}`,
     );
   }
   if (outcome === "degrade") {
@@ -530,11 +545,16 @@ export async function resolveSandbox(
     backend = noneBackend;
   }
   const network = overrides?.network ?? cfg.sandbox.network === "allow";
+  const readOnly = overrides?.readOnly === true;
   const scratchDir = makeScratch();
   // #320: a linked worktree's index/objects/refs live under the owning repo's
   // .git, outside the cwd — without these roots the agent's first `git commit`
   // dies with "Unable to create '…/index.lock': Operation not permitted".
-  const gitDirs = await (deps.gitDirs ?? ((c: string) => resolveGitDirs(cfg, c)))(cwd);
+  // #346: a read-only session never commits, so its git metadata is neither
+  // looked up nor made writable — nor mkdir'd (the cwd is a live checkout).
+  const gitDirs = readOnly
+    ? null
+    : await (deps.gitDirs ?? ((c: string) => resolveGitDirs(cfg, c)))(cwd);
   const pathExists = deps.pathExists ?? existsSync;
   const ensureDir = deps.ensureDir ?? ((p: string) => mkdirSync(p, { recursive: true }));
   // Grant only what exists — creating a missing one first: bwrap --binds every
@@ -560,7 +580,8 @@ export async function resolveSandbox(
     }
     gitWritePaths.push(p);
   }
-  log.info("sandbox: linked worktree git write roots", { cwd, roots: gitWritePaths, skipped });
+  if (readOnly) log.info("sandbox: read-only session; scratch is the only writable root", { cwd });
+  else log.info("sandbox: linked worktree git write roots", { cwd, roots: gitWritePaths, skipped });
   // #277: the data tree is denied WHOLESALE and its execution roots (the
   // worktrees and the clone gitdirs this session's git reads) are allowed
   // back. Both halves must be threaded in — the denies alone would wall the
@@ -580,12 +601,13 @@ export async function resolveSandbox(
     dataAllowPaths: dataPaths.allowDirs,
     network,
     botGhConfigDir: cfg.botAccount.configDir,
+    readOnly,
   });
   return { backend, policy };
 }
 
 /** The `ModelRuntime` surface junco uses, kept narrow so the cast at this
- * boundary is auditable (verified against 0.84.2 `dist/core/model-runtime.d.ts`:
+ * boundary is auditable (verified against 0.84.4 `dist/core/model-runtime.d.ts`:
  * `getModel`/`getModels`/`registerProvider`). */
 interface SdkModelRuntime {
   getModel(providerId: string, modelId: string): unknown;
@@ -597,8 +619,11 @@ interface SdkModelRuntime {
  * A models store that never touches disk. `ModelRuntime.create` otherwise
  * defaults to a `FileModelsStore` writing `models-store.json` NEXT TO the
  * operator's models.json — junco must not write there.
+ *
+ * Exported so tests can assert identity on the option literal below
+ * (tests/sessionFactoryInvariants.test.ts) rather than re-describing it.
  */
-const NOOP_MODELS_STORE = {
+export const NOOP_MODELS_STORE = {
   read: async () => undefined,
   write: async () => {},
   delete: async () => {},
@@ -617,6 +642,10 @@ const NOOP_MODELS_STORE = {
  * default file store can write beside the operator's models.json).
  * `allowModelNetwork` defaults to false and is left alone. Junco's three
  * cascade paths are all static, so skipping the refresh costs nothing.
+ *
+ * Exported for that invariant's test: `ModelRuntimeStatic` is the only SDK
+ * value here, so a fake makes the option literal assertable without an SDK
+ * import (tests/sessionFactoryInvariants.test.ts).
  */
 // The OBJECT LITERAL passed to `create()` below is annotated with `satisfies
 // CreateModelRuntimeOptions` (imported type-only from the SDK root, which
@@ -629,7 +658,7 @@ const NOOP_MODELS_STORE = {
 // `CredentialStore` here because `modify` is declared with method-shorthand
 // syntax on both interfaces, which tsc checks bivariantly regardless of
 // `strictFunctionTypes`.
-function sdkRegistryOps(
+export function sdkRegistryOps(
   ModelRuntimeStatic: { create(options: Record<string, unknown>): Promise<unknown> },
   credentials: InMemoryCredentialStore,
 ): RegistryOps {
@@ -650,10 +679,10 @@ function sdkRegistryOps(
 }
 
 /** The subset of the SDK's resolved `Model<Api>` fields `getResolvedModelInfo`
- * surfaces (verified against the installed 0.84.2: `@earendil-works/pi-ai`
+ * surfaces (verified against the installed 0.84.4: `@earendil-works/pi-ai`
  * resolves as a nested dependency of `pi-coding-agent`, not hoisted to the
  * workspace root — `node_modules/@earendil-works/pi-coding-agent/node_modules/
- * @earendil-works/pi-ai/dist/types.d.ts:670-691`: `id`, `provider`, `baseUrl`,
+ * @earendil-works/pi-ai/dist/types.d.ts:695-716`: `id`, `provider`, `baseUrl`,
  * `api`, `cost` all present on every resolved model regardless of cascade
  * path). */
 interface SdkResolvedModelFields {
@@ -772,9 +801,14 @@ export function makePiSessionFactory(
       sdkRegistryOps(ModelRuntime, credentials),
       (msg, meta) => log.warn(msg, meta),
     );
+    // modelSetup's registry seam is deliberately SDK-free, so both handles come
+    // back as `unknown` and are re-widened here — the one place that may name
+    // SDK runtime values — to hand straight to createAgentSession.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- opaque SDK handle from the SDK-free registry seam
     const model = resolvedModel.model as any;
     // The SAME runtime resolution ran on — an inline provider registered
     // during the cascade lives on this object, so the session must use it.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- opaque SDK handle from the SDK-free registry seam
     const modelRuntime = resolvedModel.registry.backing as any;
     if (!modelRuntime) {
       throw new Error(
@@ -847,24 +881,24 @@ export type SessionManagerMode =
 
 /**
  * Chat sessions persist under a junco-owned dir (spec 2026-09-01 §2.1) —
- * never ~/.pi. SDK 0.84.2 `dist/core/session-manager.d.ts`: create(cwd,
+ * never ~/.pi. SDK 0.84.4 `dist/core/session-manager.d.ts`: create(cwd,
  * sessionDir) line 318, open(path, sessionDir, cwdOverride) line 325,
  * getSessionFile() line 208.
  *
- * Verified against the installed SDK (0.84.2) directly, since both facts
+ * Verified against the installed SDK (0.84.4) directly, since both facts
  * below are easy to assume wrong from the `.d.ts` alone:
  *   - create() writes nothing to disk immediately: getSessionFile() reports a
- *     path right away, but session-manager.js's _persist() (the write path)
- *     skips every write until the first ASSISTANT reply lands (the
- *     `hasAssistant` gate). A session with zero completed turns leaves no
- *     file on disk at all.
+ *     path right away, but session-manager.js's _persist() (line 726, the
+ *     write path) skips every write until the first ASSISTANT reply lands
+ *     (the `hasAssistant` gate, line 729). A session with zero completed
+ *     turns leaves no file on disk at all.
  *   - open() on a missing path never throws — with or without a
  *     cwdOverride. The static open()'s only existsSync+header-read guard
- *     (session-manager.js ~1190) is skipped whenever cwdOverride is defined,
- *     which we always pass; even without that guard, `_setSessionFile`'s
- *     (line 614) "file doesn't exist" branch (line 639) just calls
- *     `newSession()` and reassigns the explicit path, silently yielding a
- *     fresh, empty session AT that path instead of erroring.
+ *     (session-manager.js line 1193) is skipped whenever cwdOverride is
+ *     defined, which we always pass; even without that guard,
+ *     `_setSessionFile`'s (line 616) "file doesn't exist" branch (line 641)
+ *     just calls `newSession()` and reassigns the explicit path, silently
+ *     yielding a fresh, empty session AT that path instead of erroring.
  *
  * That second fact is exactly what we want here: "created, no turn yet,
  * daemon restarted" and "file lost" both mean the same thing — there is

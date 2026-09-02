@@ -175,7 +175,7 @@ Each filed finding becomes one GitHub issue:
 
 ## Config
 
-`assess.*` — knobs for `junco audit` runs (verified against `src/config.ts`):
+`assess.*` — knobs for `junco audit` runs (verified against `src/configSchema.ts`):
 
 | Key                      | Default | Description                                                                                                                                                                                                                                                                                 |
 | ------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

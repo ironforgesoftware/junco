@@ -22,9 +22,15 @@ import { resolve, sep } from "node:path";
 import type { Config, Ticket, RunResult } from "./types.js";
 import type { SpendLedger } from "./spendLedger.js";
 import { queuePaths, expandHome } from "./config.js";
-import { git, GitOpError } from "./git.js";
-import { runAgent, makePiSessionFactory, type AgentSessionLike } from "./agent/session.js";
+import { git, describeError } from "./git.js";
+import {
+  runAgent,
+  makePiSessionFactory,
+  type AgentSessionLike,
+  type SessionOverrides,
+} from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
+import { emptyRunResult } from "./agent/runResult.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
 import { READ_ONLY_TOOLS } from "./runOnce.js";
@@ -43,7 +49,11 @@ const MAX_ISSUE_TITLE = 300; // display-only; mirrors assess's title cap
 
 export interface AnalyzeDeps {
   gitFn?: typeof git;
-  sessionFactoryFor?: (cfg: Config, cwd: string) => () => Promise<AgentSessionLike>;
+  sessionFactoryFor?: (
+    cfg: Config,
+    cwd: string,
+    overrides?: SessionOverrides,
+  ) => () => Promise<AgentSessionLike>;
   abortSignal?: AbortSignal;
   onProgress?: Parameters<typeof runAgent>[0]["onProgress"] extends infer T ? T : never;
   /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
@@ -62,28 +72,6 @@ export interface AnalyzeFlowResult {
   requeued: boolean; // transient agent failure -> ticket went back to inbox
   result: RunResult; // what finalize consumed (finalText = the summary)
   parked: boolean; // a comment draft was written to the review store
-}
-
-/** Prefer the actionable stderr on a GitOpError, mirroring assessFlow's
- * describeError — a bare `.message` is often a generic "<bin> failed (exit N)". */
-function describeError(e: unknown): string {
-  if (e instanceof GitOpError) return e.stderr || e.message;
-  return e instanceof Error ? e.message : String(e);
-}
-
-/** A zeroed RunResult for phases that fail before (or instead of) an agent run;
- * errorMessage carries the reason. Port of assessFlow.ts emptyRunResult. */
-function emptyRunResult(errorMessage: string): RunResult {
-  return {
-    finalText: "",
-    toolCalls: [],
-    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
-    stopReason: null,
-    errorMessage,
-    timedOut: false,
-    durationMs: 0,
-    abortedByGuard: false,
-  };
 }
 
 export async function runAnalyzeFlow(
@@ -196,10 +184,14 @@ export async function runAnalyzeFlow(
 
   // --- Phase 3: Agent run. Mirror assessFlow's agent block: read-only tool
   // default, cwd = repoPath, supervisor gated the same way, same transcript
-  // convention, timeout from the ticket, abortSignal/onProgress threaded. ---
+  // convention, timeout from the ticket, abortSignal/onProgress threaded.
+  // `readOnly` (#346): repoPath is the operator's live checkout, so the sandbox
+  // keeps scratch as the only writable root whatever `tools:` the ticket names. ---
   const analyzeTools = ticket.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
   const analyzeCfg: Config = { ...cfg, tools: analyzeTools };
-  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(analyzeCfg, repoPath);
+  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(analyzeCfg, repoPath, {
+    readOnly: true,
+  });
   // Spend is recorded immediately by the envelope, BEFORE any requeue/finalize
   // branching below — mirrors runOnce.ts's Q&A wire, prFlow's main-session
   // record, and assessFlow's Phase-3 Task 4 wire: the dollars were spent

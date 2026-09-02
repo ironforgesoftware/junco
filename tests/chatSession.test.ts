@@ -21,7 +21,7 @@ const cfg = makeConfig({
   removeWorktreeOnSuccess: true,
 });
 
-/** A fake SessionManager seam mirroring SDK 0.84.2 (Ruling R5): "create"
+/** A fake SessionManager seam mirroring SDK 0.84.4 (Ruling R5): "create"
  * mints a file under dir; "open" never throws — a missing path simply yields
  * a session at that path. */
 const fakeSm = async (mode: SessionManagerMode): Promise<{ manager: unknown; file: string }> => {

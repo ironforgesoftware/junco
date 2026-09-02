@@ -6,12 +6,13 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { Config } from "../types.js";
+import { dirname } from "node:path";
+import type { Config, Result } from "../types.js";
 import { dataTreePaths } from "../dataTree.js";
+import { cachePathFor, prCachePathFor } from "../githubCachePaths.js";
 import { transcriptPathFor } from "../slug.js";
 import { summarizeTranscript, type TranscriptSummary } from "../transcriptSummary.js";
-import { gh, git } from "../git.js";
+import { gh, git, describeError } from "../git.js";
 import { lifecycleLabels, nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
 import { tryOrEnqueue, isOffline, type OutboxOp } from "../githubOutbox.js";
 import type { DashIssue, DashAction } from "./state.js";
@@ -26,8 +27,6 @@ import { fileFindings, type FileResult } from "../assessFiling.js";
 import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
 import { postDraftCore, analyzeIssueCore } from "../analyzeCmd.js";
 import type { ChatHealth } from "../chat/chatManager.js";
-
-export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /** One `readTranscript` outcome. `unchanged` is the live poll's steady state
  * (stat only, no read); `missing` is ENOENT — a pre-transcript ticket, or a
@@ -47,22 +46,6 @@ interface IssueCache {
 interface PrCache {
   fetchedAt: string; // ISO
   prs: DashPr[];
-}
-
-/** `<dataDir>/github-cache/issues-<owner>__<repo>.json` — `/` in the nwo
- * would otherwise collide with the path separator. */
-export function cachePathFor(cfg: Config, nwo: string): string {
-  return join(dataTreePaths(cfg).githubCache, `issues-${nwo.replace(/\//g, "__")}.json`);
-}
-
-/** `<dataDir>/github-cache/prs-<owner>__<repo>.json` — a sibling path to
- * `cachePathFor`, kept separate (not a param on it) so issues and PRs never
- * collide in the same file. Exported only for the unwatchCmd.ts drift-pin
- * test (tests/unwatchCmd.test.ts), which asserts unwatchCmd's independently
- * duplicated naming never diverges from this one — no other caller should
- * address the PR cache directly. */
-export function prCachePathFor(cfg: Config, nwo: string): string {
-  return join(dataTreePaths(cfg).githubCache, `prs-${nwo.replace(/\//g, "__")}.json`);
 }
 
 /** Mirrors the applyAction switch's add/remove lists EXACTLY — including the
@@ -245,8 +228,67 @@ export interface GhClientDeps {
   analyzeCoreFn?: typeof analyzeIssueCore;
 }
 
+/** Deliberately shorter than git.ts's GH_TIMEOUT_MS: this client backs an
+ * INTERACTIVE pane, where a stuck call must give the dashboard a failed row to
+ * repaint long before the daemon's one-minute budget would return. */
 const GH_TIMEOUT = 30_000;
-const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** The daemon's `/health` snapshot, or an all-null "down" reading when health
+ * is disabled, unreachable, or answers non-2xx. Module-level rather than a
+ * closure inside makeGhDashboardClient: it needs only `cfg` and the fetch seam,
+ * and it belongs to none of that factory's three `gh` domains (#387). */
+async function fetchHealth(cfg: Config, fetchFn: typeof fetch): Promise<HealthInfo> {
+  const down: HealthInfo = {
+    up: false,
+    uptimeSeconds: null,
+    lastBridgeSweepAt: null,
+    ticketsBridged: null,
+    tasksProcessed: null,
+    tasksSucceeded: null,
+    tasksFailed: null,
+    lastTaskStatus: null,
+    lastTaskAt: null,
+    totalTokensOut: null,
+    bridgeErrors: null,
+    chats: null,
+  };
+  if (!cfg.healthEnabled) return down;
+  try {
+    const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`);
+    if (!resp.ok) return down;
+    const j = (await resp.json()) as {
+      metrics?: {
+        uptimeSeconds?: number;
+        lastBridgeSweepAt?: string | null;
+        ticketsBridged?: number;
+        tasksProcessed?: number;
+        tasksSucceeded?: number;
+        tasksFailed?: number;
+        lastTaskStatus?: string | null;
+        lastTaskAt?: string | null;
+        totalTokensOut?: number;
+        bridgeErrors?: number;
+      };
+      chats?: ChatHealth | null;
+    };
+    return {
+      up: true,
+      uptimeSeconds: j.metrics?.uptimeSeconds ?? null,
+      lastBridgeSweepAt: j.metrics?.lastBridgeSweepAt ?? null,
+      ticketsBridged: j.metrics?.ticketsBridged ?? null,
+      tasksProcessed: j.metrics?.tasksProcessed ?? null,
+      tasksSucceeded: j.metrics?.tasksSucceeded ?? null,
+      tasksFailed: j.metrics?.tasksFailed ?? null,
+      lastTaskStatus: j.metrics?.lastTaskStatus ?? null,
+      lastTaskAt: j.metrics?.lastTaskAt ?? null,
+      totalTokensOut: j.metrics?.totalTokensOut ?? null,
+      bridgeErrors: j.metrics?.bridgeErrors ?? null,
+      chats: j.chats ?? null,
+    };
+  } catch {
+    return down;
+  }
+}
 
 export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): DashboardClient {
   const ghFn = deps.ghFn ?? gh;
@@ -265,7 +307,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
     try {
       return { ok: true, value: await fn() };
     } catch (e) {
-      return { ok: false, error: errMsg(e) };
+      return { ok: false, error: describeError(e) };
     }
   };
 
@@ -690,57 +732,6 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
       });
     },
 
-    async health() {
-      const down: HealthInfo = {
-        up: false,
-        uptimeSeconds: null,
-        lastBridgeSweepAt: null,
-        ticketsBridged: null,
-        tasksProcessed: null,
-        tasksSucceeded: null,
-        tasksFailed: null,
-        lastTaskStatus: null,
-        lastTaskAt: null,
-        totalTokensOut: null,
-        bridgeErrors: null,
-        chats: null,
-      };
-      if (!cfg.healthEnabled) return down;
-      try {
-        const resp = await fetchFn(`http://${cfg.healthHost}:${cfg.healthPort}/health`);
-        if (!resp.ok) return down;
-        const j = (await resp.json()) as {
-          metrics?: {
-            uptimeSeconds?: number;
-            lastBridgeSweepAt?: string | null;
-            ticketsBridged?: number;
-            tasksProcessed?: number;
-            tasksSucceeded?: number;
-            tasksFailed?: number;
-            lastTaskStatus?: string | null;
-            lastTaskAt?: string | null;
-            totalTokensOut?: number;
-            bridgeErrors?: number;
-          };
-          chats?: ChatHealth | null;
-        };
-        return {
-          up: true,
-          uptimeSeconds: j.metrics?.uptimeSeconds ?? null,
-          lastBridgeSweepAt: j.metrics?.lastBridgeSweepAt ?? null,
-          ticketsBridged: j.metrics?.ticketsBridged ?? null,
-          tasksProcessed: j.metrics?.tasksProcessed ?? null,
-          tasksSucceeded: j.metrics?.tasksSucceeded ?? null,
-          tasksFailed: j.metrics?.tasksFailed ?? null,
-          lastTaskStatus: j.metrics?.lastTaskStatus ?? null,
-          lastTaskAt: j.metrics?.lastTaskAt ?? null,
-          totalTokensOut: j.metrics?.totalTokensOut ?? null,
-          bridgeErrors: j.metrics?.bridgeErrors ?? null,
-          chats: j.chats ?? null,
-        };
-      } catch {
-        return down;
-      }
-    },
+    health: () => fetchHealth(cfg, fetchFn),
   };
 }

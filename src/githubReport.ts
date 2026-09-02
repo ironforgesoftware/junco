@@ -20,7 +20,8 @@ import {
   COMMENT_LIMIT,
   PLAN_SET_FENCE,
 } from "./githubInbox.js";
-import { gh } from "./git.js";
+import { gh, describeError, GH_TIMEOUT_MS } from "./git.js";
+import { sanitizeFindingText } from "./findings.js";
 import { log } from "./logging.js";
 import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
 import { dataTreePaths } from "./dataTree.js";
@@ -29,9 +30,6 @@ import { transcriptPathFor } from "./slug.js";
 // COMMENT_LIMIT is defined in githubInbox.ts (buildPlanComment shares it);
 // re-exported here so existing importers keep working without an import cycle.
 export { COMMENT_LIMIT };
-
-const GH_TIMEOUT = 60_000;
-const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** A generous excerpt of the agent's final message. First-paragraph-only
  * proved too narrow in practice (models often open with process narration
@@ -68,10 +66,14 @@ export function buildFinalComment(
   const transcriptPointer = transcriptExists
     ? `_Transcript on the worker host: \`transcripts/${ticket.id}.jsonl\` under the state dir._`
     : null;
+  // Model output is untrusted: strip HTML comments (a forged `<!-- junco:plan -->`
+  // marker in a bot-authored comment would be read back by findOwnPlanComment)
+  // and control chars before it lands on the issue (#341). Already trimmed.
+  const finalText = sanitizeFindingText(outcome.finalText, COMMENT_LIMIT);
 
   if (outcome.kind === "qa") {
     if (done) {
-      parts.push(outcome.finalText.trim() || "_(no answer text)_");
+      parts.push(finalText || "_(no answer text)_");
     } else {
       parts.push(`**Junco could not answer this ticket** (status: \`${outcome.status}\`).`);
       if (outcome.failureReason) parts.push(`> ${outcome.failureReason.slice(0, 1000)}`);
@@ -85,7 +87,7 @@ export function buildFinalComment(
           "cutoff were salvaged into the PR. Review for completeness.",
       );
     }
-    const summary = excerpt(outcome.finalText);
+    const summary = excerpt(finalText);
     if (summary) parts.push(summary);
   } else if (done) {
     parts.push(`Finished with status \`${outcome.status}\` — no pull request was needed.`);
@@ -129,7 +131,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
         "--remove-label",
         remove,
       ],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
   };
   // Outbox-aware guard: on a network-shaped failure, fn's side effect is
@@ -147,7 +149,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
     } catch (e) {
       log.warn(`github reporter: ${label} failed (issue state on GitHub may be stale)`, {
         id,
-        error: errMsg(e),
+        error: describeError(e),
       });
     }
   };
@@ -160,7 +162,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
     writeFileSync(file, withCommentMarker(g.nwo, g.issue, body), "utf8");
     try {
       await ghFn(cfg, ["issue", "comment", String(g.issue), "--repo", g.nwo, "--body-file", file], {
-        timeoutMs: GH_TIMEOUT,
+        timeoutMs: GH_TIMEOUT_MS,
         retryNetwork: true,
       });
     } finally {

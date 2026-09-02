@@ -17,9 +17,14 @@
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Config, RunResult, Ticket, Usage } from "./types.js";
+import type { Config, Result, RunResult, Ticket, Usage } from "./types.js";
 import { git } from "./git.js";
-import { stripPatchFence, type PatchSeries } from "./patchTicket.js";
+import {
+  stripPatchFence,
+  unsafePatchPaths,
+  hasBinaryHunk,
+  type PatchSeries,
+} from "./patchTicket.js";
 import {
   guardOptionsFromConfig,
   openRunTranscriptSink,
@@ -33,7 +38,11 @@ import type { RunStartRecord } from "./agent/transcriptSchema.js";
 const ZERO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
 const AM_TIMEOUT_MS = 120_000;
 
-export type ApplyOutcome = { ok: true; result: RunResult } | { ok: false; reason: string };
+/** `refused: true` — the series never reached `git am` (containmentRefusal
+ * below); prFlow terminates the ticket regardless of
+ * `worker.applyFallbackToAgent`. `refused: false` — `git am` ran and failed,
+ * the escalation ladder's case. */
+export type ApplyOutcome = Result<RunResult, { refused: boolean }>;
 
 export interface ApplyDeps extends RunTranscriptDeps {
   gitFn?: typeof git;
@@ -46,6 +55,26 @@ function patchSummary(series: PatchSeries): string {
   return `${series.count} patch(es) touching ${series.files.length} file(s): ${series.files.join(", ")}.`;
 }
 
+/** #338: why a series must not be handed to `git am`, or null when it may.
+ * The same checks plan-lint's `patch_paths_sane` rule runs (planLint.ts
+ * checkPatchSeries), but that rule only fires while `planLint.enabled` and
+ * `planLint.blockOnError` are BOTH on — live-editable levers an operator may
+ * plausibly turn off for the style rules. Lint keeps its early, friendlier
+ * error; this is the runtime backstop for a ticket that reaches claim with
+ * lint disabled or non-blocking — the same role prFlow's `patch_no_amend`
+ * and malformed-fence backstops play for the structural apply-mode guards. */
+function containmentRefusal(series: PatchSeries): string | null {
+  const problems: string[] = [];
+  const unsafe = unsafePatchPaths(series.files);
+  if (unsafe.length > 0) {
+    problems.push(`patch touches paths outside the repo: ${JSON.stringify(unsafe)}`);
+  }
+  if (hasBinaryHunk(series.raw)) {
+    problems.push("patch contains a binary hunk — bytes no reviewer can read in the issue");
+  }
+  return problems.length === 0 ? null : `refused before git am: ${problems.join("; ")}`;
+}
+
 export async function applyPatchSeries(
   cfg: Config,
   wtPath: string,
@@ -53,6 +82,11 @@ export async function applyPatchSeries(
   series: PatchSeries,
   deps: ApplyDeps = {},
 ): Promise<ApplyOutcome> {
+  // Before ANY side effect — no temp file, no transcript frames, no git call
+  // — so a refused series leaves the worktree exactly as it found it. The
+  // ticket's failure note (prFlow's phaseError) carries the reason.
+  const refusal = containmentRefusal(series);
+  if (refusal !== null) return { ok: false, refused: true, error: refusal };
   const gitFn = deps.gitFn ?? git;
   const now = deps.nowFn ?? ((): number => Date.now());
   const startedAt = now();
@@ -124,7 +158,7 @@ export async function applyPatchSeries(
         usage: ZERO_USAGE,
         durationMs: now() - startedAt,
       });
-      return { ok: false, reason };
+      return { ok: false, refused: false, error: reason };
     }
     const durationMs = now() - startedAt;
     writeRunEnd(sink, {
@@ -137,7 +171,7 @@ export async function applyPatchSeries(
     });
     return {
       ok: true,
-      result: {
+      value: {
         finalText: `Applied ${patchSummary(series)}`,
         toolCalls: [],
         usage: ZERO_USAGE,

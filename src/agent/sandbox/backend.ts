@@ -29,7 +29,7 @@ export const PROBE_STDERR_LIMIT = 400;
 
 /** Collapse a child's stderr into a bounded single-line diagnostic, or
  *  `undefined` when it said nothing worth repeating. */
-export function summarizeProbeStderr(raw: string | undefined): string | undefined {
+function summarizeProbeStderr(raw: string | undefined): string | undefined {
   const line = (raw ?? "").replace(/\s+/g, " ").trim();
   if (line === "") return undefined;
   return line.length > PROBE_STDERR_LIMIT ? `${line.slice(0, PROBE_STDERR_LIMIT)}…` : line;
@@ -119,7 +119,24 @@ export function seatbeltProfile(policy: SandboxPolicy): string {
     "(allow process-exec)",
     "(allow process-fork)",
     "(allow sysctl-read)",
-    "(allow mach-lookup)",
+    // #340: `(deny default)` is only a boundary if Mach lookup is filtered too;
+    // a blanket allow reached every service on the host — securityd (the login
+    // keychain, which `git credential-osxkeychain` reads), fseventsd, cfprefsd,
+    // the TCC-mediated daemons. Discovered empirically (macOS 26.6, 2026-09-01)
+    // by running node, git (init/add/commit/status/diff, ls-remote + clone over
+    // https), npm/npx, python3, go, ruby, perl, bun, swiftc, cc and make with
+    // NO mach-lookup at all and adding names until they passed: exactly one was
+    // needed. libinfo is getpwuid()/getgrgid() for a Directory Services user;
+    // without it `whoami` and `ls -l` print raw ids, `os.userInfo()` throws
+    // ENOENT and `git commit` with no configured identity dies with "Author
+    // identity unknown". DNS and TLS need nothing here (mDNSResponder is a unix
+    // socket, covered by `network*`). Verified absent on purpose, each the sole
+    // cause of the loss it names: `com.apple.FSEvents` (node's `fs.watch` on a
+    // directory fails EMFILE — watch-mode tooling has no place in a one-shot
+    // bash tool), `com.apple.system.notification_center` and `com.apple.logd`
+    // (silent no-ops for the toolchain), `com.apple.SecurityServer` (the
+    // keychain — the integration suite pins that it stays unreachable).
+    '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
     "(allow signal (target self))",
     "(allow file-read*)",
   ];
@@ -217,7 +234,10 @@ function mountOrder(policy: SandboxPolicy): { rule: ReadRule; writable: boolean 
 
 /** bwrap args: read-only root, private /dev+/proc+/tmp, then one mount per
  *  read rule (tmpfs-mask a denied dir, /dev/null-mask a denied file, ro-bind
- *  an allow-back, rw-bind a writable root), then unshare net when denied.
+ *  an allow-back, rw-bind a writable root), then the namespace flags: pid,
+ *  ipc and uts always, net only when denied, plus `--new-session` (#345 —
+ *  bwrap's own docs recommend it against TIOCSTI terminal injection; bashOps
+ *  gives the child no tty anyway, so this is belt-and-braces, not a fix).
  *
  *  Mounts apply in argv ORDER and later mounts are destructive, so order is
  *  meaning. Rules are emitted via `mountOrder`, i.e. `orderRules` order (see
@@ -256,9 +276,9 @@ export function bwrapArgs(
     if (!writable && !existsFn(rule.path)) continue;
     args.push(...readRuleMounts(rule, writable));
   }
-  args.push("--unshare-pid");
+  args.push("--unshare-pid", "--unshare-ipc", "--unshare-uts");
   if (!policy.network) args.push("--unshare-net");
-  args.push("--die-with-parent");
+  args.push("--new-session", "--die-with-parent");
   return args;
 }
 
@@ -295,7 +315,9 @@ export type SandboxOutcome = "ok" | "degrade" | "fail-closed";
  * - available → OK.
  * - unavailable + configured `"auto"` → **degrade**: `auto` means "best
  *   available", so fall back to `none` (env scrub + filesystem tool-jail still
- *   apply; agent bash is not OS-confined) rather than failing the ticket.
+ *   apply; agent bash is not OS-confined) rather than failing the ticket —
+ *   unless `requireBackend` (#344), which turns that degrade into fail-closed
+ *   so an operator can demand OS isolation without pinning a backend per host.
  * - unavailable + an EXPLICIT backend → **fail-closed**: honor the operator's
  *   explicit choice; never silently downgrade what they demanded.
  */
@@ -303,10 +325,11 @@ export function classifyAvailability(
   configured: "auto" | "seatbelt" | "bwrap" | "none",
   selected: SandboxBackend["name"],
   available: boolean,
+  requireBackend = false,
 ): SandboxOutcome {
   if (selected === "none") return "ok";
   if (available) return "ok";
-  return configured === "auto" ? "degrade" : "fail-closed";
+  return configured === "auto" && !requireBackend ? "degrade" : "fail-closed";
 }
 
 export function selectBackend(

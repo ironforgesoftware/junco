@@ -29,6 +29,8 @@ import { parseTicket } from "../src/ticket.js";
 import { listOps, type OutboxOp } from "../src/githubOutbox.js";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket } from "../src/types.js";
 import type { AgentSessionLike } from "../src/agent/session.js";
+import type { SandboxBackend } from "../src/agent/sandbox/backend.js";
+import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { dataTreePaths } from "../src/dataTree.js";
 import { transcriptPathFor } from "../src/slug.js";
@@ -145,9 +147,15 @@ function ctxFor(cfg: Config, task: Ticket) {
  * Python fake_omp_pr.sh — a real commit so countNewCommits > 0.
  */
 function commitFactory(
-  opts: { commit?: boolean; stopReason?: string; file?: string; costUsd?: number } = {},
+  opts: {
+    commit?: boolean;
+    stopReason?: string;
+    file?: string;
+    content?: string;
+    costUsd?: number;
+  } = {},
 ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
-  const { commit = true, stopReason = "stop", file = "feature.txt", costUsd } = opts;
+  const { commit = true, stopReason = "stop", file = "feature.txt", content, costUsd } = opts;
   return (_cfg, cwd) => async () => {
     let listener: ((e: any) => void) | null = null;
     return {
@@ -157,7 +165,7 @@ function commitFactory(
       },
       async prompt() {
         if (commit) {
-          writeFileSync(join(cwd, file), `work ${Date.now()}\n`, "utf8");
+          writeFileSync(join(cwd, file), content ?? `work ${Date.now()}\n`, "utf8");
           run(["git", "-C", cwd, "add", "-A"]);
           run(["git", "-C", cwd, "commit", "-m", `feat: ${file}`]);
         }
@@ -464,6 +472,193 @@ exit 1
       "junco/verify",
     ]);
     expect(remoteBranches.trim()).toBe("");
+  });
+
+  it("verification blocks run through the resolved sandbox backend under the ticket policy (#335)", async () => {
+    const cfg = makeConfig(h, { verifyEnabled: true, verifyBlockOnFail: true });
+    const body = `# Feature with sandboxed verification
+
+Make a change.
+
+## Verification
+
+\`\`\`bash
+true
+\`\`\`
+`;
+    const { task, path } = makeTicket(
+      h,
+      "sbx.md",
+      `---\nid: sbx\nrepo: ${h.work}\nnetwork: true\n---\n${body}`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const policy: SandboxPolicy = {
+      writableRoots: ["/sbxroot/wt"],
+      readDenyPaths: [],
+      readDenyFiles: [],
+      readAllowPaths: [],
+      network: true,
+      scratchDir: "/sbxroot/scratch",
+      bashTimeoutMs: undefined,
+    };
+    const spawned: Array<{ command: string; policy: SandboxPolicy }> = [];
+    const resolved: Array<{ cwd: string; network: boolean | undefined }> = [];
+    // A backend whose argv refuses the block outright — what a confining
+    // profile does — so a block that passes on its own (`true`) fails here
+    // exactly when, and only when, the backend's argv is what ran.
+    const backend: SandboxBackend = {
+      name: "none",
+      spawnArgv(command, p) {
+        spawned.push({ command, policy: p });
+        return ["/bin/sh", "-c", "echo confined >&2; exit 9"];
+      },
+      async checkAvailability() {
+        return { available: true };
+      },
+    };
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      resolveSandbox: async (_cfg, cwd, overrides) => {
+        resolved.push({ cwd, network: overrides.network });
+        return { backend, policy };
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(spawned).toEqual([{ command: "true", policy }]);
+    // Resolved for the worktree, with the ticket's own network opt-in.
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].cwd).toContain("sbx");
+    expect(existsSync(resolved[0].cwd)).toBe(true);
+    expect(resolved[0].network).toBe(true);
+    // The backend's argv is what ran: a block that passes on its own failed.
+    expect(phaseError).toContain("verification gate blocked push: 0/1");
+    expect(dst.startsWith(h.failed)).toBe(true);
+  });
+
+  it("verify.sandboxed=false keeps verification on the direct spawn path (#335)", async () => {
+    const cfg = makeConfig(h, {
+      verifyEnabled: true,
+      verifyBlockOnFail: true,
+      verifySandboxed: false,
+    });
+    const { task, path } = makeTicket(
+      h,
+      "direct.md",
+      `---\nid: direct\nrepo: ${h.work}\n---\n# Direct\n\nMake a change.\n\n## Verification\n\n\`\`\`bash\ntrue\n\`\`\`\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    let resolveCalls = 0;
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      resolveSandbox: async () => {
+        resolveCalls++;
+        throw new Error("must not be consulted when verify.sandboxed is off");
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(resolveCalls).toBe(0);
+    // The block ran directly and passed → the gate let the PR through.
+    expect(phaseError).toBeNull();
+    expect(dst.startsWith(h.done)).toBe(true);
+  });
+
+  // --- pre-push secret scan (#337) ---------------------------------------
+  // Assembled at runtime so this file's own bytes carry no scannable shape
+  // (junco pushes this repo — see tests/secretScan.test.ts).
+  const FAKE_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
+
+  it("secret scan: an added line with a secret shape → failed/, no push, worktree preserved", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "leak.md",
+      `---\nid: leak\nrepo: ${h.work}\n---\n# Feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({
+        commit: true,
+        file: "deploy.env",
+        content: `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}\n`,
+      }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(phaseError).toMatch(/^secret scan blocked push/);
+    expect(phaseError).toContain("deploy.env:1 (aws-access-key-id)");
+    expect(dst.startsWith(h.failed)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: failed");
+    // The note names the location and NEVER the matched content.
+    expect(text).not.toContain(FAKE_AWS_KEY);
+    // Nothing reached the remote, and the worktree is kept for inspection.
+    const remoteBranches = run([
+      "git",
+      "-C",
+      h.work,
+      "ls-remote",
+      "--heads",
+      "origin",
+      "junco/leak",
+    ]);
+    expect(remoteBranches.trim()).toBe("");
+    expect(text).toContain("**Worktree preserved:**");
+  });
+
+  it("secret scan: pr.secretScan=false pushes the same diff untouched", async () => {
+    const cfg = makeConfig(h, { secretScanEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "optout.md",
+      `---\nid: optout\nrepo: ${h.work}\n---\n# Feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({
+        commit: true,
+        file: "sample.env",
+        content: `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}\n`,
+      }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(phaseError).toBeNull();
+    expect(dst.startsWith(h.done)).toBe(true);
+    expect(readFileSync(dst, "utf8")).toContain("pushed: true");
+  });
+
+  it("secret scan: reads the diff of sinceRef..HEAD through the injected provider", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "provider.md",
+      `---\nid: provider\nrepo: ${h.work}\n---\n# Feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const calls: Array<{ wtPath: string; sinceRef: string }> = [];
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      secretScan: {
+        diffProvider: async (_cfg, wtPath, sinceRef) => {
+          calls.push({ wtPath, sinceRef });
+          return `--- a/x\n+++ b/secrets/id_rsa\n@@ -0,0 +1 @@\n+${"-----BEGIN OPENSSH PRIVATE" + " KEY-----"}\n`;
+        },
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sinceRef).toBe("origin/main");
+    expect(calls[0].wtPath).toContain("provider");
+    expect(phaseError).toContain("secrets/id_rsa:1 (pem-private-key)");
+    expect(dst.startsWith(h.failed)).toBe(true);
   });
 
   it("critic corrective: MISSING then a corrective turn sets criticRetriesUsed and still pushes", async () => {
@@ -1362,6 +1557,29 @@ function conflictingApplyTicketBody(work: string): string {
   return `# Apply a patch\n\n\`\`\`\`junco-patch\n${raw}\`\`\`\`\n`;
 }
 
+/** A ticket body whose (hand-built — `git add` refuses a traversing path, so
+ * git cannot generate this one) series creates `path`, a path OUTSIDE the
+ * worktree. Mirrors tests/applyPatch.test.ts's traversalSeries fixture. */
+function traversalApplyTicketBody(path: string): string {
+  const raw =
+    "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n" +
+    "From: Someone <someone@example.com>\n" +
+    "Date: Mon, 1 Sep 2025 00:00:00 +0000\n" +
+    "Subject: [PATCH] feat: escape the worktree\n\n" +
+    "---\n" +
+    ` ${path} | 1 +\n` +
+    " 1 file changed, 1 insertion(+)\n" +
+    ` create mode 100644 ${path}\n\n` +
+    `diff --git a/${path} b/${path}\n` +
+    "new file mode 100644\n" +
+    "index 0000000..3e75765\n" +
+    "--- /dev/null\n" +
+    `+++ b/${path}\n` +
+    "@@ -0,0 +1 @@\n" +
+    "+x\n";
+  return `# Apply a patch\n\n\`\`\`\`junco-patch\n${raw}\`\`\`\`\n`;
+}
+
 describe("apply-mode tickets (2026-08-31)", () => {
   let h: Harness;
   beforeEach(() => {
@@ -1922,6 +2140,47 @@ describe("apply-mode tickets (2026-08-31)", () => {
     expect(text).not.toMatch(/retry_count: 1/);
     expect(text).not.toMatch(/not_before:/);
     expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+  });
+
+  it("a series touching a path outside the repo is refused before git am — lint off, fallback toggle on (#338)", async () => {
+    // Containment used to be enforced ONLY by plan-lint's patch_paths_sane
+    // rule — i.e. only while planLint.enabled AND planLint.blockOnError were
+    // both on. This harness's default cfg has lint OFF and
+    // applyFallbackToAgent at its default (true): the exact combination
+    // where, before #338, git's own "invalid path" rejection at `git am`
+    // rolled into the Stage 2a ladder and handed the traversing series to an
+    // agent as its "reviewed" specification. Now: a terminal refusal, no
+    // agent session, nothing written anywhere outside the worktree.
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "apply-traversal.md",
+      `---\nid: apply-traversal\nrepo: ${h.work}\n---\n${traversalApplyTicketBody("../escaped-338.txt")}`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const flow = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: () => () => {
+        throw new Error("agent session must never be constructed for a refused series");
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(flow.status).toBe("failed");
+    expect(flow.requeued).toBe(false);
+    expect(flow.dst.startsWith(h.failed)).toBe(true);
+    expect(flow.phaseError).toMatch(/^apply failed: refused before git am/);
+    expect(flow.phaseError).toMatch(/outside the repo/);
+    expect(flow.phaseError).toContain('"../escaped-338.txt"');
+    const text = readFileSync(flow.dst, "utf8");
+    expect(text).toContain("status: failed");
+    expect(text).not.toMatch(/retry_count: 1/);
+    expect(text).not.toMatch(/not_before:/);
+    expect(readdirSync(h.wtsRoot).length).toBeGreaterThan(0); // worktree preserved
+    // Nothing landed anywhere under the harness root — not beside the
+    // worktree, not beside the clone.
+    const everything = readdirSync(h.root, { recursive: true }).map(String);
+    expect(everything.some((p) => p.endsWith("escaped-338.txt"))).toBe(false);
   });
 
   it("apply + failing verification escalates to the agent, then re-verifies", async () => {

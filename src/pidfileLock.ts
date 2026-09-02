@@ -135,8 +135,8 @@ export function acquirePidfileLock(
   const asidePath = `${lockPath}.stale.${process.pid}.${randomBytes(6).toString("hex")}`;
   try {
     renameSync(lockPath, asidePath);
-  } catch (e: any) {
-    if (e.code === "ENOENT") {
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
       // A racing stealer already moved it aside; the atomic create below
       // settles who wins.
       const settled = tryCreate(lockPath, deps);
@@ -217,12 +217,13 @@ function claimName(
   writeFileSync(tmpPath, content);
   try {
     linkFn(tmpPath, lockPath); // atomic claim (content complete): EEXIST if taken
-  } catch (e: any) {
+  } catch (e) {
     bestEffortUnlink(tmpPath);
-    if (e.code === "EEXIST") {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
       return "EEXIST";
     }
-    if (typeof e.code === "string" && NO_HARDLINK_CODES.has(e.code)) {
+    if (typeof code === "string" && NO_HARDLINK_CODES.has(code)) {
       return claimNameExcl(lockPath, content);
     }
     throw e;
@@ -236,8 +237,8 @@ function claimNameExcl(lockPath: string, content: string): PidfileLock | "EEXIST
   let fd: number;
   try {
     fd = openSync(lockPath, "wx"); // wx = O_CREAT|O_EXCL: EEXIST if taken
-  } catch (e: any) {
-    if (e.code === "EEXIST") {
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
       return "EEXIST";
     }
     throw e;

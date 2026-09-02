@@ -127,6 +127,12 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
         : (() => {
             throw new Error("ENOENT");
           })(),
+    // Default statFn: ENOENT for everything — the data-tree-modes check (#343)
+    // skips absent paths, so every pre-existing test's verdict is unchanged
+    // (ok, no warn). A test exercising a loose mode overrides this.
+    statFn: () => {
+      throw new Error("ENOENT");
+    },
     ...over,
   };
 }
@@ -203,6 +209,7 @@ describe("runDoctor", () => {
       sandbox: {
         enabled: true,
         backend: "bwrap",
+        requireBackend: false,
         network: "deny",
         extraDenyRead: [],
         extraAllowWrite: [],
@@ -336,6 +343,7 @@ describe("runDoctor", () => {
       sandbox: {
         enabled: true,
         backend: "auto",
+        requireBackend: false,
         network: "deny",
         extraDenyRead: [],
         extraAllowWrite: [],
@@ -359,6 +367,43 @@ describe("runDoctor", () => {
     expect(code).toBe(0); // degrade does not fail the preflight
     expect(lines.join("")).toMatch(/⚠ sandbox/);
     expect(lines.join("")).toMatch(/degrading to none/);
+  });
+
+  // #344: the ⚠ above is the only signal that the default config is running
+  // agent bash unconfined. With requireBackend on, the degrade is a refusal —
+  // doctor must say so with the same ✗ (exit 1) an explicit backend gets.
+  it("reports ✗ and fails when backend=auto has no OS backend and requireBackend is on (#344)", async () => {
+    const lines: string[] = [];
+    const cfg = sandboxConfig({
+      sandbox: {
+        enabled: true,
+        backend: "auto",
+        requireBackend: true,
+        network: "deny",
+        extraDenyRead: [],
+        extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
+      },
+    } as unknown as Partial<Config>);
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        env: sandboxEnv,
+        execFn: async (cmd: string) =>
+          cmd === "bwrap" || cmd === "sandbox-exec"
+            ? { code: 127, stdout: "", stderr: "not found" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    const out = lines.join("");
+    expect(out).toMatch(/✗ sandbox/);
+    expect(out).not.toMatch(/degrading to none/);
+    // Names the lever that turned the degrade into a refusal, so the operator
+    // knows which knob (not sandbox.enabled) buys the old behavior back.
+    expect(out).toMatch(/sandbox\.requireBackend/);
   });
 
   // #312: an unavailable backend used to report only "install bubblewrap",
@@ -1981,8 +2026,7 @@ describe("runDoctor audit history checks", () => {
     recordRun({ dataDir } as unknown as Config, "o/r", {
       ok: true,
       at: "2026-07-16T00:00:00.000Z",
-      found: 4,
-      parked: 3,
+      value: { found: 4, parked: 3 },
     });
     const lines: string[] = [];
     // existsFn: false except the skills mount — hermetic against
@@ -2012,7 +2056,7 @@ describe("runDoctor audit history checks", () => {
     recordRun({ dataDir } as unknown as Config, "o/other", {
       ok: false,
       at: "2026-07-16T00:00:00.000Z",
-      reason: "boom",
+      error: "boom",
     });
     const lines: string[] = [];
     // existsFn: false except the skills mount — see the hermeticity note in
@@ -2039,13 +2083,12 @@ describe("runDoctor audit history checks", () => {
     recordRun({ dataDir } as unknown as Config, "o/r", {
       ok: true,
       at: "2026-07-14T00:00:00.000Z",
-      found: 2,
-      parked: 1,
+      value: { found: 2, parked: 1 },
     });
     recordRun({ dataDir } as unknown as Config, "o/r", {
       ok: false,
       at: "2026-07-16T00:00:00.000Z",
-      reason: "boom",
+      error: "boom",
     });
     const lines: string[] = [];
     // existsFn: false except the skills mount — see the hermeticity note above.
@@ -2111,4 +2154,65 @@ describe("runDoctor version check", () => {
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/0 warning\(s\)/);
   });
+});
+
+// #343: config.json may hold a literal model.apiKey and transcripts hold
+// verbatim private-repo file contents. Fresh trees are created owner-only; an
+// EXISTING tree is never re-moded by the daemon, so doctor is where a loose
+// one gets surfaced — warn (never fail) with the exact chmod to run.
+describe("runDoctor data tree modes check (#343)", () => {
+  const onWin32 = process.platform === "win32";
+
+  it.skipIf(onWin32)(
+    "warns with the chmod to run when the config or a tree dir is group/other-readable",
+    async () => {
+      const lines: string[] = [];
+      const code = await runDoctor(
+        "/x/config.json",
+        deps({
+          statFn: (p: string) => {
+            if (p === "/x/config.json") return { mode: 0o100644 };
+            if (p === "/sbxroot/junco-doc-state") return { mode: 0o40755 };
+            if (p === "/sbxroot/junco-doc-state/transcripts") return { mode: 0o40750 };
+            throw new Error("ENOENT");
+          },
+          printFn: (s) => lines.push(s),
+        }),
+      );
+      const text = lines.join("");
+      expect(code).toBe(0); // warn only — a loose mode is not a broken install
+      expect(text).toMatch(/⚠ data tree modes/);
+      expect(text).toContain("chmod 600 /x/config.json");
+      expect(text).toContain("chmod 700 /sbxroot/junco-doc-state");
+      expect(text).toContain("chmod 700 /sbxroot/junco-doc-state/transcripts");
+    },
+  );
+
+  it.skipIf(onWin32)("reports ok when every checked path is owner-only", async () => {
+    const lines: string[] = [];
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        statFn: (p: string) => ({ mode: p === "/x/config.json" ? 0o100600 : 0o40700 }),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const text = lines.join("");
+    expect(code).toBe(0);
+    expect(text).toMatch(/✓ data tree modes/);
+    expect(text).not.toMatch(/⚠ data tree modes/);
+    expect(text).not.toContain("chmod");
+  });
+
+  it.skipIf(onWin32)(
+    "ignores paths that do not exist yet (a fresh tree has no transcripts dir)",
+    async () => {
+      const lines: string[] = [];
+      const code = await runDoctor("/x/config.json", deps({ printFn: (s) => lines.push(s) }));
+      const text = lines.join("");
+      expect(code).toBe(0);
+      expect(text).toMatch(/✓ data tree modes/);
+      expect(text).not.toContain("chmod");
+    },
+  );
 });

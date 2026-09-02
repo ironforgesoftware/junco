@@ -10,6 +10,7 @@ import {
   issueToTicket,
   pollGithubInbox,
   newBridgeState,
+  labelSwapArgs,
   extractPlanBody,
   extractPlanSetBody,
   extractPatchBody,
@@ -31,7 +32,7 @@ import { writeWatchlist, watchlistPath } from "../src/watchlist.js";
 import { OUTBOX_MARKER_PREFIX } from "../src/githubOutbox.js";
 import { submitAsIssue, wrapInFence } from "../src/submitAsIssue.js";
 import { parsePatchSeries } from "../src/patchTicket.js";
-import { makeConfig } from "./helpers/config.js";
+import { makeConfig, type ConfigSeams } from "./helpers/config.js";
 import { cloneHarness, run } from "./helpers/gitHarness.js";
 
 // ticketInFlight (every dispatch path) calls queuePaths(cfg); point bridge
@@ -39,9 +40,23 @@ import { cloneHarness, run } from "./helpers/gitHarness.js";
 const NX_VAULT = join(tmpdir(), `junco-nx-${Math.random().toString(36).slice(2)}`);
 const NX_STATE_DIR = join(tmpdir(), `junco-state-${Math.random().toString(36).slice(2)}`);
 
-// Minimal Config for conversion tests — only the fields issueToTicket and
-// buildPlanningTicket read.
-const cfg = {
+const seams: ConfigSeams = {
+  dataDir: NX_STATE_DIR,
+  queueRoot: join(NX_VAULT, "tickets"),
+  worktreeRoot: "/sbxroot/wts",
+  tools: [],
+  criticEnabled: false,
+  planLintEnabled: false,
+  verifyEnabled: false,
+  supervisorEnabled: false,
+  healthEnabled: false,
+  removeWorktreeOnSuccess: false,
+};
+
+// A full Config, not an `as Config` partial (#366): pollGithubInbox is a real
+// entry point, so every field it might read carries makeConfig's real default
+// (and the poison ghBin) instead of reading as undefined.
+const cfg = makeConfig(seams, {
   github: {
     enabled: true,
     triggerLabel: "junco",
@@ -52,8 +67,7 @@ const cfg = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
-  planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
-} as unknown as Config;
+});
 const repo = { nwo: "acme/api", path: "/home/u/code/api" };
 const issue = (labels: string[], over: Partial<GhIssue> = {}): GhIssue => ({
   number: 42,
@@ -80,6 +94,55 @@ describe("lifecycleLabels", () => {
       planReady: "bot:plan-ready",
       approved: "bot:approved",
     });
+  });
+});
+
+describe("labelSwapArgs", () => {
+  // Every transition that takes an issue OUT of plan-ready (#357): the
+  // lingering-label cleanup, the plan-set compile failure, and the two
+  // dispatch doors (single plan + plan set).
+  const planReadyExits: Array<{ add?: string; remove: string }> = [
+    { remove: "junco:plan-ready" },
+    { add: "junco:failed", remove: "junco:plan-ready" },
+    { add: "junco:queued", remove: "junco:plan-ready" },
+  ];
+
+  it("every plan-ready exit also removes approved iff requireApproval is on", () => {
+    const off = { ...cfg, github: { ...cfg.github, requireApproval: false } };
+    for (const swap of planReadyExits) {
+      const on = labelSwapArgs(cfg, "acme/api", 42, swap);
+      expect(on.slice(0, 5)).toEqual(["issue", "edit", "42", "--repo", "acme/api"]);
+      expect(on.slice(-2)).toEqual(["--remove-label", "junco:approved"]);
+      expect(labelSwapArgs(off, "acme/api", 42, swap)).not.toContain("junco:approved");
+    }
+    // An add-only edit never leaves plan-ready, so it never touches approved.
+    expect(labelSwapArgs(cfg, "acme/api", 42, { add: "junco:denied" })).toEqual([
+      "issue",
+      "edit",
+      "42",
+      "--repo",
+      "acme/api",
+      "--add-label",
+      "junco:denied",
+    ]);
+  });
+
+  it("orders argv add-then-remove, matching the hand-built sites it replaced", () => {
+    expect(
+      labelSwapArgs(cfg, "acme/api", 42, { add: "junco:queued", remove: "junco:plan-ready" }),
+    ).toEqual([
+      "issue",
+      "edit",
+      "42",
+      "--repo",
+      "acme/api",
+      "--add-label",
+      "junco:queued",
+      "--remove-label",
+      "junco:plan-ready",
+      "--remove-label",
+      "junco:approved",
+    ]);
   });
 });
 
@@ -202,6 +265,7 @@ describe("pollGithubInbox", () => {
     permission?: string;
     parent?: string; // "" | "null" | JSON
     lastEditedAt?: string; // issue body last-edit time (GraphQL); "null" = never edited
+    parentLastEditedAt?: string; // same, for the sub-issue parent (#342); routed by its number
     origin?: string;
     failList?: boolean;
     comments?: unknown[];
@@ -209,6 +273,14 @@ describe("pollGithubInbox", () => {
   }) {
     const calls: Call[] = [];
     const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
+    const parentNumber = (() => {
+      try {
+        const p = JSON.parse(opts.parent || "null") as { number?: unknown } | null;
+        return typeof p?.number === "number" ? String(p.number) : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
     const ghFn = async (_c: unknown, args: string[]): Promise<CmdResult> => {
       calls.push(args);
       if (args[0] === "issue" && args[1] === "list") {
@@ -221,9 +293,16 @@ describe("pollGithubInbox", () => {
       if (args[0] === "api" && args[1] === "user") return ok(opts.viewer ?? "junco-bot");
       if (args[0] === "api" && args[1] === "graphql") {
         // Two GraphQL queries share this argv shape — route by field: the
-        // body-vouching lookup (#130) vs. the sub-issue parent lookup.
+        // body-vouching lookup (#130) vs. the sub-issue parent lookup. The
+        // vouching lookup runs for the child AND its parent (#342) — route
+        // those by issue number.
         const q = args.find((a) => a.startsWith("query=")) ?? "";
-        if (q.includes("lastEditedAt")) return ok(opts.lastEditedAt ?? "null");
+        if (q.includes("lastEditedAt")) {
+          const num = args.find((a) => a.startsWith("number="))?.slice("number=".length);
+          if (parentNumber !== undefined && num === parentNumber)
+            return ok(opts.parentLastEditedAt ?? "null");
+          return ok(opts.lastEditedAt ?? "null");
+        }
         return ok(opts.parent ?? "null");
       }
       if (args[0] === "api" && String(args[2] ?? "").includes("/comments"))
@@ -246,15 +325,12 @@ describe("pollGithubInbox", () => {
     return { ghFn, gitFn, submitFn, calls, submitted };
   }
 
-  const bridgeCfg = {
-    ...cfg,
-    dataDir: NX_STATE_DIR,
-    queueRoot: join(NX_VAULT, "tickets"),
+  const bridgeCfg = makeConfig(seams, {
     github: {
       ...cfg.github,
       repos: [{ nwo: "acme/api", path: "/home/u/code/api" }],
     },
-  } as Config;
+  });
   const rawIssue = {
     number: 42,
     title: "Add rate limiting",
@@ -262,6 +338,12 @@ describe("pollGithubInbox", () => {
     labels: [{ name: "junco" }],
   };
   const labeledEvent = `{"actor":"alice","label":"junco","created_at":"2026-07-06T00:00:00Z"}`;
+
+  it("runs against a full Config: the poison ghBin is set, not undefined (#366)", () => {
+    // A partial `as Config` fixture reads every unset field as undefined, so a
+    // new behavior-changing default would pass here on a path no operator runs.
+    expect(bridgeCfg.ghBin).toBe("/nonexistent/gh");
+  });
 
   it("bridges an eligible PR issue into a PLANNING ticket + planning label", async () => {
     const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
@@ -475,13 +557,12 @@ tasks:
   - {id: b, title: T B, depends_on: [a], description: Build B., acceptance: [works]}
 `;
     const fenceSetBody = "Parked ticket.\n\n```junco-plan\n" + FENCE_SET + "```\n";
-    const withPlanSets = (root: string): Config =>
-      ({
-        ...bridgeCfg,
-        dataDir: join(root, "data"),
-        queueRoot: join(root, "tickets"),
-        planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
-      }) as Config;
+    const withPlanSets = (root: string): Config => ({
+      ...bridgeCfg,
+      dataDir: join(root, "data"),
+      queueRoot: join(root, "tickets"),
+      planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
+    });
 
     it("compiles a junco-plan fence from the issue body when plan sets are enabled", async () => {
       const root = mkdtempSync(join(tmpdir(), "junco-bridge-"));
@@ -559,7 +640,7 @@ tasks:
       const localCfg = {
         ...bridgeCfg,
         planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
-      } as Config;
+      };
       const f = makeFakes({
         issues: [{ ...rawIssue, body: fenceSetBody }],
         events: labeledEvent,
@@ -666,7 +747,7 @@ tasks:
       ...bridgeCfg,
       dataDir: dir,
       github: { ...bridgeCfg.github, repos: [] },
-    } as Config;
+    };
     const wlFile = watchlistPath(wlCfg);
     const calls: string[][] = [];
     const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
@@ -761,15 +842,105 @@ tasks:
     });
   });
 
+  const parentIssue = JSON.stringify({
+    number: 7,
+    repository: { nameWithOwner: "acme/api" },
+    title: "Uploads are slow",
+    body: "30s uploads.",
+  });
+
   it("includes parent context when the issue is a sub-issue", async () => {
-    const f = makeFakes({
-      issues: [rawIssue],
-      events: labeledEvent,
-      parent: `{"title":"Uploads are slow","body":"30s uploads."}`,
-    });
+    const f = makeFakes({ issues: [rawIssue], events: labeledEvent, parent: parentIssue });
     await pollGithubInbox(bridgeCfg, newBridgeState(), f as never);
     expect(f.submitted[0].content).toContain("Parent issue (background only)");
     expect(f.submitted[0].content).toContain("Uploads are slow");
+  });
+
+  describe("sub-issue parent vouching (#342)", () => {
+    // The parent is a different issue with a different author; its body flows
+    // into the planner prompt, so it gets the same edited-after-label check as
+    // the child (#130) — but a failed check DROPS the context rather than
+    // refusing the child, which was vouched on its own.
+    it("drops the parent context when the parent body was edited AFTER the label", async () => {
+      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        const f = makeFakes({
+          issues: [rawIssue],
+          events: labeledEvent,
+          parent: parentIssue,
+          parentLastEditedAt: "2026-07-06T01:00:00Z", // an hour AFTER labeling
+        });
+        expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+        expect(f.submitted).toHaveLength(1);
+        expect(f.submitted[0].content).not.toContain("Parent issue (background only)");
+        expect(f.submitted[0].content).not.toContain("Uploads are slow");
+        expect(warnSpy.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(
+          /parent issue body edited after/,
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("drops the parent context when the parent's lastEditedAt is unverifiable", async () => {
+      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        const f = makeFakes({
+          issues: [rawIssue],
+          events: labeledEvent,
+          parent: parentIssue,
+          parentLastEditedAt: "not-a-real-date",
+        });
+        expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+        expect(f.submitted).toHaveLength(1);
+        expect(f.submitted[0].content).not.toContain("Parent issue (background only)");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("drops a parent whose coordinates are missing — nothing to vouch against", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        parent: `{"title":"Uploads are slow","body":"30s uploads."}`,
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+      expect(f.submitted[0].content).not.toContain("Parent issue (background only)");
+    });
+
+    it("keeps a parent last edited BEFORE the label", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        parent: parentIssue,
+        parentLastEditedAt: "2026-07-05T00:00:00Z",
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+      expect(f.submitted[0].content).toContain("Parent issue (background only)");
+    });
+
+    it("vets the parent at ITS OWN repo and number (sub-issues may live across repos)", async () => {
+      const f = makeFakes({
+        issues: [rawIssue],
+        events: labeledEvent,
+        parent: JSON.stringify({
+          number: 7,
+          repository: { nameWithOwner: "acme/platform" },
+          title: "Uploads are slow",
+          body: "30s uploads.",
+        }),
+      });
+      expect(await pollGithubInbox(bridgeCfg, newBridgeState(), f as never)).toBe(1);
+      expect(f.submitted[0].content).toContain("Parent issue (background only)");
+      const lookups = f.calls.filter(
+        (c) => c[0] === "api" && c[1] === "graphql" && c.some((a) => a.includes("lastEditedAt")),
+      );
+      expect(lookups).toHaveLength(2);
+      expect(lookups[1]).toEqual(
+        expect.arrayContaining(["owner=acme", "name=platform", "number=7"]),
+      );
+    });
   });
 
   it("takes the LATEST labeled event for the trigger (relabeled issues)", async () => {
@@ -930,7 +1101,7 @@ tasks:
       const autoCfg = {
         ...bridgeCfg,
         github: { ...bridgeCfg.github, requireApproval: false },
-      } as Config;
+      };
       const noApproval = {
         ...readyIssue,
         labels: [{ name: "junco" }, { name: "junco:plan-ready" }],
@@ -1006,7 +1177,7 @@ tasks:
         const done = join(root, "tickets", "done");
         mkdirSync(done, { recursive: true });
         writeFileSync(join(done, `1710000000000__${EXEC_ID}.md`), "old run", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const f = makeFakes({
           issues: [readyIssue],
           events: approvedAfter,
@@ -1038,7 +1209,7 @@ tasks:
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the exec-ticket id (gh-acme-api-<hash>-42).
         writeFileSync(join(processing, `1720000000000__${EXEC_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const f = makeFakes({
           issues: [readyIssue],
           events: approvedAfter,
@@ -1088,7 +1259,7 @@ tasks:
             dataDir: join(root, "data"),
             queueRoot: join(root, "tickets"),
             planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
-          } as Config;
+          };
           const f = makeFakes({
             issues: [readyIssue],
             events: approvedAfter,
@@ -1129,7 +1300,7 @@ tasks:
             dataDir: join(root, "data"),
             queueRoot: join(root, "tickets"),
             planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
-          } as Config;
+          };
           const f = makeFakes({
             issues: [readyIssue],
             events: approvedAfter,
@@ -1167,7 +1338,7 @@ tasks:
             dataDir: join(root, "data"),
             queueRoot: join(root, "tickets"),
             planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
-          } as Config;
+          };
           // Duplicate task id "a" — a compile error caught by parsePlanSet.
           const badFence = `version: 1
 tasks:
@@ -1249,7 +1420,7 @@ tasks:
             dataDir: join(root, "data"),
             queueRoot: join(root, "tickets"),
             planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 },
-          } as Config;
+          };
           const f = makeFakes({
             issues: [readyIssue],
             events: approvedAfter,
@@ -1309,7 +1480,7 @@ tasks:
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the planning-ticket id (gh-acme-api-<hash>-42-plan).
         writeFileSync(join(processing, `1720000000000__${PLAN_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
         expect(n).toBe(1);
@@ -1328,7 +1499,7 @@ tasks:
         mkdirSync(processing, { recursive: true });
         // Claim-prefixed file for the ask-ticket id (gh-acme-api-<hash>-42).
         writeFileSync(join(processing, `1720000000000__${EXEC_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const askIssue = { ...rawIssue, labels: [{ name: "junco" }, { name: "junco:ask" }] };
         const f = makeFakes({ issues: [askIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
@@ -1347,7 +1518,7 @@ tasks:
         const inbox = join(root, "tickets", "inbox");
         mkdirSync(inbox, { recursive: true });
         writeFileSync(join(inbox, `${PLAN_ID}.md`), "stub", "utf8");
-        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") } as Config;
+        const localCfg = { ...bridgeCfg, queueRoot: join(root, "tickets") };
         const f = makeFakes({ issues: [rawIssue], events: labeledEvent, permission: "write" });
         const n = await pollGithubInbox(localCfg, newBridgeState(), f as never);
         expect(n).toBe(1);
@@ -1367,7 +1538,7 @@ tasks:
         ...bridgeCfg,
         dataDir: stateDir,
         github: { ...bridgeCfg.github, repos: [] }, // nothing in config
-      } as Config;
+      };
       const f = makeFakes({ issues: [] });
       const state = newBridgeState();
 

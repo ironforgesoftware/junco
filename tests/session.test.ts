@@ -1,13 +1,20 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { EventEmitter } from "node:events";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { runAgent, apiBaseUrl, splitModelId, defaultTranscriptSink } from "../src/agent/session.js";
+import {
+  runAgent,
+  apiBaseUrl,
+  splitModelId,
+  defaultTranscriptSink,
+  sdkRegistryOps,
+} from "../src/agent/session.js";
 import { GuardManager } from "../src/agent/guardManager.js";
 import { inMemoryCredentialStore } from "../src/agent/credentialStore.js";
 import { resolveModelViaRegistries, type RegistryOps } from "../src/agent/modelSetup.js";
 import { makeConfig } from "./helpers/config.js";
+import { until } from "./helpers/until.js";
 
 // Overridable createWriteStream so the transcript stream can be stubbed
 // (issue #26: fs.createWriteStream opens ASYNCHRONOUSLY — open/write failures
@@ -503,6 +510,28 @@ describe("runAgent (guard manager)", () => {
   });
 });
 
+describe("defaultTranscriptSink", () => {
+  // #343: a transcript is the full event stream — every `read` tool result,
+  // i.e. verbatim private-repo file contents — so neither the file nor the dir
+  // the sink creates may be readable by other local users. createWriteStream
+  // opens asynchronously, so poll for the file rather than stat it at once.
+  it.skipIf(process.platform === "win32")(
+    "creates the transcript dir 0700 and the file 0600 (#343)",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "junco-tx-mode-"));
+      const txPath = join(dir, "transcripts", "t-1.jsonl");
+      const sink = defaultTranscriptSink(txPath);
+      if (sink === null) throw new Error("expected a sink");
+      sink.write("{}\n");
+      sink.end();
+      await until(() => existsSync(txPath));
+      expect(statSync(dirname(txPath)).mode & 0o777).toBe(0o700);
+      expect(statSync(txPath).mode & 0o777).toBe(0o600);
+      rmSync(dir, { recursive: true, force: true });
+    },
+  );
+});
+
 describe("apiBaseUrl", () => {
   it("strips a trailing /models to get the API base", () => {
     expect(apiBaseUrl("http://127.0.0.1:1234/v1/models")).toBe("http://127.0.0.1:1234/v1");
@@ -861,16 +890,11 @@ describe("models.json file path — SDK resolution", () => {
   // reads the in-memory credential; the ambient env-var fallback the SDK's
   // anthropic provider would otherwise consult is neutralized below so the
   // seed is the only path to a result).
-  // `sdkRegistryOps` itself is module-private in session.ts, so this rebuilds
-  // its exact four-option `ModelRuntime.create` bridge locally rather than
-  // widening session.ts's export surface for the test.
+  // Drives production's own `ModelRuntime.create` bridge (`sdkRegistryOps`)
+  // against the real SDK, so the four-option literal this depends on is the
+  // shipped one; its own invariants are pinned in sessionFactoryInvariants.
   it("the seeded credential resolves into request auth on the catalog path", async () => {
     const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-    const NOOP_MODELS_STORE = {
-      read: async () => undefined,
-      write: async () => {},
-      delete: async () => {},
-    };
     // Ambient-fallback guard: resolveProviderAuth only consults these env
     // vars when the credential store has NO entry for the provider. Clearing
     // them means an unseeded store resolves to `undefined`, not a host key —
@@ -886,21 +910,7 @@ describe("models.json file path — SDK resolution", () => {
 
     try {
       const credentials = inMemoryCredentialStore({ anthropic: "sk-catalog-secret" });
-      const make = async (modelsPath: string | null) => {
-        const runtime = await ModelRuntime.create({
-          credentials,
-          modelsPath,
-          refreshOnCreate: false,
-          modelsStore: NOOP_MODELS_STORE,
-        });
-        return {
-          find: (provider: string, modelId: string) => runtime.getModel(provider, modelId),
-          registerProvider: (name: string, config: Record<string, unknown>) =>
-            runtime.registerProvider(name, config),
-          backing: runtime,
-        };
-      };
-      const ops: RegistryOps = { fromFile: (p) => make(p), inMemory: () => make(null) };
+      const ops: RegistryOps = sdkRegistryOps(ModelRuntime, credentials);
 
       const cfg = makeConfig(
         {
@@ -918,7 +928,7 @@ describe("models.json file path — SDK resolution", () => {
         {
           model: {
             // A real builtin-catalog provider/model id (verified against the
-            // installed 0.84.2: pi-ai/dist/providers/data/anthropic.json).
+            // installed 0.84.4: pi-ai/dist/providers/data/anthropic.json).
             id: "anthropic/claude-sonnet-4-5",
             source: "catalog",
             baseUrlExplicit: false,

@@ -1,3 +1,14 @@
+/**
+ * The repo's one "worked, or here's why it didn't" shape (#359). `T` is the
+ * success payload; a failure is always a single human-readable `error`
+ * string, so callers never have to remember whether this module spells it
+ * `reason` or `error`. `F` adds machine-readable context alongside that
+ * message (applyPatch's `refused`). A failure whose payload is itself
+ * structured — planCompiler's `errors[]`, unwatchCmd's refusal enum — stays a
+ * distinct type on purpose and must not be squeezed in here.
+ */
+export type Result<T, F = unknown> = { ok: true; value: T } | ({ ok: false; error: string } & F);
+
 /** OpenAI-completions-style compat flags (open record — any future Pi compat
  * key passes through). The named fields are the ones junco has tuned defaults
  * for; `[k: string]` keeps the schema forward-compatible. */
@@ -132,6 +143,10 @@ export interface SandboxConfig {
   // auto → seatbelt on darwin, bwrap on linux. none = no OS wrapping (env
   // scrub + JS path-jail still apply; bash keeps network + can read anywhere).
   backend: "auto" | "seatbelt" | "bwrap" | "none";
+  // Under "auto", fail closed when the OS backend probe fails instead of
+  // degrading to none (#344). Inert for an explicit backend (already
+  // fail-closed) and for none.
+  requireBackend: boolean;
   // Default egress for agent tool subprocesses. Per-ticket `network: true`
   // frontmatter overrides to allow for one ticket.
   network: "deny" | "allow";
@@ -195,9 +210,17 @@ export interface Config {
   allowedRepoRoots: string[];
   draftByDefault: boolean;
   defaultLabels: string[];
+  // #337 (`pr.secretScan`): scan the added lines of the diff about to be pushed
+  // for high-confidence secret shapes, and fail the ticket on a hit. The push
+  // is an egress channel `sandbox.network: deny` never sees.
+  secretScanEnabled: boolean;
   verifyEnabled: boolean;
   verifyCommandTimeout: number;
   verifyBlockOnFail: boolean;
+  // #335: run `## Verification` blocks under the ticket's sandbox backend +
+  // policy (the blocks execute whatever the agent left in the worktree).
+  // false = the direct, unconfined spawn.
+  verifySandboxed: boolean;
   // Plan-lint gate (parity with the Python [plan_lint] section).
   planLintEnabled: boolean;
   planLintBlockOnError: boolean;

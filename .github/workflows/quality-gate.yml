@@ -24,6 +24,8 @@ jobs:
   # the packaged-CLI smoke test — then re-installs, rebuilds, and re-tests on
   # current LTS. The static checks (lint/format/typecheck) run once per OS;
   # they are node-version-independent.
+  # Each job also runs the e2e suite once, on the engines floor — the SDK
+  # wiring under test does not vary by node minor.
   env_gate:
     name: quality gate (${{ matrix.os }})
     strategy:
@@ -31,7 +33,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,6 +72,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      # end-to-end: the built CLI as a child process in a sandboxed HOME, the
+      # real Pi SDK against a scripted model stub, real seatbelt/bwrap enforcement
+      - run: npm run test:e2e
       # the shipped tarball must install and run on the minimum supported node
       - run: bash scripts/package-smoke.sh
 
@@ -82,8 +87,37 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # Forward canary (#382): node 26 becomes LTS in October 2026. This leg
+  # surfaces breakage early instead of at the LTS transition. It is advisory
+  # by construction — continue-on-error, and deliberately NOT in the aggregate
+  # gate's `needs` — so a failure here annotates the run but never blocks a
+  # merge. Promote it to a blocking leg (and drop 22 from the floor) when 26
+  # is LTS. Build + test only: the static checks and the bubblewrap probe are
+  # covered by the blocking legs, so sandbox integration cases skip here.
+  node26_canary:
+    name: node 26 canary (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "junco-ci"
+      - name: node 26 (next LTS)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
   # The single status check that ties every environment leg together. Branch
-  # protection requires exactly this context: "quality-gate".
+  # protection requires exactly this context: "quality-gate". The node 26
+  # canary is intentionally absent from `needs`.
   gate:
     name: quality-gate
     needs: [env_gate]

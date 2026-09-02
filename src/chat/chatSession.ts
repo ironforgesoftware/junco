@@ -347,7 +347,7 @@ export class ChatSession {
     return false;
   }
 
-  /** Lazily build the SDK session (spec §11, Ruling R5). SDK 0.84.2 facts
+  /** Lazily build the SDK session (spec §11, Ruling R5). SDK 0.84.4 facts
    * (verified in Task 3, see makeSessionManager's doc comment in
    * src/agent/session.ts): `SessionManager.open()` on a MISSING path never
    * throws — it yields a fresh empty session at that path — and `create()`
@@ -356,7 +356,7 @@ export class ChatSession {
    * "Corrupt" is the file existing and `open` OR the session build throwing
    * (makePiSessionFactory passes the manager straight to createAgentSession,
    * which reads the file back via `sessionManager.buildSessionContext()` —
-   * SDK 0.84.2 `dist/core/sdk.js:81`) → archive to corrupt-<ts>/, create
+   * SDK 0.84.4 `dist/core/sdk.js:81`) → archive to corrupt-<ts>/, create
    * fresh, record the reset. */
   async ensureSession(): Promise<ChatSessionLike> {
     if (this.sdk) return this.sdk;
