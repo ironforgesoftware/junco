@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
 import { render, cleanup } from "ink-testing-library";
 import { until, tick, pressUntilAdvanced } from "./helpers/until.js";
-import { MouseProvider } from "../src/tui/MouseProvider.js";
+import { MouseProvider, useOnAnyMousePress, useOnMouseMiss } from "../src/tui/MouseProvider.js";
 import { WizardApp } from "../src/tui/wizard/WizardApp.js";
 import { defaultAnswers, answersFromConfig } from "../src/wizard/flow.js";
 import type { WizardIO } from "../src/wizard/io.js";
@@ -262,8 +262,25 @@ describe("WizardApp", () => {
     // (e.g. via patch → setAnswers), would fire the stale `cancel`. The fix
     // wraps the handler in a closure that dereferences the ref at call time.
     let outcome = "none";
+    // The chip's onPress is a no-op while text-editing, so a landed press
+    // leaves no trace in the frame or in `outcome` — and a press dropped
+    // before the chip registers (until.ts) would pass this test vacuously.
+    // Count it through the provider's press observer and miss hook instead
+    // (WizardApp registers neither): landed ⇔ observed once AND never missed,
+    // i.e. it resolved to a region with an onPress at (x, y) — only the chip.
+    const seen = { presses: 0, misses: 0 };
+    function PressTap(): null {
+      useOnAnyMousePress(() => {
+        seen.presses++;
+      });
+      useOnMouseMiss(() => {
+        seen.misses++;
+      });
+      return null;
+    }
     const r = render(
       <MouseProvider>
+        <PressTap />
         <WizardApp io={fakeIo()} onOutcome={(o) => (outcome = o)} sizeOverride={SIZE} />
       </MouseProvider>,
     );
@@ -273,6 +290,8 @@ describe("WizardApp", () => {
     const y = lineOf(r.lastFrame() ?? "", "q quit");
     const x = (r.lastFrame() ?? "").split("\n")[y].indexOf("q quit") + 1;
     r.stdin.write(mousePress(x, y));
+    await until(() => seen.presses === 1);
+    expect(seen.misses).toBe(0); // the press LANDED on the chip — the premise
     await tick();
     await tick();
     expect(outcome).toBe("none");

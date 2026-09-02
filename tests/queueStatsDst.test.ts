@@ -21,6 +21,20 @@ import type { TaskRecord } from "../src/taskHistory.js";
 const observesDst =
   new Date(2027, 2, 14).getTimezoneOffset() !== new Date(2027, 2, 15).getTimezoneOffset();
 
+// Loud skip, in the spirit of sandbox.integration.test.ts: no CI leg guarantees
+// this environment honors the TZ pin, so a silent skip is indistinguishable
+// from DST coverage that actually ran. Written straight to stderr, NOT via
+// console.warn: vitest captures console.* and only replays it under a failing
+// test, so a module-load warning (no test to attach to) never reaches the
+// terminal — verified on vitest 4.1.11, for skipped AND passing files.
+if (!observesDst) {
+  process.stderr.write(
+    `\n!! queueStatsDst.test.ts — process.env.TZ=America/New_York is NOT honored here ` +
+      `(2027-03-14 and 2027-03-15 report the same UTC offset, so no spring-forward is observable); ` +
+      `the DST bucket case is SKIPPED, not covered.\n`,
+  );
+}
+
 /** Minimal config (same cast-through-unknown style as queueStats.test.ts). */
 function makeCfg(overrides: Partial<Config> = {}): Config {
   return {
