@@ -179,8 +179,8 @@ export async function runAssessFlow(
         cfg,
         recordNwo,
         fin.status === "completed"
-          ? { ok: true, at, found: counts.found, parked: counts.parked }
-          : { ok: false, at, reason: result.errorMessage ?? `assess ${fin.status}` },
+          ? { ok: true, at, value: { found: counts.found, parked: counts.parked } }
+          : { ok: false, at, error: result.errorMessage ?? `assess ${fin.status}` },
       );
     }
     log.info("assess finalized", { dst: fin.dst, status: fin.status, ...counts });

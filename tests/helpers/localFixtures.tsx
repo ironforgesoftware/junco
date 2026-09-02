@@ -11,7 +11,8 @@ import { render } from "ink-testing-library";
 import { App, type AppProps } from "../../src/tui/App.js";
 import { MouseProvider } from "../../src/tui/MouseProvider.js";
 import type { LocalCheap, LocalHeavy } from "../../src/tui/localSnapshot.js";
-import type { DashboardClient, Result } from "../../src/tui/ghClient.js";
+import type { DashboardClient } from "../../src/tui/ghClient.js";
+import type { Result } from "../../src/types.js";
 import type { DashIssue } from "../../src/tui/state.js";
 import type { QueueSnapshot } from "../../src/tui/queueSnapshot.js";
 

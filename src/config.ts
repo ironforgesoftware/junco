@@ -55,7 +55,7 @@ export function juncoHome(env: Record<string, string | undefined> = process.env)
 /** Schema default for `botAccount.configDir` — the one spelling every other
  * reference (the zod default below, `resolveBotGhConfigDir`'s own default)
  * derives from, so they can't drift apart. */
-export const DEFAULT_BOT_GH_CONFIG_DIR = "~/.junco/gh";
+const DEFAULT_BOT_GH_CONFIG_DIR = "~/.junco/gh";
 
 /**
  * Resolve the bot account's isolated gh config dir from the raw (possibly

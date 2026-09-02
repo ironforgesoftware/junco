@@ -29,13 +29,13 @@ describe("buildWizardIO", () => {
       existsFn: () => false,
       ensureSkillLinksFn: noopEnsureSkillLinksFn,
     });
-    expect(r.ok && r.mode).toBe("fresh");
+    expect(r.ok && r.value.mode).toBe("fresh");
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.mode).toBe("fresh");
-    expect(r.io.currentRaw).toBeNull();
-    expect(r.io.initialAnswers).toEqual(defaultAnswers());
-    const a = { ...r.io.initialAnswers, dataDir: join(dir, "vault") };
-    const result = r.io.write(a);
+    expect(r.value.io.mode).toBe("fresh");
+    expect(r.value.io.currentRaw).toBeNull();
+    expect(r.value.io.initialAnswers).toEqual(defaultAnswers());
+    const a = { ...r.value.io.initialAnswers, dataDir: join(dir, "vault") };
+    const result = r.value.io.write(a);
     expect(result.written).toBe(true);
     expect(read(cp).dataDir).toBe(join(dir, "vault"));
     expect(existsSync(join(dir, "vault", "queue", "inbox"))).toBe(true);
@@ -57,11 +57,11 @@ describe("buildWizardIO", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
     const a = {
-      ...r.io.initialAnswers,
+      ...r.value.io.initialAnswers,
       dataDir: join(dir, "vault"),
       harnessDirs: ["~/.claude/skills"],
     };
-    const result = r.io.write(a);
+    const result = r.value.io.write(a);
     expect(result.written).toBe(true);
     expect(calls).toBe(1);
     expect(seen).toEqual([join(dir, "vault")]);
@@ -84,7 +84,7 @@ describe("buildWizardIO", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+    r.value.io.write({ ...r.value.io.initialAnswers, dataDir: join(dir, "vault") });
 
     // ensureSkillLinks symlinks <dataDir>/skills; if it ran before the dirs
     // existed, symlinkSync would fail into a failure kind ensureSkillLinks
@@ -126,7 +126,7 @@ describe("buildWizardIO", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    const result = r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+    const result = r.value.io.write({ ...r.value.io.initialAnswers, dataDir: join(dir, "vault") });
 
     expect(result.skillLinkFailures).toEqual([
       {
@@ -147,7 +147,7 @@ describe("buildWizardIO", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    const result = r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+    const result = r.value.io.write({ ...r.value.io.initialAnswers, dataDir: join(dir, "vault") });
 
     expect(result.skillLinkFailures).toEqual([]);
   });
@@ -165,10 +165,10 @@ describe("buildWizardIO", () => {
     const r = buildWizardIO(cp);
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.mode).toBe("rerun");
-    expect(r.io.mode).toBe("rerun");
-    expect(r.io.initialAnswers.modelId).toBe("p/m");
-    expect(r.io.currentRaw).toEqual(raw);
+    expect(r.value.mode).toBe("rerun");
+    expect(r.value.io.mode).toBe("rerun");
+    expect(r.value.io.initialAnswers.modelId).toBe("p/m");
+    expect(r.value.io.currentRaw).toEqual(raw);
   });
 
   it("invalid existing config → ok:false with the parse reason", () => {
@@ -203,7 +203,7 @@ describe("buildWizardIO", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    const catalog = await r.io.listCatalogProviders();
+    const catalog = await r.value.io.listCatalogProviders();
     expect(catalog).toEqual([{ provider: "acme", ids: ["big", "small"] }]);
     expect(calls).toBe(1);
   });
@@ -224,8 +224,8 @@ describe("buildWizardIO", () => {
     const r = buildWizardIO(cp, { ensureSkillLinksFn: noopEnsureSkillLinksFn });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    const a = { ...r.io.initialAnswers, modelId: "p/m2" };
-    expect(r.io.write(a).written).toBe(true);
+    const a = { ...r.value.io.initialAnswers, modelId: "p/m2" };
+    expect(r.value.io.write(a).written).toBe(true);
     const cfg = read(cp);
     expect((cfg.model as { id: string }).id).toBe("p/m2");
     expect((cfg.worker as { maxConcurrent: number }).maxConcurrent).toBe(4); // preserved
@@ -243,7 +243,7 @@ describe("buildWizardIO", () => {
     const r = buildWizardIO(cp, { ensureSkillLinksFn: noopEnsureSkillLinksFn });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    const result = r.io.write(answersFromConfig(r.io.currentRaw ?? {}));
+    const result = r.value.io.write(answersFromConfig(r.value.io.currentRaw ?? {}));
     expect(result.written).toBe(false);
     expect(readFileSync(cp, "utf8")).toBe(before);
     expect(existsSync(join(dir, "vault", "inbox"))).toBe(true); // dirs still ensured
@@ -263,7 +263,7 @@ describe("buildWizardIO", () => {
       });
       expect(r.ok).toBe(true);
       if (!r.ok) throw new Error("expected ok:true");
-      r.io.write({ ...r.io.initialAnswers, dataDir: join(dir, "vault") });
+      r.value.io.write({ ...r.value.io.initialAnswers, dataDir: join(dir, "vault") });
       expect(statSync(cp).mode & 0o777).toBe(0o600);
       expect(statSync(join(dir, "vault")).mode & 0o777).toBe(0o700);
       expect(statSync(join(dir, "vault", "queue", "inbox")).mode & 0o777).toBe(0o700);
@@ -284,7 +284,9 @@ describe("buildWizardIO", () => {
       const r = buildWizardIO(cp, { ensureSkillLinksFn: noopEnsureSkillLinksFn });
       expect(r.ok).toBe(true);
       if (!r.ok) throw new Error("expected ok:true");
-      expect(r.io.write({ ...r.io.initialAnswers, modelId: "p/m2" }).written).toBe(true);
+      expect(r.value.io.write({ ...r.value.io.initialAnswers, modelId: "p/m2" }).written).toBe(
+        true,
+      );
       expect(statSync(cp).mode & 0o777).toBe(0o600);
     },
   );
@@ -309,7 +311,7 @@ describe("buildWizardIO", () => {
     if (!r.ok) throw new Error("expected ok:true");
     let thrown: unknown;
     try {
-      r.io.write({ ...r.io.initialAnswers, modelId: "p/m2" }); // real diff → write attempted
+      r.value.io.write({ ...r.value.io.initialAnswers, modelId: "p/m2" }); // real diff → write attempted
     } catch (e) {
       thrown = e;
     }
@@ -326,8 +328,8 @@ describe("buildWizardIO", () => {
     const r = buildWizardIO(cp, { existsFn: () => false });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.botGhConfigDir).not.toContain("~");
-    expect(r.io.botGhConfigDir.endsWith(".junco/gh")).toBe(true);
+    expect(r.value.io.botGhConfigDir).not.toContain("~");
+    expect(r.value.io.botGhConfigDir.endsWith(".junco/gh")).toBe(true);
   });
 
   // Critical fix (Task 3 review): the dashboard-hosted Account chapter must
@@ -347,8 +349,8 @@ describe("buildWizardIO", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.mode).toBe("fresh");
-    expect(r.io.botGhConfigDir).toBe("/h/.config/junco/gh");
+    expect(r.value.io.mode).toBe("fresh");
+    expect(r.value.io.botGhConfigDir).toBe("/h/.config/junco/gh");
   });
 
   it("never probes an explicitly non-default configDir, even with a legacy login live", () => {
@@ -375,7 +377,7 @@ describe("buildWizardIO", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.botGhConfigDir).toBe("/explicit/custom/gh");
+    expect(r.value.io.botGhConfigDir).toBe("/explicit/custom/gh");
   });
 
   it("rerun mode: botGhConfigDir reads botAccount.configDir / git.ghBin from the raw config", () => {
@@ -403,8 +405,8 @@ describe("buildWizardIO", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.botGhConfigDir).toBe(join(dir, "custom-gh"));
-    return r.io.detectBotLogin().then((login) => {
+    expect(r.value.io.botGhConfigDir).toBe(join(dir, "custom-gh"));
+    return r.value.io.detectBotLogin().then((login) => {
       expect(login).toBe("junco-agent");
       expect(seenGhBin).toBe("/opt/homebrew/bin/gh");
       expect(seenConfigDir).toBe(join(dir, "custom-gh"));
@@ -424,9 +426,9 @@ describe("buildWizardIO", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    const code = await r.io.runGhLogin();
+    const code = await r.value.io.runGhLogin();
     expect(code).toBe(0);
-    expect(seenArgs).toEqual(["gh", r.io.botGhConfigDir]);
+    expect(seenArgs).toEqual(["gh", r.value.io.botGhConfigDir]);
   });
 });
 
@@ -444,9 +446,9 @@ describe("effectiveDataDir (legacy-fallback display, never fed back into a write
     const r = buildWizardIO(cp, { env: { HOME: "/h" }, existsFn: () => false });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.mode).toBe("fresh");
-    expect(r.io.effectiveDataDir).toBe("/h/.junco");
-    expect(r.io.dataDirLegacyFallback).toBe(false);
+    expect(r.value.io.mode).toBe("fresh");
+    expect(r.value.io.effectiveDataDir).toBe("/h/.junco");
+    expect(r.value.io.dataDirLegacyFallback).toBe(false);
   });
 
   it("fresh mode, legacy-fallback machine: effectiveDataDir surfaces the legacy root (hermetic existsFn)", () => {
@@ -460,11 +462,11 @@ describe("effectiveDataDir (legacy-fallback display, never fed back into a write
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.mode).toBe("fresh");
-    expect(r.io.effectiveDataDir).toBe(legacyRoot);
-    expect(r.io.dataDirLegacyFallback).toBe(true);
+    expect(r.value.io.mode).toBe("fresh");
+    expect(r.value.io.effectiveDataDir).toBe(legacyRoot);
+    expect(r.value.io.dataDirLegacyFallback).toBe(true);
     // The write-side sentinel is UNAFFECTED by the probe above.
-    expect(r.io.initialAnswers.dataDir).toBe("~/.junco");
+    expect(r.value.io.initialAnswers.dataDir).toBe("~/.junco");
   });
 
   it("legacy-fallback machine: accepting every default still writes NO dataDir key", () => {
@@ -484,8 +486,8 @@ describe("effectiveDataDir (legacy-fallback display, never fed back into a write
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.effectiveDataDir).toBe(legacyRoot); // displayed to the user
-    const result = r.io.write(r.io.initialAnswers); // user touched nothing
+    expect(r.value.io.effectiveDataDir).toBe(legacyRoot); // displayed to the user
+    const result = r.value.io.write(r.value.io.initialAnswers); // user touched nothing
     expect(result.written).toBe(true); // fresh mode always scaffolds the file
     const saved = read(cp);
     expect("dataDir" in saved).toBe(false);
@@ -507,11 +509,11 @@ describe("effectiveDataDir (legacy-fallback display, never fed back into a write
     });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.mode).toBe("rerun");
-    expect(r.io.effectiveDataDir).toBe(legacyRoot);
-    expect(r.io.dataDirLegacyFallback).toBe(true);
+    expect(r.value.io.mode).toBe("rerun");
+    expect(r.value.io.effectiveDataDir).toBe(legacyRoot);
+    expect(r.value.io.dataDirLegacyFallback).toBe(true);
     const before = readFileSync(cp, "utf8");
-    const result = r.io.write(r.io.initialAnswers); // zero-diff rerun
+    const result = r.value.io.write(r.value.io.initialAnswers); // zero-diff rerun
     expect(result.written).toBe(false);
     expect(readFileSync(cp, "utf8")).toBe(before); // byte-identical: still no dataDir key
   });
@@ -527,7 +529,7 @@ describe("effectiveDataDir (legacy-fallback display, never fed back into a write
     const r = buildWizardIO(cp, { env: { HOME: "/h" }, existsFn });
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error("expected ok:true");
-    expect(r.io.effectiveDataDir).toBe("/custom/root");
-    expect(r.io.dataDirLegacyFallback).toBe(false);
+    expect(r.value.io.effectiveDataDir).toBe("/custom/root");
+    expect(r.value.io.dataDirLegacyFallback).toBe(false);
   });
 });

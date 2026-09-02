@@ -342,7 +342,11 @@ describe("runStatusCommand", () => {
   });
 
   it("prints an audit line per repo with history", async () => {
-    recordRun(cfg, "o/r", { ok: true, at: "2026-07-16T00:00:00.000Z", found: 4, parked: 3 });
+    recordRun(cfg, "o/r", {
+      ok: true,
+      at: "2026-07-16T00:00:00.000Z",
+      value: { found: 4, parked: 3 },
+    });
     const fetchFn = (async () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
@@ -355,8 +359,12 @@ describe("runStatusCommand", () => {
   });
 
   it("shows a failed last attempt without moving the assessed date", async () => {
-    recordRun(cfg, "o/r", { ok: true, at: "2026-07-15T00:00:00.000Z", found: 4, parked: 3 });
-    recordRun(cfg, "o/r", { ok: false, at: "2026-07-16T00:00:00.000Z", reason: "boom" });
+    recordRun(cfg, "o/r", {
+      ok: true,
+      at: "2026-07-15T00:00:00.000Z",
+      value: { found: 4, parked: 3 },
+    });
+    recordRun(cfg, "o/r", { ok: false, at: "2026-07-16T00:00:00.000Z", error: "boom" });
     const fetchFn = (async () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;

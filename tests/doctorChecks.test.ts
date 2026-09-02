@@ -579,8 +579,7 @@ describe("check: audit-history", () => {
     recordRun(cfg, "o/r", {
       ok: true,
       at: "2026-07-16T00:00:00.000Z",
-      found: 4,
-      parked: 3,
+      value: { found: 4, parked: 3 },
     });
     expect((await check("audit-history").run(ctxOf(cfg))).map(render)).toEqual([
       "✓ audit history — o/r: assessed 2026-07-16",

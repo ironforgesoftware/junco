@@ -96,7 +96,7 @@ describe("Root FTUE switcher", () => {
         buildAppProps={() => {
           throw new Error("App must not mount before a config exists");
         }}
-        makeWizardIo={() => ({ ok: true, io: fakeIo(), mode: "fresh" })}
+        makeWizardIo={() => ({ ok: true, value: { io: fakeIo(), mode: "fresh" } })}
         loadConfigFn={() => {
           throw new Error("unused");
         }}
@@ -122,7 +122,7 @@ describe("Root FTUE switcher", () => {
         buildAppProps={() => {
           throw new Error("App must not mount before a config exists");
         }}
-        makeWizardIo={() => ({ ok: true, io: fakeIo(), mode: "fresh" })}
+        makeWizardIo={() => ({ ok: true, value: { io: fakeIo(), mode: "fresh" } })}
         loadConfigFn={() => {
           throw new Error("unused");
         }}
@@ -168,8 +168,7 @@ describe("Root FTUE switcher", () => {
         buildAppProps={buildAppProps}
         makeWizardIo={() => ({
           ok: true,
-          io: fakeIo({ discoverModels: async () => ["m-fast"] }),
-          mode: "fresh",
+          value: { io: fakeIo({ discoverModels: async () => ["m-fast"] }), mode: "fresh" },
         })}
         loadConfigFn={loadSpy}
         onFinalExitCode={onCode}
@@ -198,7 +197,7 @@ describe("Root FTUE switcher", () => {
         configPath="/tmp/x/config.json"
         initialConfig={{} as never}
         buildAppProps={() => makeAppProps({ runCliFn: runCli })}
-        makeWizardIo={() => ({ ok: true, io: fakeIo(), mode: "fresh" })}
+        makeWizardIo={() => ({ ok: true, value: { io: fakeIo(), mode: "fresh" } })}
         loadConfigFn={loadSpy}
         onFinalExitCode={onCode}
       />,

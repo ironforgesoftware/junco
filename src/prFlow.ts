@@ -647,7 +647,7 @@ export async function runPrFlow(
     });
     const outcome = await applyPatchSeries(cfg, wtPath, task.id, patchSeries);
     if (outcome.ok) {
-      result = outcome.result;
+      result = outcome.value;
       // Stage 4a: a clean apply — may still be overwritten below to
       // "apply_fallback" if Phase 9's verification escalation fires.
       prOutcome.mode = "apply";
@@ -658,7 +658,7 @@ export async function runPrFlow(
       // before `git am`) is terminal regardless of the fallback toggle:
       // nothing was tried, and buildApplyFallbackPrompt would hand the
       // agent an out-of-repo write as the reviewed intent to implement.
-      const phaseError = `apply failed: ${outcome.reason}`;
+      const phaseError = `apply failed: ${outcome.error}`;
       prOutcome.worktreePreserved = true;
       log.warn(phaseError);
       const r = emptyRunResult(phaseError);
@@ -677,14 +677,14 @@ export async function runPrFlow(
       // (Phase 9) and buildPrBody's disclosure banner (the PR is no longer
       // byte-identical to what a human approved on the GitHub route).
       log.warn(
-        `apply failed: ${outcome.reason} — falling back to the agent ` +
+        `apply failed: ${outcome.error} — falling back to the agent ` +
           "(worker.applyFallbackToAgent)",
       );
-      prOutcome.applyFallback = { kind: "apply", reason: outcome.reason };
+      prOutcome.applyFallback = { kind: "apply", reason: outcome.error };
       prOutcome.mode = "apply_fallback";
       const fallbackPrompt = buildApplyFallbackPrompt(task, patchSeries, {
         kind: "apply",
-        detail: outcome.reason,
+        detail: outcome.error,
       });
       result = await runEnveloped(
         flowCfg,

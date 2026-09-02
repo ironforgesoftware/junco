@@ -840,8 +840,7 @@ describe("runAssessFlow", () => {
     recordRun(cfg(root), "o/r", {
       ok: true,
       at: "2026-07-15T00:00:00.000Z",
-      found: 4,
-      parked: 3,
+      value: { found: 4, parked: 3 },
     });
 
     const { path } = claim(j, ticketContent(repo));

@@ -8,7 +8,6 @@ import {
   planUnwatch,
   runUnwatch,
   runUnwatchCommand,
-  githubCacheFilesFor,
   type UnwatchPlan,
 } from "../src/unwatchCmd.js";
 import { repoDiscriminator } from "../src/worktree.js";
@@ -16,7 +15,7 @@ import { enqueueOp, outboxPaths } from "../src/githubOutbox.js";
 import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
 import { recordRun, historyFilePath } from "../src/assessHistory.js";
-import { cachePathFor, prCachePathFor } from "../src/tui/ghClient.js";
+import { cachePathFor, prCachePathFor } from "../src/githubCachePaths.js";
 import { makeTree, watch, writeTicket } from "./helpers/unwatchTree.js";
 
 describe("planUnwatch — refusals and clone classification", () => {
@@ -186,7 +185,11 @@ describe("planUnwatch — nwo-keyed stores", () => {
       draft: "Looks like a regression.",
       footer: true,
     });
-    recordRun(cfg, "acme/api", { ok: true, at: "2026-08-19T00:00:00Z", found: 0, parked: 0 });
+    recordRun(cfg, "acme/api", {
+      ok: true,
+      at: "2026-08-19T00:00:00Z",
+      value: { found: 0, parked: 0 },
+    });
     mkdirSync(join(dataTreePaths(cfg).mirror, "acme", "api"), { recursive: true });
     mkdirSync(dataTreePaths(cfg).githubCache, { recursive: true });
     writeFileSync(cachePathFor(cfg, "acme/api"), "{}", "utf8");
@@ -199,16 +202,14 @@ describe("planUnwatch — nwo-keyed stores", () => {
     expect(out.plan.items.filter((i) => i.kind === "github-cache")).toHaveLength(2);
   });
 
-  it("github-cache naming never drifts from ghClient (pin)", () => {
-    const { cfg } = makeTree();
-    const out = githubCacheFilesFor(cfg, "acme/api");
-    expect(out).toEqual([cachePathFor(cfg, "acme/api"), prCachePathFor(cfg, "acme/api")]);
-  });
-
   it("assessHistory's historyFilePath matches what recordRun/planUnwatch see", () => {
     const { cfg } = makeTree();
     watch(cfg, "acme/api", join(dataTreePaths(cfg).clonesWatched, "acme", "api"));
-    recordRun(cfg, "acme/api", { ok: true, at: "2026-08-19T00:00:00Z", found: 1, parked: 1 });
+    recordRun(cfg, "acme/api", {
+      ok: true,
+      at: "2026-08-19T00:00:00Z",
+      value: { found: 1, parked: 1 },
+    });
     const out = planUnwatch(cfg, "acme/api");
     if (!out.ok) throw new Error(out.reason);
     expect(out.plan.items).toContainEqual({

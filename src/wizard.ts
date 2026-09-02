@@ -7,7 +7,7 @@
 
 import { readFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import type { Config } from "./types.js";
+import type { Config, Result } from "./types.js";
 import {
   loadConfig,
   queuePaths,
@@ -61,9 +61,7 @@ export interface WizardDeps {
   ensureSkillLinksFn?: (cfg: Config) => SkillLinksReport;
 }
 
-export type WizardIoResult =
-  | { ok: true; io: WizardIO; mode: "fresh" | "rerun" }
-  | { ok: false; error: string };
+export type WizardIoResult = Result<{ io: WizardIO; mode: "fresh" | "rerun" }>;
 
 /** Builds the WizardIO (fresh-scaffold or rerun-prefill, plus the atomic
  * write path) without touching stdin/Ink — the standalone entry point the
@@ -201,7 +199,7 @@ export function buildWizardIO(configPath: string, deps: WizardDeps = {}): Wizard
     runGhLogin: () => (deps.runGhLoginFn ?? runGhLogin)(wizGhBin, botGhConfigDir),
   };
 
-  return { ok: true, io, mode };
+  return { ok: true, value: { io, mode } };
 }
 
 export function summary(configPath: string, queueRoot: string, wrote: boolean): string {

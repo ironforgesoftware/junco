@@ -2026,8 +2026,7 @@ describe("runDoctor audit history checks", () => {
     recordRun({ dataDir } as unknown as Config, "o/r", {
       ok: true,
       at: "2026-07-16T00:00:00.000Z",
-      found: 4,
-      parked: 3,
+      value: { found: 4, parked: 3 },
     });
     const lines: string[] = [];
     // existsFn: false except the skills mount — hermetic against
@@ -2057,7 +2056,7 @@ describe("runDoctor audit history checks", () => {
     recordRun({ dataDir } as unknown as Config, "o/other", {
       ok: false,
       at: "2026-07-16T00:00:00.000Z",
-      reason: "boom",
+      error: "boom",
     });
     const lines: string[] = [];
     // existsFn: false except the skills mount — see the hermeticity note in
@@ -2084,13 +2083,12 @@ describe("runDoctor audit history checks", () => {
     recordRun({ dataDir } as unknown as Config, "o/r", {
       ok: true,
       at: "2026-07-14T00:00:00.000Z",
-      found: 2,
-      parked: 1,
+      value: { found: 2, parked: 1 },
     });
     recordRun({ dataDir } as unknown as Config, "o/r", {
       ok: false,
       at: "2026-07-16T00:00:00.000Z",
-      reason: "boom",
+      error: "boom",
     });
     const lines: string[] = [];
     // existsFn: false except the skills mount — see the hermeticity note above.

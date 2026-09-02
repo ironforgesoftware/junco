@@ -222,7 +222,7 @@ describe("applyPatchSeries", () => {
     const out = await applyPatchSeries(cfg, work, "t1", conflicting);
 
     expect(out.ok).toBe(false);
-    expect((out as { reason: string }).reason).toMatch(/conflict|failed/i);
+    expect((out as { error: string }).error).toMatch(/conflict|failed/i);
     expect(run(["git", "-C", work, "status", "--porcelain"]).trim()).toBe("");
     expect(existsSync(join(work, ".git", "rebase-apply"))).toBe(false);
   });
@@ -261,7 +261,7 @@ describe("applyPatchSeries", () => {
     const out = await applyPatchSeries(cfg, work, "t1", conflicting);
 
     expect(out.ok).toBe(false);
-    const reason = (out as { reason: string }).reason;
+    const reason = (out as { error: string }).error;
     // Before the fix: reason was just "git am --3way failed (exit 128):
     // error: Failed to merge in the changes." plus hint: lines — this file
     // name and CONFLICT marker were never present anywhere in it.
@@ -288,7 +288,7 @@ describe("applyPatchSeries", () => {
     const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(true);
-    const result = (out as { result: RunResult }).result;
+    const result = (out as { value: RunResult }).value;
     expect(result.usage.total).toBe(0);
     expect(result.stopReason).toBe("apply");
     expect(result.toolCalls).toEqual([]);
@@ -328,7 +328,7 @@ describe("applyPatchSeries", () => {
     const out = await applyPatchSeries(cfg, work, "t1", series);
 
     expect(out.ok).toBe(false);
-    expect((out as { reason: string }).reason).toMatch(/git am --3way failed/);
+    expect((out as { error: string }).error).toMatch(/git am --3way failed/);
     expect(existsSync(join(outside, "passwd"))).toBe(false); // nothing escaped
     // am --abort rolled the WHOLE series back — commit 1's symlink included.
     expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
@@ -409,11 +409,11 @@ describe("applyPatchSeries — pre-git-am containment backstop (#338)", () => {
     const out = await applyPatchSeries(cfg, work, "t-338", series, { gitFn });
 
     expect(out.ok).toBe(false);
-    const failure = out as { ok: false; reason: string; refused: boolean };
+    const failure = out as { ok: false; error: string; refused: boolean };
     expect(failure.refused).toBe(true);
-    expect(failure.reason).toMatch(/refused before git am/);
-    expect(failure.reason).toMatch(/outside the repo/);
-    expect(failure.reason).toContain('"../escaped-338.txt"');
+    expect(failure.error).toMatch(/refused before git am/);
+    expect(failure.error).toMatch(/outside the repo/);
+    expect(failure.error).toContain('"../escaped-338.txt"');
     expect(calls).toEqual([]); // no `git am` — and no `git am --abort` either
     expect(existsSync(join(root, "escaped-338.txt"))).toBe(false); // nothing escaped
     expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
@@ -436,10 +436,10 @@ describe("applyPatchSeries — pre-git-am containment backstop (#338)", () => {
     const out = await applyPatchSeries(cfg, work, "t-338-bin", series, { gitFn });
 
     expect(out.ok).toBe(false);
-    const failure = out as { ok: false; reason: string; refused: boolean };
+    const failure = out as { ok: false; error: string; refused: boolean };
     expect(failure.refused).toBe(true);
-    expect(failure.reason).toMatch(/refused before git am/);
-    expect(failure.reason).toMatch(/binary hunk/);
+    expect(failure.error).toMatch(/refused before git am/);
+    expect(failure.error).toMatch(/binary hunk/);
     expect(calls).toEqual([]);
     expect(existsSync(join(work, "blob.bin"))).toBe(false);
     expect(run(["git", "-C", work, "log", "-1", "--format=%s"]).trim()).toBe("seed");
@@ -461,9 +461,9 @@ describe("applyPatchSeries — pre-git-am containment backstop (#338)", () => {
     const out = await applyPatchSeries(cfgFor(root), work, "t-338-conflict", conflicting);
 
     expect(out.ok).toBe(false);
-    const failure = out as { ok: false; reason: string; refused: boolean };
+    const failure = out as { ok: false; error: string; refused: boolean };
     expect(failure.refused).toBe(false);
-    expect(failure.reason).toMatch(/git am --3way failed/);
+    expect(failure.error).toMatch(/git am --3way failed/);
   });
 });
 
@@ -610,7 +610,7 @@ describe("applyPatchSeries — transcript frames (Stage 4a)", () => {
       fileExists: mem.fileExists,
     });
     expect(out.ok).toBe(false);
-    const reason = (out as { reason: string }).reason;
+    const reason = (out as { error: string }).error;
 
     const frames = parseFrames(mem.lines);
     expect(frames.map((f) => f.type)).toEqual(["junco_meta", "junco_run_start", "junco_run_end"]);
