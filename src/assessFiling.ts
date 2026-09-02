@@ -13,7 +13,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config } from "./types.js";
-import { gh, GitOpError, isNetworkError } from "./git.js";
+import { gh, GitOpError, isNetworkError, describeError, GH_TIMEOUT_MS } from "./git.js";
 import {
   tryOrEnqueue,
   fetchFindingMarkers,
@@ -24,8 +24,6 @@ import {
 import { buildIssueTitle, buildIssueBody, findingLabels, type Finding } from "./findings.js";
 import { writePending, type FiledRecord, type PendingAssess } from "./assessReview.js";
 import { log } from "./logging.js";
-
-const GH_TIMEOUT = 60_000;
 
 export interface FileFindingsDeps {
   ghFn?: typeof gh;
@@ -41,11 +39,6 @@ export interface FileResult {
   /** The batch as persisted after this pass — filed stamps merged in. The
    * batch STAYS parked; explicit discard is the only end-of-life. */
   batch: PendingAssess;
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof GitOpError) return e.stderr || e.message;
-  return e instanceof Error ? e.message : String(e);
 }
 
 /** Create ONE issue live; return the URL gh prints, or null. Moved verbatim from
@@ -75,7 +68,7 @@ export async function createIssueLive(
         file,
         ...labels.flatMap((l) => ["--label", l]),
       ],
-      { timeoutMs: GH_TIMEOUT },
+      { timeoutMs: GH_TIMEOUT_MS },
     );
     return (
       out.stdout

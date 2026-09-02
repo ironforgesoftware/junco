@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   GitOpError,
+  describeError,
+  GH_TIMEOUT_MS,
+  GH_PUSH_TIMEOUT_MS,
   runCmd,
   isNetworkError,
   runWithRetry,
@@ -36,6 +39,44 @@ describe("GitOpError", () => {
     const e = new GitOpError("msg");
     expect(e.stderr).toBe("");
     expect(e.returncode).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// describeError
+// ---------------------------------------------------------------------------
+
+describe("describeError", () => {
+  it("prefers a GitOpError's stderr over its generic message", () => {
+    const e = new GitOpError("gh api failed (exit 1)", "HTTP 403: Resource not accessible", 1);
+    expect(describeError(e)).toBe("HTTP 403: Resource not accessible");
+  });
+
+  it("falls back to the GitOpError message when stderr is empty", () => {
+    expect(describeError(new GitOpError("gh timed out after 60000ms"))).toBe(
+      "gh timed out after 60000ms",
+    );
+  });
+
+  it("returns the message of a plain Error", () => {
+    expect(describeError(new Error("boom"))).toBe("boom");
+  });
+
+  it("stringifies a non-Error throwable", () => {
+    expect(describeError("nope")).toBe("nope");
+    expect(describeError(undefined)).toBe("undefined");
+    expect(describeError({ code: 7 })).toBe("[object Object]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gh timeout constants
+// ---------------------------------------------------------------------------
+
+describe("gh timeout constants", () => {
+  it("pins the shared gh call and push budgets", () => {
+    expect(GH_TIMEOUT_MS).toBe(60_000);
+    expect(GH_PUSH_TIMEOUT_MS).toBe(180_000);
   });
 });
 

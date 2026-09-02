@@ -7,6 +7,10 @@
  * + optional corrective re-dispatch) → verification gate → push → open/amend PR
  * → cleanup → finalize.
  *
+ * Phase 9 (post-session review) lives in `postSessionReview.ts` (#353) — it
+ * takes its inputs as a `ReviewCtx` and hands back everything Phases 10-14
+ * read, so the escalation ladder is testable without driving all 14 phases.
+ *
  * Every error path routes to `finalizePr(... failed)` with a `phaseError`.
  */
 
@@ -37,13 +41,9 @@ import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./re
 import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
 import type { SpendLedger } from "./spendLedger.js";
-import {
-  runSpecVerification,
-  makeLazySandboxedRunBlock,
-  type VerificationResult,
-  type VerifyDeps,
-} from "./verify.js";
-import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
+import { makeLazySandboxedRunBlock, type VerificationResult, type VerifyDeps } from "./verify.js";
+import type { CriticResult } from "./critic.js";
+import { runPostSessionReview } from "./postSessionReview.js";
 import { scanPendingPush, formatSecretFindings, type SecretScanDeps } from "./secretScan.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
 import {
@@ -55,6 +55,7 @@ import {
   type SessionOverrides,
 } from "./agent/session.js";
 import { runEnveloped } from "./agent/runEnvelope.js";
+import { emptyRunResult } from "./agent/runResult.js";
 import { finalizePr, computePrStatus, type TerminalDirs } from "./finalize.js";
 import { enqueueOp, isOffline } from "./githubOutbox.js";
 import { queuePaths } from "./config.js";
@@ -225,47 +226,10 @@ function sumUsage(base: Usage, extras: Usage[]): Usage {
   );
 }
 
-/** Port of worker.py `_empty_run_result`: a synthetic RunResult for phases that
- * fail before (or instead of) an agent run. errorMessage carries the reason. */
-function emptyRunResult(phaseError: string): RunResult {
-  return {
-    finalText: "",
-    toolCalls: [],
-    usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
-    stopReason: null,
-    errorMessage: phaseError,
-    timedOut: false,
-    durationMs: 0,
-    abortedByGuard: false,
-  };
-}
-
 /** Port of worker.py `_format_plan_lint_phase_error`. */
 function formatPlanLintPhaseError(errors: { rule: string; message: string }[]): string {
   const parts = errors.map((v) => `${v.rule}: ${v.message.split(".")[0]}`);
   return "plan-lint: " + parts.join("; ");
-}
-
-/**
- * Format a failed VerificationResult for the Stage-2b escalation ladder
- * (apply-tickets-design.md): both `buildApplyFallbackPrompt`'s `detail` (what
- * the escalated agent sees as "why it failed") and `PrOutcome.applyFallback.
- * reason` (what the PR-body disclosure banner's first line names). Same
- * shape as buildPrBody's own verification banner below (first 5 failures,
- * 300-char snippet) so the escalated agent sees the same signal a human
- * reviewer would.
- */
-function formatVerificationFailureDetail(verification: VerificationResult): string {
-  const lines = verification.failedOutputs
-    .slice(0, 5)
-    .map(
-      ({ preview, exitCode, output }) =>
-        `- \`${preview}\` → exit ${exitCode}\n  ${output.trim().slice(0, 300)}`,
-    );
-  return (
-    `${verification.blocksPassed}/${verification.blocksRun} verification checks passed. ` +
-    `Failures:\n${lines.join("\n")}`
-  );
 }
 
 /** Port of worker.py `worktree_is_dirty`: `git status --porcelain` non-empty. */
@@ -765,13 +729,12 @@ export async function runPrFlow(
   // True only for a clean `git am` apply with no Stage-2a/2b escalation — the
   // diff IS the spec, so both the no-sweep rule below (Phase 6) and the
   // critic skip (Phase 9) apply. A fallback ran the agent, so from here on
-  // this ticket is treated exactly like a plain agent ticket. `let` (not
-  // `const`): Stage 2b's verification escalation (Phase 9, below) flips this
-  // to false the moment it fires, so the critic gate right after it sees an
-  // agent-improvised ticket exactly as Stage 2a's Phase-4 fallback already
-  // does — Phase 6 (which runs first) still reads the original clean-apply
-  // value.
-  let appliedCleanly = patchSeries !== null && prOutcome.applyFallback === null;
+  // this ticket is treated exactly like a plain agent ticket. `const` since
+  // #353: Stage 2b's verification escalation still flips it to false, but it
+  // does so inside postSessionReview.ts (which takes this as an input and
+  // returns the post-escalation value as `applyClean`), so Phase 6 — which
+  // runs first — reads the original clean-apply value either way.
+  const appliedCleanly = patchSeries !== null && prOutcome.applyFallback === null;
 
   // Since-ref for commit counting (amend: pre-run HEAD; fresh: origin/<base>).
   // Hoisted above Phase 5 — the transient-requeue check needs a commit count.
@@ -1026,190 +989,38 @@ export async function runPrFlow(
       return flowResult(finalizePr(claimedPath, result, prOutcome, { dirs }), prOutcome, result);
     }
 
-    // Phase 9: post-session review (skip on a guard-aborted or timed-out
-    // session — the work is by definition incomplete; review would mis-flag).
-    // extraUsages collects every session run in this phase (critic pass 1,
-    // corrective, critic pass 2 — whichever executed) so their usage can be
-    // summed into the main run's for the ticket's recorded cost/tokens.
-    const skipPostSessionReview = result.abortedByGuard || result.timedOut;
-    // Apply mode skips the CRITIC specifically (not verification): the diff
-    // IS the spec the ticket carried, so an LLM comparing the diff against
-    // itself is tautological. Spec verification is a separate, independent
-    // check (the ticket's own `## Verification` blocks) and still runs.
-    //
-    // NARROWED for Stage 2a: that tautology only holds while the patch itself
-    // is what landed. The moment an apply-fallback session ran (the agent
-    // improvised against the patch as spec, not the patch's own bytes), diff-
-    // vs-spec review is meaningful again — skip on "patch applied AND no
-    // fallback ran", not merely "this ticket carried a patch" (appliedCleanly,
-    // computed right after Phase 4).
-    const skipCritic = skipPostSessionReview || appliedCleanly;
-    const extraUsages: Usage[] = [];
-    if (skipCritic) {
-      // Record the skip as metadata (parity with worker.py PrOutcome.critic =
-      // CriticResult(status="skipped", ...)). The buildPrBody banner only fires
-      // on pass/missing, so this never surfaces in the PR body — metadata only.
-      prOutcome.critic = {
-        status: "skipped",
-        findings: appliedCleanly
-          ? "apply mode — the patch series is the spec"
-          : result.timedOut
-            ? "timed-out session"
-            : "aborted-by-repetition session",
-        rawOutput: "",
-        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
-      };
-    }
-    if (!skipPostSessionReview) {
-      prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
-      if (prOutcome.verification.skippedReason) {
-        log.info(`spec verification: skipped (${prOutcome.verification.skippedReason})`);
-      } else {
-        log.info(
-          `spec verification: ${prOutcome.verification.blocksPassed}/${prOutcome.verification.blocksRun} checks passed`,
-        );
-      }
-
-      // Stage 2b escalation ladder (apply-tickets-design.md): the patch
-      // applied cleanly, but the ticket's own `## Verification` block then
-      // failed. Same shape as Stage 2a's apply-failure fallback (Phase 4)
-      // above — the agent gets the patch as SPEC plus the verification
-      // failure as context, not bytes to replay — but triggered by a failed
-      // check instead of a failed `git am`. Trigger, ALL required:
-      //   - the ticket applied a series (patchSeries !== null),
-      //   - no fallback has run yet (never escalate twice — this block sets
-      //     prOutcome.applyFallback below, which also excludes a ticket that
-      //     already fell back in Phase 4 for an apply failure),
-      //   - verification actually reported failures, and
-      //   - the toggle is on.
-      // ONE attempt, never a loop (ruling R3): after the re-verify below,
-      // whatever it says stands — Phase 10 gates on it exactly as usual.
-      if (
-        patchSeries !== null &&
-        prOutcome.applyFallback === null &&
-        prOutcome.verification.failedOutputs.length > 0 &&
-        cfg.applyFallbackToAgent
-      ) {
-        const detail = formatVerificationFailureDetail(prOutcome.verification);
-        log.warn(
-          "spec verification failed on a clean apply — falling back to the agent " +
-            "(worker.applyFallbackToAgent)",
-        );
-        prOutcome.applyFallback = { kind: "verification", reason: detail };
-        prOutcome.mode = "apply_fallback";
-        // Flips the critic-skip narrowing right below: the diff is no longer
-        // the whole story once the agent has improvised against it, so the
-        // critic pass treats this ticket like an ordinary agent ticket —
-        // mirrors Phase 4's Stage-2a `appliedCleanly = false`. Phase 6 (the
-        // no-sweep rule) already ran on the original clean-apply value above
-        // and is unaffected by this reassignment.
-        appliedCleanly = false;
-        const fallbackPrompt = buildApplyFallbackPrompt(task, patchSeries, {
-          kind: "verification",
-          detail,
-        });
-        // Full fidelity (final-review R5): REPLACE `result` with the fallback
-        // session's own RunResult, mirroring Stage 2a's Phase-4 fallback
-        // (which assigns straight into `result` too) rather than discarding
-        // everything but its usage. Downstream — computePrStatus (finalize.ts),
-        // buildPrBody's guard/timeout banners and Agent-summary/metadata
-        // section, and Phase 14's gate.reportSuccess() below — all read
-        // `result`/`finalResult`, not a separately-tracked fallback value; a
-        // guard-killed or timed-out fallback must read as a partial run, and
-        // the PR body must show what the agent actually did, not the
-        // synthesized apply result's "Applied N patch(es)" / zero tool calls.
-        // extraUsages stays untouched here: `result.usage` (now the fallback's)
-        // is already the base sumUsage(...) below adds onto — pushing it again
-        // would double-count.
-        result = await runEnveloped(
-          flowCfg,
-          {
-            ticketId: task.id,
-            flow: "pr_apply_fallback",
-            body: fallbackPrompt,
-            cwd: wtPath,
-            timeoutMs: task.timeoutSeconds * 1000,
-          },
-          {
-            createSession: makeAgentSessionFactory(),
-            abortSignal: deps.abortSignal,
-            onProgress: deps.onProgress,
-            onGuardDecision: deps.onGuardDecision,
-            spend: deps.spend,
-          },
-        );
-        log.info(`apply fallback (verification): agent abortedByGuard=${result.abortedByGuard}`);
-        // Re-count/list commits (mirrors the critic corrective-retry
-        // re-evaluation below) and re-run verification exactly once.
-        newCommits = await countNewCommits(cfg, wtPath, sinceRef);
-        prOutcome.commits = await listNewCommits(cfg, wtPath, sinceRef);
-        prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
-        log.info(
-          `spec verification (post-fallback): ${prOutcome.verification.blocksPassed}/${prOutcome.verification.blocksRun} checks passed`,
-        );
-      }
-
-      if (!appliedCleanly) {
-        const critic = await runCriticPass(cfg, task, wtPath, sinceRef, {
-          criticSessionFactory: deps.criticSessionFactory,
-        });
-        prOutcome.critic = critic;
-        extraUsages.push(critic.usage);
-        deps.spend?.recordUsd(critic.usage.costUsd);
-        log.info(
-          `critic: ${critic.status}${critic.findings ? ` (${critic.findings.slice(0, 120)})` : ""}`,
-        );
-
-        if (critic.status === "missing" && cfg.criticMaxRetries > 0 && !isAmend(ctx)) {
-          log.info(
-            `critic: MISSING ${critic.findings.slice(0, 120)} — re-dispatching one corrective worker turn`,
-          );
-          const correctiveFactory = (deps.sessionFactoryFor ?? makePiSessionFactory)(
-            flowCfg,
-            wtPath,
-            {
-              network: task.network ?? undefined,
-            },
-          );
-          // Same ticketId → the envelope derives the same transcript path as
-          // the main run, so this turn appends to the same chronological
-          // record (second open finds the file exists → no second junco_meta).
-          const corrective = await runEnveloped(
-            flowCfg,
-            {
-              ticketId: task.id,
-              flow: "pr_corrective",
-              body: buildCorrectivePrompt(task, critic.findings),
-              cwd: wtPath,
-              timeoutMs: task.timeoutSeconds * 1000,
-            },
-            {
-              createSession: correctiveFactory,
-              abortSignal: deps.abortSignal,
-              onProgress: deps.onProgress,
-              onGuardDecision: deps.onGuardDecision,
-              spend: deps.spend,
-            },
-          );
-          extraUsages.push(corrective.usage);
-          prOutcome.criticRetriesUsed = 1;
-          log.info(`critic retry: agent abortedByGuard=${corrective.abortedByGuard}`);
-          // Re-evaluate commits + critic + verification after the retry.
-          newCommits = await countNewCommits(cfg, wtPath, sinceRef);
-          prOutcome.commits = await listNewCommits(cfg, wtPath, sinceRef);
-          const criticAfter = await runCriticPass(cfg, task, wtPath, sinceRef, {
-            criticSessionFactory: deps.criticSessionFactory,
-          });
-          prOutcome.critic = criticAfter;
-          extraUsages.push(criticAfter.usage);
-          deps.spend?.recordUsd(criticAfter.usage.costUsd);
-          log.info(
-            `critic (post-retry): ${criticAfter.status}${criticAfter.findings ? ` (${criticAfter.findings.slice(0, 120)})` : ""}`,
-          );
-          prOutcome.verification = await runSpecVerification(cfg, task, wtPath, verifyDeps);
-        }
-      }
-    }
+    // Phase 9: post-session review — spec verification, the Stage-2b
+    // escalation rung, the critic pass and its one corrective re-dispatch.
+    // Extracted to postSessionReview.ts (#353): everything Phases 10-14 read
+    // comes back in the outcome, including a `result` REPLACED by the Stage-2b
+    // fallback session's own and commits re-counted whenever a session re-ran.
+    const review = await runPostSessionReview({
+      cfg,
+      flowCfg,
+      task,
+      wtPath,
+      sinceRef,
+      amend: isAmend(ctx),
+      patchSeries,
+      result,
+      newCommits,
+      commits: prOutcome.commits,
+      appliedCleanly,
+      applyFallback: prOutcome.applyFallback,
+      mode: prOutcome.mode,
+      verifyDeps,
+      makeAgentSessionFactory,
+      deps,
+    });
+    result = review.result;
+    newCommits = review.newCommits;
+    prOutcome.commits = review.commits;
+    prOutcome.verification = review.verification;
+    prOutcome.critic = review.criticResult;
+    prOutcome.applyFallback = review.applyFallback;
+    prOutcome.mode = review.mode;
+    prOutcome.criticRetriesUsed = review.criticRetriesUsed;
+    const extraUsages = review.extraUsages;
 
     // extraUsages is empty when post-session review was skipped (guard-abort
     // / timeout), in which case this is a no-op copy of `result`.

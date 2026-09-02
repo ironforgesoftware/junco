@@ -128,6 +128,7 @@ import {
   configPathOverride,
 } from "./config.js";
 import { updateConfigFile, type ConfigWriteDeps } from "./configWrite.js";
+import { describeError } from "./git.js";
 import {
   migrateStateTree,
   pendingStateTreeMigrations,
@@ -534,10 +535,6 @@ class PartialCopyError extends Error {
     );
     this.name = "PartialCopyError";
   }
-}
-
-function describeError(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 /** The receipt line for a pair whose cross-device copy was interrupted —

@@ -25,6 +25,7 @@ import { ClickableBox } from "../ClickableBox.js";
 import { TextField } from "./TextField.js";
 import { LEVERS, getAtPath, setAtPath, coerceLever, type Lever } from "../../configLevers.js";
 import { readConfigFile, updateConfigFile, type ConfigWriteDeps } from "../../configWrite.js";
+import { describeError } from "../../git.js";
 import { useGuardedInput } from "../useGuardedInput.js";
 
 /** Top-level scalar leaves that share one "general" section rather than each
@@ -115,10 +116,6 @@ function formatValue(lever: Lever, value: unknown): string {
     return JSON.stringify(value);
   }
   return String(value);
-}
-
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 /** Chrome budget (title + border × 2 + footer description + toast + hint,
@@ -256,7 +253,7 @@ export function ConfigView({
         configDeps,
       );
     } catch (e) {
-      showToast("error", errMsg(e));
+      showToast("error", describeError(e));
       return;
     }
     setRaw(next);

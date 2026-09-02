@@ -40,7 +40,7 @@ npm run lint && npm run format:check && npm run typecheck && npm run build && np
   ```
 
 - **Strict mode** is on. Do not disable individual strict checks.
-- Config is parsed and validated with **zod**. All config types flow from `config.ts` / `types.ts`; do not add raw `any` casts to handle config fields.
+- Config is parsed and validated with **zod**. All config types flow from `configSchema.ts` / `types.ts` (re-exported through `config.ts`); do not add raw `any` casts to handle config fields.
 
 ### Dependencies
 
@@ -58,9 +58,9 @@ The PR-flow integration tests use a **real local git harness** (bare remote + cl
 
 ### Add a config knob
 
-1. Add the field to the zod schema in `config.ts`.
+1. Add the field to the zod schema in `configSchema.ts`.
 2. Add the corresponding type to the `Config` interface in `types.ts`.
-3. Map the parsed value inside `loadConfig` in `config.ts`.
+3. Map the parsed value inside `assembleConfig` in `configAssemble.ts`.
 4. Update any test fixtures that construct a `Config` object directly — the TypeScript compiler will flag them as incomplete.
 
 ### Add a loop guard

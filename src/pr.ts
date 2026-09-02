@@ -11,7 +11,7 @@
  *   - derivePrTitle      — ctx.prTitle → (apply tickets: mbox Subject) → first H1 → task.id
  */
 
-import { git, gh, GitOpError } from "./git.js";
+import { git, gh, GitOpError, GH_PUSH_TIMEOUT_MS } from "./git.js";
 import type { RepoContext } from "./repoContext.js";
 import { parsePatchSeries, stripPatchFence, firstPatchSubject } from "./patchTicket.js";
 
@@ -132,7 +132,7 @@ export async function pushBranch(
   args.push("--set-upstream", "--", remote, branch);
   await git(cfg, args, {
     cwd: wtPath,
-    timeoutMs: 180_000,
+    timeoutMs: GH_PUSH_TIMEOUT_MS,
     retryNetwork: true,
     retryBaseDelayMs,
   });
