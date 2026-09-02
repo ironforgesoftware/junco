@@ -103,13 +103,12 @@ export async function environmentChecks(
     }
   }
 
-  // Branch collision: mirror repoContext.ts's deriveRepoContext exactly
-  // (repoContext.ts:112-115) — branch_name is honored only when it passes
-  // isSafeGitRef, and the derived fallback uses cfg.branchPrefix (a live
-  // config lever, not a hardcoded "junco/") via deriveBranchName, which keeps
-  // '/' in the id slug rather than collapsing it like ticketSlug. A branch
-  // already on origin fails the run after the agent's work is done — catch
-  // it before submit instead.
+  // Branch collision: mirror repoContext.ts's deriveRepoContext exactly —
+  // branch_name is honored only when it passes isSafeGitRef, and the derived
+  // fallback uses cfg.branchPrefix (a live config lever, not a hardcoded
+  // "junco/") via deriveBranchName, which keeps '/' in the id slug rather than
+  // collapsing it like ticketSlug. A branch already on origin fails the run
+  // after the agent's work is done — catch it before submit instead.
   const branch =
     typeof frontmatter.branch_name === "string" && isSafeGitRef(frontmatter.branch_name)
       ? frontmatter.branch_name

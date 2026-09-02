@@ -112,9 +112,9 @@ export const UnifiedRail = React.memo(function UnifiedRail({
             hoverBg={sel ? theme.selectionBg : theme.hoverBg}
             onPress={onRowPress ? () => onRowPress(idx) : undefined}
           >
-            {/* Pinned: the ▌ NO_COLOR selection fallback (theme.ts:4). Without
-                flexShrink={0} Ink squeezes it to zero on a long nwo — the row then
-                has no visible selection at all (#193). */}
+            {/* Pinned: the ▌ NO_COLOR selection fallback (see theme.ts's `theme`
+                doc comment). Without flexShrink={0} Ink squeezes it to zero on a
+                long nwo — the row then has no visible selection at all (#193). */}
             <Box flexShrink={0}>
               <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
             </Box>

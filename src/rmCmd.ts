@@ -6,8 +6,9 @@
  * inbox/. It is deliberately ENOENT-tolerant: the daemon can atomically claim a
  * ticket into processing/ between the caller's listing and this delete, and a
  * transient requeue can even rename a just-deleted name back INTO inbox/
- * (requeue.ts:82), so a miss is reported truthfully as "may reappear" and exits
- * 0 — this is a best-effort inbox delete, not an authoritative kill.
+ * (`moveBackToInbox` in requeue.ts), so a miss is reported truthfully as "may
+ * reappear" and exits 0 — this is a best-effort inbox delete, not an
+ * authoritative kill.
  */
 
 import { readdirSync, unlinkSync } from "node:fs";

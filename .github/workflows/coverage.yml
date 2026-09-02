@@ -21,6 +21,21 @@ jobs:
   # produce two different coverage numbers, because sandbox.integration.test.ts
   # is platform-gated and skips when the Seatbelt/bwrap binary is absent. The
   # floor lives in vitest.config.ts's coverage.thresholds; this job enforces it.
+  #
+  # Consequence, stated so it is not a surprise: this leg does NOT install
+  # bubblewrap (the gate's ubuntu leg does, #277), so sandbox.integration.test.ts
+  # skips here and the pinned floor — the global numbers and the
+  # src/agent/sandbox/** glob alike — is a unit-suite-only measurement. That is
+  # the price of one runner-independent number; real bwrap/Seatbelt enforcement
+  # is gated by quality-gate.yml. Measured 2026-09-01, excluding that suite moves
+  # no reported percentage, so it is not inflating the floor either.
+  #
+  # Kept as its own workflow rather than folded into the gate's ubuntu leg
+  # (#388). GitHub badges are per-workflow, not per-job, so folding would also
+  # delete the README coverage badge, and the separately named `coverage` check
+  # is worth the duplicate ~40s. It is not a required check — the ruleset
+  # requires only the aggregate `quality-gate` context — so it can never block a
+  # merge on its own.
   coverage:
     name: coverage floor
     runs-on: ubuntu-latest

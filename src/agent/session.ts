@@ -714,8 +714,9 @@ export interface ResolvedModelInfo {
  * validate a model id without constructing a full agent session.
  *
  * `modelId`, when given, OVERRIDES `cfg.model.id` (same endpoint/apiKey/source
- * — mirrors the planner-model override in runOnce.ts:317) so a planner-model
- * preflight can check the override resolves before a Q&A ticket runs it.
+ * — mirrors the planner-model override in runOnce.ts's `executeClaimed`) so a
+ * planner-model preflight can check the override resolves before a Q&A ticket
+ * runs it.
  *
  * Throws whatever `resolveModelViaRegistries` throws on a cascade miss (no
  * models.json match, no catalog match, and no inline apiKey configured) —

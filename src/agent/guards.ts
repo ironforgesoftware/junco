@@ -12,9 +12,8 @@
  * the table is now the Python's minus that one entry, not an exact mirror.
  * Every other threshold and all trip logic are still ported verbatim.
  *
- * Reference: worker.py RepetitionGuard ~675–726, DEFAULT_TOOL_LOOP_THRESHOLDS
- * ~738–747, ToolCallLoopGuard ~750–814, ToolErrorLoopGuard ~817–858,
- * OutputBudgetGuard ~861–927.
+ * Reference: worker.py's `RepetitionGuard`, `DEFAULT_TOOL_LOOP_THRESHOLDS`,
+ * `ToolCallLoopGuard`, `ToolErrorLoopGuard`, and `OutputBudgetGuard`.
  */
 
 import { createHash } from "node:crypto";
@@ -98,7 +97,7 @@ function strCount(haystack: string, needle: string): number {
  * catches the 'model keeps regenerating the same paragraph until max_tokens'
  * failure mode that tool-call-level guards can't see.
  *
- * Mirrors Python RepetitionGuard exactly (worker.py ~675–726).
+ * Mirrors Python `RepetitionGuard` exactly (worker.py).
  */
 export class RepetitionGuard {
   private readonly windowChars: number;
@@ -169,7 +168,7 @@ export class RepetitionGuard {
  * consecutively. argHash is sha1(stableJsonStringify(args)).hex[:12], mirroring
  * Python's `hashlib.sha1(json.dumps(args, sort_keys=True, default=str)).hexdigest()[:12]`.
  *
- * Mirrors Python ToolCallLoopGuard exactly (worker.py ~750–814).
+ * Mirrors Python `ToolCallLoopGuard` exactly (worker.py).
  */
 export class ToolCallLoopGuard {
   private readonly thresholdMap: Record<string, number>;
@@ -232,7 +231,7 @@ export class ToolCallLoopGuard {
  * the public `lastName` that is only set on trip — mirrors Python's
  * `_last_name` (internal) and `last_name` (public).
  *
- * Mirrors Python ToolErrorLoopGuard exactly (worker.py ~817–858).
+ * Mirrors Python `ToolErrorLoopGuard` exactly (worker.py).
  */
 export class ToolErrorLoopGuard {
   private readonly threshold: number;
@@ -283,7 +282,7 @@ export class ToolErrorLoopGuard {
  * converging on a state-changing tool call. Pre-commit budget is tighter
  * (12k); post-commit is looser (24k).
  *
- * Mirrors Python OutputBudgetGuard exactly (worker.py ~861–927).
+ * Mirrors Python `OutputBudgetGuard` exactly (worker.py).
  */
 export class OutputBudgetGuard {
   private readonly preCommitBudget: number;

@@ -35,7 +35,7 @@ import { worktreeSlug, worktreesLockPath } from "./worktree.js";
 import { acquirePidfileLock, type PidfileLock } from "./pidfileLock.js";
 
 /** `.old-<unix-ts>` worktree-backup suffix — worktree.ts renames an unprunable
- * worktree to `<wtPath>.old-<ts>` (worktree.ts:182; same shape as
+ * worktree to `<wtPath>.old-<ts>` (worktree.ts's `prepareWorktree`; same shape as
  * pruneStaleWorktrees' OLD_TS_RE). A dir whose name matches is a legitimate
  * backup the recursive fallback is allowed to delete. */
 const OLD_BACKUP_RE = /\.old-\d+$/;
@@ -178,7 +178,7 @@ export async function runWorktreePruneCommand(
     }
 
     // rmdir the now-empty per-repo discriminator parent (mirrors cleanupWorktree,
-    // worktree.ts:329-336) — never the root, and only when empty.
+    // worktree.ts) — never the root, and only when empty.
     const parent = dirname(target);
     if (resolve(parent) !== root) {
       try {

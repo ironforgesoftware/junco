@@ -825,11 +825,11 @@ export function App(props: AppProps): React.JSX.Element {
   // ids (`gh-<owner>-<repo>-<hash>-<n>`) carry no stamp prefix, so a direct
   // `r.id === id` compare (no stripStamp) is correct here, unlike the local
   // queue rows elsewhere that use `displayId`. A `junco:planning` issue's
-  // live ticket runs under the `-plan`-suffixed id (githubInbox.ts:170), so
-  // both ids are probed against the snapshot — the plain id first (an
-  // execution/ask ticket wins if, somehow, both exist) — or the transcript
-  // key would toast "no ticket in flight" for the one moment a user most
-  // wants to watch. `from` records whether this open came from the issue
+  // live ticket runs under the `-plan`-suffixed id (`buildPlanningTicket` in
+  // githubInbox.ts), so both ids are probed against the snapshot — the plain id
+  // first (an execution/ask ticket wins if, somehow, both exist) — or the
+  // transcript key would toast "no ticket in flight" for the one moment a user
+  // most wants to watch. `from` records whether this open came from the issue
   // list ("main") or the issue-detail overlay ("detail") so esc (App.tsx's
   // `close`) can return to wherever the user actually came from — mirrors
   // `prDetail`'s own `from` field.

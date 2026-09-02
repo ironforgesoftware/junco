@@ -51,9 +51,9 @@ const KNOB_LABEL: Record<KnobKey, string> = {
 /**
  * GuardManager's own built-in defaults, mirrored here purely for the
  * report's "source" line — they are module-private consts, not exported.
- * Keep in sync with src/agent/supervisor.ts:56-58 (DEFAULT_CONFIG's
- * budgetPerKind/escalationWindowTurns) and src/agent/guardManager.ts:53-54
- * (DEFAULT_OUTPUT_BUDGET_PER_TURN/POST_COMMIT).
+ * Keep in sync with src/agent/supervisor.ts's `DEFAULT_CONFIG`
+ * (budgetPerKind/escalationWindowTurns) and src/agent/guardManager.ts's
+ * `DEFAULT_OUTPUT_BUDGET_PER_TURN`/`DEFAULT_OUTPUT_BUDGET_POST_COMMIT`.
  */
 const GUARD_MANAGER_DEFAULTS: Record<KnobKey, number> = {
   budgetPerKind: 1,

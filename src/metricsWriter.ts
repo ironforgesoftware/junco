@@ -86,11 +86,11 @@ export function makeMetricsWriter(file: string, deps: MetricsWriterDeps = {}): M
 
   let lastWriteAt: number | null = null;
 
-  /** Atomic write: mkdir -p, sibling tmp, rename (watchlist.ts:72-77). Never
-   * throws — a failure here is observability-only and must not propagate
-   * into the daemon loop (full disk, read-only mount, etc). `lastWriteAt` is
-   * stamped up front, success or failure, so a persistently broken
-   * filesystem is retried at the normal debounce cadence rather than
+  /** Atomic write: mkdir -p, sibling tmp, rename (watchlist.ts's
+   * `writeWatchlist`). Never throws — a failure here is observability-only and
+   * must not propagate into the daemon loop (full disk, read-only mount, etc).
+   * `lastWriteAt` is stamped up front, success or failure, so a persistently
+   * broken filesystem is retried at the normal debounce cadence rather than
    * hammered on every producer tick. */
   function persist(snap: MetricsSnapshot): void {
     lastWriteAt = now();

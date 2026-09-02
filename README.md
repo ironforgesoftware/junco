@@ -248,7 +248,7 @@ enough to hold in your head.
 ```bash
 git clone https://github.com/ironforgesoftware/junco && cd junco
 npm install
-npm test          # vitest, ~4,300 tests, ~40 s
+npm test          # vitest, ~4,600 tests, ~40 s
 ```
 
 - Run the full gate before a PR:

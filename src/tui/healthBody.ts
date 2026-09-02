@@ -31,7 +31,9 @@ export interface HealthBody {
   chats?: ChatHealth | null;
 }
 
-/** Single AbortController-timed GET /health (mirrors queueSnapshot.ts:169-199).
+/** Single AbortController-timed GET /health — the ONE owner of the probe's
+ * timeout/abort and the `healthEnabled` gate; `makeQueueSnapshotFn`
+ * (queueSnapshot.ts) self-fetches through here rather than repeating it.
  * null when health is disabled, the response is not ok, or the fetch errors —
  * the daemon-down signal the callers thread everywhere. */
 export async function fetchHealthBody(
