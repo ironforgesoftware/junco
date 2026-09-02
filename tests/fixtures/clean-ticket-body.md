@@ -53,10 +53,23 @@ All paths are relative to the worktree root (your cwd).
 
 ### Step 1 — Create CHANGELOG.md
 
-- [ ] Create `CHANGELOG.md` with the Keep a Changelog header, a link to
-      <https://keepachangelog.com/en/1.1.0/>, and one `## v0.1.0 — 2026-04-23`
-      section whose `### Added` list holds the single entry
-      "Initial state: Example target repo for junco."
+- [ ] Create `CHANGELOG.md` with exactly:
+
+  ```markdown
+  # Changelog
+
+  All notable changes to this repository will be documented in this file.
+
+  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+  and this repository adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+  ## v0.1.0 — 2026-04-23
+
+  ### Added
+
+  - Initial state: Example target repo for junco.
+  ```
+
 - [ ] Commit: `git add CHANGELOG.md && git commit -m "docs: add CHANGELOG.md with v0.1.0 entry"`
 
 ## Behavior (acceptance — testable assertions)
@@ -66,8 +79,10 @@ All paths are relative to the worktree root (your cwd).
 
 ## Verification (junco runs this — do NOT run it yourself)
 
-    test -f CHANGELOG.md
-    grep -q "^## v0.1.0" CHANGELOG.md
+```bash
+test -f CHANGELOG.md
+grep -q "^## v0.1.0" CHANGELOG.md
+```
 
 Junco runs each fenced bash block in the worktree after your session ends and
 surfaces results in the PR body. Don't run them yourself — wastes turns.

@@ -10,7 +10,7 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
     expect(extractDrafts("just prose", ctx)).toEqual([]);
   });
 
-  it("one junco-ticket fence → kind ticket; repo is set by junco, not the model", () => {
+  it("one junco-ticket fence → kind ticket; repo: is junco's, and is the checkout PATH", () => {
     const [d] = extractDrafts(
       fence("id: add-cache\npr_title: Add cache", "# Add cache\n\nbody"),
       ctx,
@@ -20,9 +20,13 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
     const f = d!.files[0]!;
     expect(f.id).toBe("add-cache");
     expect(f.name).toBe("add-cache.md");
-    expect(f.frontmatter).toEqual({ id: "add-cache", pr_title: "Add cache", repo: "acme/api" });
+    expect(f.frontmatter).toEqual({
+      id: "add-cache",
+      pr_title: "Add cache",
+      repo: "/repo/acme-api",
+    });
     expect(f.content.startsWith("---\n")).toBe(true);
-    expect(f.content).toContain("repo: acme/api");
+    expect(f.content).toContain("repo: /repo/acme-api");
     expect(f.content.endsWith("# Add cache\n\nbody\n")).toBe(true);
     expect(f.droppedKeys).toEqual([]);
   });
@@ -36,7 +40,7 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
       ctx,
     );
     const f = d!.files[0]!;
-    expect(f.frontmatter).toEqual({ id: "x", labels: ["a"], repo: "acme/api" });
+    expect(f.frontmatter).toEqual({ id: "x", labels: ["a"], repo: "/repo/acme-api" });
     expect(f.droppedKeys.sort()).toEqual(["foo", "network", "repo", "tools", "workdir"]);
     for (const k of [
       "tools",
@@ -52,7 +56,7 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
       expect(FRONTMATTER_ALLOWLIST.has(k)).toBe(false);
   });
 
-  it("local repo (no nwo): repo is the cwd", () => {
+  it("local repo (no nwo): repo is the cwd — same value a watched session gets (R17)", () => {
     const [d] = extractDrafts(fence("id: x", "# X"), { ...ctx, nwo: null });
     expect(d!.files[0]!.frontmatter.repo).toBe("/repo/acme-api");
   });
@@ -130,7 +134,10 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
   it("a fence without frontmatter gets a generated id from the H1", () => {
     const [d] = extractDrafts("```junco-ticket\n# Fix the flaky test\n\nbody\n```", ctx);
     expect(d!.files[0]!.id).toBe("fix-the-flaky-test");
-    expect(d!.files[0]!.frontmatter).toEqual({ id: "fix-the-flaky-test", repo: "acme/api" });
+    expect(d!.files[0]!.frontmatter).toEqual({
+      id: "fix-the-flaky-test",
+      repo: "/repo/acme-api",
+    });
   });
 
   it("junco-plan → planSet (blocked when plan sets are off); both fence kinds in one message → two drafts", () => {

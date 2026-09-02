@@ -51,9 +51,14 @@ export interface ExtractedDraft {
 }
 
 export interface ExtractCtx {
-  /** The session cwd — `repo:` for a local session. */
+  /** The session cwd. ALWAYS what junco writes as `repo:`, watched or local
+   * (R17): decideRoute and `junco submit` match a ticket to a watched repo by
+   * the PATH's origin remote (findWatchedForPath — the dispatch skill's own
+   * rule), so an owner/repo there would miss the watchlist AND fail
+   * environmentChecks' repo_path_missing. */
   repo: string;
-  /** owner/repo for a watched session — `repo:` then, and the audit/investigate target. */
+  /** owner/repo for a watched session: the audit/investigate command target
+   * ONLY. Never `repo:` — see above. */
   nwo: string | null;
   planSetsEnabled: boolean;
 }
@@ -134,7 +139,7 @@ function splitFile(raw: string, ctx: ExtractCtx, problems: string[]): SplitResul
     if (h1) kept.id = slug(h1);
     else delete kept.id;
   }
-  kept.repo = ctx.nwo ?? ctx.repo;
+  kept.repo = ctx.repo;
   const id = typeof kept.id === "string" ? kept.id : null;
   const trimmedBody = body.replace(/^\n+/, "").replace(/\s+$/, "");
   if (OPEN_PATCH_FENCE_RE.test(trimmedBody) && extractPatchBody(trimmedBody) === null) {

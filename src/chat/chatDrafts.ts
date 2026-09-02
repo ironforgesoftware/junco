@@ -8,7 +8,7 @@
 import type { Config } from "../types.js";
 import { parseTicket } from "../ticket.js";
 import { lintTicket, formatViolations, type LintViolation } from "../planLint.js";
-import { decideRoute, type RouteDecision } from "../submitPreflight.js";
+import { decideRoute, type PreflightDeps, type RouteDecision } from "../submitPreflight.js";
 import { parsePlanSet } from "../planCompiler.js";
 import type { ReviewStoreDeps } from "../reviewStore.js";
 import type { ChatManagerDeps } from "./chatManager.js";
@@ -24,6 +24,9 @@ import {
 export interface ParkDeps {
   lintFn?: typeof lintTicket;
   routeFn?: typeof decideRoute;
+  /** decideRoute's own seams (git/fs) — the real one probes the watchlist by
+   *  the repo PATH's origin remote when github + bot are on (R17). */
+  routeDeps?: PreflightDeps;
   store?: ReviewStoreDeps;
   now?: () => number;
 }
@@ -76,6 +79,7 @@ async function lintFiles(
   x: ExtractedDraft,
   lintFn: typeof lintTicket,
   routeFn: typeof decideRoute,
+  routeDeps: PreflightDeps | undefined,
 ): Promise<DraftFile[]> {
   const files: DraftFile[] = [];
   for (const [i, f] of x.files.entries()) {
@@ -96,7 +100,7 @@ async function lintFiles(
           checkLabels: false,
         }).violations,
       );
-      route = await routeFn(cfg, t.frontmatter);
+      route = await routeFn(cfg, t.frontmatter, routeDeps);
     }
     files.push({ name: f.name, content: f.content, lint, route, droppedKeys: f.droppedKeys });
   }
@@ -114,7 +118,7 @@ export async function parkDrafts(
   const now = deps.now ?? ((): number => Date.now());
   const out: PendingDraft[] = [];
   for (const x of extracted) {
-    const files = await lintFiles(cfg, session, x, lintFn, routeFn);
+    const files = await lintFiles(cfg, session, x, lintFn, routeFn, deps.routeDeps);
     const at = now();
     const draft: PendingDraft = {
       id: draftId(session.slug, at),
