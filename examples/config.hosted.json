@@ -39,7 +39,8 @@
   "verify": {
     "enabled": true,
     "commandTimeout": 60,
-    "blockOnFail": false
+    "blockOnFail": false,
+    "sandboxed": true
   },
   "sandbox": {
     "enabled": true,

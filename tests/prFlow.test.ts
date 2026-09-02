@@ -29,6 +29,8 @@ import { parseTicket } from "../src/ticket.js";
 import { listOps, type OutboxOp } from "../src/githubOutbox.js";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket } from "../src/types.js";
 import type { AgentSessionLike } from "../src/agent/session.js";
+import type { SandboxBackend } from "../src/agent/sandbox/backend.js";
+import type { SandboxPolicy } from "../src/agent/sandbox/policy.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { dataTreePaths } from "../src/dataTree.js";
 import { transcriptPathFor } from "../src/slug.js";
@@ -464,6 +466,98 @@ exit 1
       "junco/verify",
     ]);
     expect(remoteBranches.trim()).toBe("");
+  });
+
+  it("verification blocks run through the resolved sandbox backend under the ticket policy (#335)", async () => {
+    const cfg = makeConfig(h, { verifyEnabled: true, verifyBlockOnFail: true });
+    const body = `# Feature with sandboxed verification
+
+Make a change.
+
+## Verification
+
+\`\`\`bash
+true
+\`\`\`
+`;
+    const { task, path } = makeTicket(
+      h,
+      "sbx.md",
+      `---\nid: sbx\nrepo: ${h.work}\nnetwork: true\n---\n${body}`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const policy: SandboxPolicy = {
+      writableRoots: ["/sbxroot/wt"],
+      readDenyPaths: [],
+      readDenyFiles: [],
+      readAllowPaths: [],
+      network: true,
+      scratchDir: "/sbxroot/scratch",
+      bashTimeoutMs: undefined,
+    };
+    const spawned: Array<{ command: string; policy: SandboxPolicy }> = [];
+    const resolved: Array<{ cwd: string; network: boolean | undefined }> = [];
+    // A backend whose argv refuses the block outright — what a confining
+    // profile does — so a block that passes on its own (`true`) fails here
+    // exactly when, and only when, the backend's argv is what ran.
+    const backend: SandboxBackend = {
+      name: "none",
+      spawnArgv(command, p) {
+        spawned.push({ command, policy: p });
+        return ["/bin/sh", "-c", "echo confined >&2; exit 9"];
+      },
+      async checkAvailability() {
+        return { available: true };
+      },
+    };
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      resolveSandbox: async (_cfg, cwd, overrides) => {
+        resolved.push({ cwd, network: overrides.network });
+        return { backend, policy };
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(spawned).toEqual([{ command: "true", policy }]);
+    // Resolved for the worktree, with the ticket's own network opt-in.
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].cwd).toContain("sbx");
+    expect(existsSync(resolved[0].cwd)).toBe(true);
+    expect(resolved[0].network).toBe(true);
+    // The backend's argv is what ran: a block that passes on its own failed.
+    expect(phaseError).toContain("verification gate blocked push: 0/1");
+    expect(dst.startsWith(h.failed)).toBe(true);
+  });
+
+  it("verify.sandboxed=false keeps verification on the direct spawn path (#335)", async () => {
+    const cfg = makeConfig(h, {
+      verifyEnabled: true,
+      verifyBlockOnFail: true,
+      verifySandboxed: false,
+    });
+    const { task, path } = makeTicket(
+      h,
+      "direct.md",
+      `---\nid: direct\nrepo: ${h.work}\n---\n# Direct\n\nMake a change.\n\n## Verification\n\n\`\`\`bash\ntrue\n\`\`\`\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    let resolveCalls = 0;
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      resolveSandbox: async () => {
+        resolveCalls++;
+        throw new Error("must not be consulted when verify.sandboxed is off");
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(resolveCalls).toBe(0);
+    // The block ran directly and passed → the gate let the PR through.
+    expect(phaseError).toBeNull();
+    expect(dst.startsWith(h.done)).toBe(true);
   });
 
   it("critic corrective: MISSING then a corrective turn sets criticRetriesUsed and still pushes", async () => {

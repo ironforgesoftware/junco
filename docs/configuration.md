@@ -293,6 +293,18 @@ With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog 
 }
 ```
 
+## Verification sandbox
+
+`verify.sandboxed` (default `true`) runs a ticket's `## Verification` bash blocks under the same execution sandbox as the agent's own `bash` tool — the ticket's backend and policy (Seatbelt on macOS, bubblewrap on Linux; network per `sandbox.network` and the ticket's `network:` opt-in; writes limited to the worktree, its scratch dir, the linked worktree's git metadata, and `sandbox.extraAllowWrite`; the built-in secret paths denied). The blocks matter because they execute whatever the agent left in the worktree — a `package.json` `scripts.test`, a Makefile target, a `conftest.py`, a test runner's global setup — and the environment scrub alone cannot keep that code away from what lives on disk (`~/.ssh`, the bot account's `gh` credential, every other checkout on the host). Set it to `false` only for a suite that genuinely must leave the sandbox (an integration test that talks to a real service, say), and understand what the opt-out means: **verification runs your repo's code unconfined**, as the daemon user, with the network and the whole filesystem available to it. Prefer the per-ticket `network: true` opt-in when egress is all that's missing. Inert when `sandbox.enabled` is `false` (there is no sandbox to run under), and a live-reload lever.
+
+```json
+{
+  "verify": {
+    "sandboxed": false
+  }
+}
+```
+
 ## Update check
 
 `updateCheck` (default `true`) enables a best-effort daily check against the npm registry for a
