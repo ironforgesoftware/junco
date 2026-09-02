@@ -112,6 +112,14 @@ class StaleChatSessionError extends Error {
   }
 }
 
+/** Read the opened session file back the way the SDK will (a METHOD call on
+ * the injected manager — no SDK import). Throws exactly when the file cannot
+ * be turned into a context, which is the file-bound definition of "corrupt". */
+function probeSessionContext(manager: unknown): void {
+  const fn = (manager as { buildSessionContext?: unknown } | null)?.buildSessionContext;
+  if (typeof fn === "function") (fn as () => unknown).call(manager);
+}
+
 const realFs: ChatFs = {
   existsSync,
   readFileSync: (p, enc) => readFileSync(p, enc),
@@ -354,11 +362,10 @@ export class ChatSession {
    * throws — it yields a fresh empty session at that path — and `create()`
    * writes nothing until the first assistant message. So "missing" is not an
    * error: it is a reset only when the transcript proves turns were lost.
-   * "Corrupt" is the file existing and `open` OR the session build throwing
-   * (makePiSessionFactory passes the manager straight to createAgentSession,
-   * which reads the file back via `sessionManager.buildSessionContext()` —
-   * SDK 0.84.4 `dist/core/sdk.js:81`) → archive to corrupt-<ts>/, create
-   * fresh, record the reset. */
+   *
+   * Ruling R31: "corrupt" is FILE-BOUND — `open()` throwing, or the
+   * `buildSessionContext()` probe below throwing — and nothing else. A
+   * factory failure propagates untouched (see openSessionManager). */
   async ensureSession(): Promise<ChatSessionLike> {
     if (this.sdk) return this.sdk;
     if (this.sdkPending) return this.sdkPending;
@@ -398,45 +405,74 @@ export class ChatSession {
         }
         return built;
       };
-      if (!this.fs.existsSync(meta.sdkSessionFile)) {
-        if (this.hasCompletedTurn()) {
-          log.warn("chat SDK session file missing; starting fresh", { slug: this.slug });
-          this.writeRecord({ type: "junco_chat_session_reset", reason: "missing" });
-        }
-        const { manager } = await this.makeSm({
-          open: { file: meta.sdkSessionFile, dir: this.dir, cwd: this.cwd },
-        });
-        this.sdk = await build(manager);
-        return this.sdk;
-      }
+      const manager = await this.openSessionManager(meta);
       try {
-        const { manager } = await this.makeSm({
-          open: { file: meta.sdkSessionFile, dir: this.dir, cwd: this.cwd },
-        });
         this.sdk = await build(manager);
-        return this.sdk;
       } catch (e) {
-        // A stale build is not a corrupt file: reading it as one would archive
-        // a perfectly healthy session file and record a false reset.
-        if (e instanceof StaleChatSessionError) throw e;
-        log.warn("chat SDK session file corrupt; starting fresh", {
-          slug: this.slug,
-          error: e instanceof Error ? e.message : String(e),
-        });
-        const corruptDir = join(this.dir, `corrupt-${this.now()}`);
-        this.fs.mkdirSync(corruptDir);
-        this.fs.renameSync(meta.sdkSessionFile, join(corruptDir, "session.jsonl"));
-        const created = await this.makeSm({ create: { cwd: this.cwd, dir: this.dir } });
-        this.writeMeta({ ...meta, sdkSessionFile: created.file, cwd: this.cwd });
-        this.writeRecord({ type: "junco_chat_session_reset", reason: "corrupt" });
-        this.sdk = await build(created.manager);
-        return this.sdk;
+        // Ruling R31: a factory failure is the operator's to fix (a typo'd
+        // chat.modelId, an unreachable endpoint, SKILL.md heading drift), so
+        // it is LOGGED and rethrown — never read as a corrupt file. Nothing
+        // was archived, no reset was recorded, meta is unchanged, and
+        // `sdkPending` clears below, so the next prompt retries the build.
+        if (!(e instanceof StaleChatSessionError))
+          log.error("chat SDK session build failed", {
+            slug: this.slug,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        throw e;
       }
+      return this.sdk;
     })();
     try {
       return await this.sdkPending;
     } finally {
       this.sdkPending = null;
+    }
+  }
+
+  /**
+   * The manager to build on, and the ONLY place a session file is judged
+   * (Ruling R31). Three cases:
+   *
+   * - missing → open it anyway (SDK 0.84.4 yields a fresh empty session at
+   *   that path); a reset record only when the transcript proves turns were
+   *   lost.
+   * - present and readable → return the opened manager.
+   * - present and unreadable — `open()` throws, or `buildSessionContext()`
+   *   throws on a garbled file — → archive to corrupt-<ts>/, create fresh,
+   *   record the reset.
+   *
+   * The probe is what makes "corrupt" file-bound instead of build-bound: it
+   * is the same read the SDK's own `createAgentSession` does through
+   * `sessionManager.buildSessionContext()` (0.84.4 `dist/core/sdk.js:81`),
+   * run HERE where a throw can only be about the file. A manager without the
+   * method (a test fake, a future SDK) simply isn't probed.
+   */
+  private async openSessionManager(meta: ChatMeta): Promise<unknown> {
+    const open = { file: meta.sdkSessionFile, dir: this.dir, cwd: this.cwd };
+    if (!this.fs.existsSync(meta.sdkSessionFile)) {
+      if (this.hasCompletedTurn()) {
+        log.warn("chat SDK session file missing; starting fresh", { slug: this.slug });
+        this.writeRecord({ type: "junco_chat_session_reset", reason: "missing" });
+      }
+      return (await this.makeSm({ open })).manager;
+    }
+    try {
+      const { manager } = await this.makeSm({ open });
+      probeSessionContext(manager);
+      return manager;
+    } catch (e) {
+      log.warn("chat SDK session file corrupt; starting fresh", {
+        slug: this.slug,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      const corruptDir = join(this.dir, `corrupt-${this.now()}`);
+      this.fs.mkdirSync(corruptDir);
+      this.fs.renameSync(meta.sdkSessionFile, join(corruptDir, "session.jsonl"));
+      const created = await this.makeSm({ create: { cwd: this.cwd, dir: this.dir } });
+      this.writeMeta({ ...meta, sdkSessionFile: created.file, cwd: this.cwd });
+      this.writeRecord({ type: "junco_chat_session_reset", reason: "corrupt" });
+      return created.manager;
     }
   }
 

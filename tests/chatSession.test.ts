@@ -298,7 +298,92 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
     expect(last.reason).toBe("missing");
   });
 
-  it("a corrupt SDK session file (open or build throws) is archived under corrupt-* and replaced", async () => {
+  it("a session file that opens but fails the buildSessionContext probe is archived as corrupt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root);
+    await session.ensureSession();
+    const meta = JSON.parse(readFileSync(session.metaPath, "utf8"));
+    // Garbled in a way `open()` tolerates (SDK 0.84.4's loader skips malformed
+    // lines): only the context build the SDK itself runs ever sees it.
+    writeFileSync(meta.sdkSessionFile, '{"type":"session","id":"x"}\n{oops\n');
+    const probing = async (mode: SessionManagerMode) => {
+      const r = await fakeSm(mode);
+      return {
+        ...r,
+        manager: {
+          buildSessionContext: (): unknown => {
+            if ("open" in mode) throw new Error("garbled session entry");
+            return { messages: [] };
+          },
+        },
+      };
+    };
+    const again = new ChatSession(
+      {
+        cfg,
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        dir: join(root, "acme__api"),
+      },
+      {
+        makeSessionManager: probing,
+        sessionFactoryFor: () => fakeChatSession([chatScriptText("hi")]),
+      },
+    );
+    await again.ensureSession();
+    const last = JSON.parse(readFileSync(again.transcriptPath, "utf8").trim().split("\n").pop()!);
+    expect(last.reason).toBe("corrupt");
+    const { readdirSync } = await import("node:fs");
+    expect(readdirSync(join(root, "acme__api")).some((n) => n.startsWith("corrupt-"))).toBe(true);
+  });
+
+  it("a factory failure is not corruption (R31): no archive, no reset, meta untouched, and it retries", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root);
+    await session.ensureSession();
+    const meta = JSON.parse(readFileSync(session.metaPath, "utf8"));
+    const before = records(session.transcriptPath);
+    let calls = 0;
+    // Everything makePiSessionFactory does — model resolution, resolveSandbox,
+    // the resource loader's reload, buildChatPrompt — lives behind this seam,
+    // and none of it says anything about the session FILE.
+    const failing = new ChatSession(
+      {
+        cfg,
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        dir: join(root, "acme__api"),
+      },
+      {
+        makeSessionManager: fakeSm,
+        sessionFactoryFor: () => async () => {
+          calls++;
+          throw new Error("unknown model id local/nope");
+        },
+      },
+    );
+    await expect(failing.ensureSession()).rejects.toThrow("unknown model id local/nope");
+    expect(records(failing.transcriptPath)).toEqual(before);
+    expect(JSON.parse(readFileSync(failing.metaPath, "utf8")).sdkSessionFile).toBe(
+      meta.sdkSessionFile,
+    );
+    expect(existsSync(meta.sdkSessionFile)).toBe(true);
+    const { readdirSync } = await import("node:fs");
+    expect(readdirSync(join(root, "acme__api")).some((n) => n.startsWith("corrupt-"))).toBe(false);
+    // The operator's next prompt surfaces the error instead of appending yet
+    // another reset row — and it genuinely retries the build (sdkPending cleared).
+    await expect(failing.prompt("hello", { source: "operator", timeoutMs: 5_000 })).rejects.toThrow(
+      "unknown model id local/nope",
+    );
+    expect(calls).toBe(2);
+    expect(records(failing.transcriptPath)).toEqual(before);
+  });
+
+  it("a corrupt SDK session file (open throws) is archived under corrupt-* and replaced", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
     const { session } = makeSession(root);
     await session.ensureSession();
