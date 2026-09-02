@@ -243,6 +243,14 @@ export const ConfigSchema = z.object({
       maxTasks: z.number().int().min(1).default(10),
     })
     .prefault({}),
+  chat: z
+    .object({
+      enabled: z.boolean().default(true),
+      modelId: z.string().min(1).optional(),
+      thinkingLevel: z.string().min(1).optional(),
+      turnTimeoutMinutes: z.number().min(1).optional(),
+    })
+    .prefault({}),
 });
 
 export type ConfigParsed = z.infer<typeof ConfigSchema>;

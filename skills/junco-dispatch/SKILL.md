@@ -15,6 +15,8 @@ This skill's own name and its "dispatch to junco" / "send to junco" triggers nam
 
 The two are not interchangeable: audit sweeps a **repo** and produces findings that become issues, while investigate reads **one** issue and produces a comment. Audit generates backlog; investigate deepens one item already on it.
 
+The dashboard's per-repo chat (`src/chat/chatPrompt.ts`) lifts the following sections of this file by their exact headings at build time — renaming one is a contract change caught by `tests/chatPrompt.test.ts`: Metadata rules; Authoring discipline (what makes the plan NOT loop); Things to NEVER put in a plan; Ticket sets; Wrapping an existing plan file; Amend mode (follow-up tickets on existing PRs); Apply mode (patch tickets); Audit mode (sweep a repo → review → file) → Inputs to gather; Investigate mode (deep-read an issue → reviewed comment) → Inputs to gather.
+
 ## When to trigger
 
 Fire this skill when the user explicitly asks to dispatch work:

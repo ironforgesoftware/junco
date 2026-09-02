@@ -16,7 +16,36 @@ import { writePending } from "../src/assessReview.js";
 import { writeDraft } from "../src/commentReview.js";
 import { recordRun, historyFilePath } from "../src/assessHistory.js";
 import { cachePathFor, prCachePathFor } from "../src/githubCachePaths.js";
+import { chatSlug } from "../src/chat/chatKey.js";
+import {
+  draftFilesDir,
+  draftJsonPath,
+  writeChatDraft,
+  type PendingDraft,
+} from "../src/chat/draftStore.js";
 import { makeTree, watch, writeTicket } from "./helpers/unwatchTree.js";
+
+/** Minimal parked-draft fixture (mirrors tests/draftStore.test.ts's own). */
+function chatDraft(id: string, key: string, over: Partial<PendingDraft> = {}): PendingDraft {
+  const slug = chatSlug(key);
+  return {
+    id,
+    key,
+    slug,
+    kind: "ticket",
+    files: [
+      { name: "t.md", content: "---\nid: t\n---\n# T\n", lint: [], route: null, droppedKeys: [] },
+    ],
+    cwd: "/repo",
+    nwo: key,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    lintFailed: false,
+    blocked: null,
+    routeOverride: "auto",
+    commandArgs: null,
+    ...over,
+  };
+}
 
 describe("planUnwatch — refusals and clone classification", () => {
   it("refuses a config-defined repo", () => {
@@ -200,6 +229,37 @@ describe("planUnwatch — nwo-keyed stores", () => {
     for (const k of ["assess-review", "comment-review", "assess-history", "mirror", "github-cache"])
       expect(kinds).toContain(k);
     expect(out.plan.items.filter((i) => i.kind === "github-cache")).toHaveLength(2);
+  });
+
+  it("enumerates the chat session dir and a parked draft for this key; skips other keys' drafts", () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    const slug = chatSlug("acme/api");
+    const chatDir = join(dataTreePaths(cfg).chats, slug);
+    mkdirSync(chatDir, { recursive: true });
+    writeFileSync(join(chatDir, "transcript.jsonl"), "", "utf8");
+    writeChatDraft(cfg, chatDraft("acme__api-1", "acme/api"));
+    writeChatDraft(cfg, chatDraft("other-repo-1", "other/repo"));
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.items).toContainEqual({ kind: "chat-session", path: chatDir });
+    expect(out.plan.items).toContainEqual({
+      kind: "chat-draft",
+      path: draftJsonPath(cfg, "acme__api-1"),
+      detail: "acme__api-1",
+    });
+    expect(out.plan.items.some((i) => i.kind === "chat-draft" && i.detail === "other-repo-1")).toBe(
+      false,
+    );
+  });
+
+  it("no chat session dir on disk → no chat-session item", () => {
+    const { cfg } = makeTree();
+    watch(cfg, "acme/api", join(dataTreePaths(cfg).clonesWatched, "acme", "api"));
+    const out = planUnwatch(cfg, "acme/api");
+    if (!out.ok) throw new Error(out.reason);
+    expect(out.plan.items.some((i) => i.kind === "chat-session")).toBe(false);
   });
 
   it("assessHistory's historyFilePath matches what recordRun/planUnwatch see", () => {
@@ -404,6 +464,24 @@ describe("runUnwatch", () => {
     const { cfg } = makeTree();
     const res = await runUnwatch(cfg, "ghost/repo");
     expect(res).toMatchObject({ ok: true, refused: null, watchlistRemoved: false, summary: [] });
+  });
+
+  it("deletes the chat session dir and the draft's JSON + files dir", async () => {
+    const { cfg } = makeTree();
+    const clone = join(dataTreePaths(cfg).clonesWatched, "acme", "api");
+    watch(cfg, "acme/api", clone);
+    const chatDir = join(dataTreePaths(cfg).chats, chatSlug("acme/api"));
+    mkdirSync(chatDir, { recursive: true });
+    writeFileSync(join(chatDir, "transcript.jsonl"), "", "utf8");
+    writeChatDraft(cfg, chatDraft("acme__api-1", "acme/api"));
+    const res = await runUnwatch(cfg, "acme/api");
+    expect(res.ok).toBe(true);
+    expect(existsSync(chatDir)).toBe(false);
+    expect(existsSync(draftJsonPath(cfg, "acme__api-1"))).toBe(false);
+    expect(existsSync(draftFilesDir(cfg, "acme__api-1"))).toBe(false);
+    expect(res.summary.map((s) => s.kind)).toEqual(
+      expect.arrayContaining(["chat-session", "chat-draft"]),
+    );
   });
 });
 

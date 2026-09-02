@@ -20,6 +20,8 @@ import { listPending, purgePending } from "./assessReview.js";
 import { listDrafts, removeDraft } from "./commentReview.js";
 import { historyFilePath } from "./assessHistory.js";
 import { slugifyId } from "./slug.js";
+import { chatSlug } from "./chat/chatKey.js";
+import { listChatDrafts, draftJsonPath, removeChatDraft } from "./chat/draftStore.js";
 
 export type UnwatchRefusal = "config-defined" | "watchlist-unreadable";
 
@@ -32,7 +34,9 @@ export type PlanItemKind =
   | "comment-review"
   | "assess-history"
   | "mirror"
-  | "github-cache";
+  | "github-cache"
+  | "chat-session"
+  | "chat-draft";
 
 export interface PlanItem {
   kind: PlanItemKind;
@@ -153,7 +157,8 @@ function ticketsTargeting(
 /** The shared nwo-keyed enumerator both watched and residue plans call:
  * outbox ops (by nwo, or by push's repoPath when the op carries no nwo),
  * pending assess/comment reviews, the assess-history file, the mirror dir,
- * and the github-cache files. `repoPathOrNull` is null in residue mode
+ * the github-cache files, the repo's chat session dir, and its parked chat
+ * drafts (spec 2026-09-01 §9). `repoPathOrNull` is null in residue mode
  * (nothing on disk to match a push op's repoPath against). */
 function nwoKeyedItems(
   cfg: Config,
@@ -194,6 +199,15 @@ function nwoKeyedItems(
   if (existsFn(mirror)) items.push({ kind: "mirror", path: mirror });
   for (const f of githubCacheFilesFor(cfg, nwo))
     if (existsFn(f)) items.push({ kind: "github-cache", path: f });
+  // Chat (spec 2026-09-01 §9): the repo's session dir (SDK session + jsonl
+  // transcript) and any drafts still parked for this key. listChatDrafts is
+  // KEY-keyed (not slug-keyed) — same nwo-keyed match as listPending/
+  // listDrafts above, not a slug comparison.
+  const chatDir = join(p.chats, chatSlug(nwo));
+  if (existsFn(chatDir)) items.push({ kind: "chat-session", path: chatDir });
+  for (const d of listChatDrafts(cfg, deps))
+    if (d.key.toLowerCase() === lower)
+      items.push({ kind: "chat-draft", path: draftJsonPath(cfg, d.id), detail: d.id });
   return items;
 }
 
@@ -374,6 +388,13 @@ export async function runUnwatch(
   for (const i of byKind("assess-history")) attempt(i, () => unlinkFn(i.path));
   for (const i of byKind("mirror")) attempt(i, () => rmFn(i.path));
   for (const i of byKind("github-cache")) attempt(i, () => unlinkFn(i.path));
+  // 7b. Chat (spec 2026-09-01 §9): the session dir (SDK session + jsonl
+  // transcript), same rmFn as the mirror dir above, and any parked drafts —
+  // removeChatDraft owns both halves of a draft (JSON + files dir) and reads
+  // deps.rmFn itself, so it shares the exact same deletions this run tracks.
+  for (const i of byKind("chat-session")) attempt(i, () => rmFn(i.path));
+  for (const i of byKind("chat-draft"))
+    attempt(i, () => removeChatDraft(cfg, i.detail as string, deps));
   // 8. Managed clone last (largest; a crash mid-run leaves the re-clonable part).
   for (const i of byKind("clone")) attempt(i, () => rmFn(i.path));
 

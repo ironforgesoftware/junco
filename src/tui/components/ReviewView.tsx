@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { ClickableBox } from "../ClickableBox.js";
 import type { PendingAssess } from "../../assessReview.js";
 import { ANALYSIS_FOOTER, type PendingComment } from "../../commentReview.js";
+import type { PendingDraft } from "../../chat/draftStore.js";
 import { clampScroll, maxScroll } from "../window.js";
 import { fmtAge } from "../queueFmt.js";
 
@@ -17,14 +18,21 @@ export interface DraftOpen {
   kind: "draft";
   draftIdx: number;
 }
+/** A parked chat draft's preview (spec 2026-09-01 §8.6) — `idx` indexes
+ * `chatDrafts`, not the combined list. */
+export interface ChatDraftOpen {
+  kind: "chatDraft";
+  idx: number;
+}
 export interface ReviewState {
   loading: boolean;
   error: string | null;
   batches: PendingAssess[];
   drafts: PendingComment[];
-  // Cursor over the COMBINED list — batches first, then drafts.
+  chatDrafts: PendingDraft[];
+  // Cursor over the COMBINED list — batches, then comment drafts, then chat drafts.
   cursor: number;
-  open: ReviewOpen | DraftOpen | null;
+  open: ReviewOpen | DraftOpen | ChatDraftOpen | null;
 }
 
 // theme.ts has no `danger` key — critical/high map to the semantic `error`
@@ -42,6 +50,35 @@ function windowRange(len: number, cursor: number, rows: number): { start: number
   let start = Math.max(0, cursor - Math.floor(rows / 2));
   start = Math.min(start, len - rows);
   return { start, end: start + rows };
+}
+
+/** The chat-draft row's / preview header's route cell: a forced override wins
+ * over the verdict, and the command kinds never route at all (spec §6.4). */
+function routeVerdict(d: PendingDraft): string {
+  if (d.kind === "audit" || d.kind === "investigate") return "command";
+  if (d.routeOverride !== "auto") return `${d.routeOverride}!`;
+  return d.files[0]?.route?.destination ?? "?";
+}
+
+/** The chat-draft preview body, one string per rendered line: the
+ * RouteDecision verbatim (spec §6.4), the allowlist's dropped keys (§6.1),
+ * every lint violation, then the file exactly as it sits on disk. */
+function chatDraftLines(d: PendingDraft): string[] {
+  const out: string[] = [];
+  for (const f of d.files) {
+    out.push(`── ${f.name} ──`);
+    const r = f.route;
+    if (r) {
+      out.push(`destination: ${r.destination}`);
+      for (const reason of r.reasons) out.push(`reason: ${reason}`);
+      if (r.carriedTimeout !== null) out.push(`carried: timeout_minutes=${r.carriedTimeout}`);
+      if (r.discarded.length > 0) out.push(`would discard: ${r.discarded.join(", ")}`);
+    }
+    if (f.droppedKeys.length > 0) out.push(`dropped: ${f.droppedKeys.join(", ")}`);
+    for (const v of f.lint) out.push(`[${v.severity}] ${v.rule}: ${v.message}`);
+    out.push(...f.content.split("\n"));
+  }
+  return out;
 }
 
 /** First non-empty, trimmed line of a draft — the list-row preview text. */
@@ -130,6 +167,38 @@ export function ReviewView({
     );
   }
 
+  // Chat-draft preview mode (spec 2026-09-01 §6.4, §8.6) — same top-anchored
+  // window as the comment-draft preview above, over the rendered draft lines.
+  if (state.open && state.open.kind === "chatDraft") {
+    const cd = state.chatDrafts[state.open.idx];
+    if (!cd) {
+      return (
+        <Box paddingX={1}>
+          <Text dimColor>draft gone</Text>
+        </Box>
+      );
+    }
+    const lines = chatDraftLines(cd);
+    // Reserve rows: header (1) + the hint line (1).
+    const bodyRows = Math.max(1, rows - 2);
+    onScrollMax?.(maxScroll(lines.length, bodyRows));
+    const start = clampScroll(scroll, lines.length, bodyRows);
+    return (
+      <ClickableBox flexDirection="column" paddingX={1} onWheel={onDraftWheel}>
+        <Text wrap="truncate-end">
+          <Text color={theme.accent}>{cd.nwo ?? cd.key}</Text>
+          <Text dimColor>{` · ${cd.kind} · route: ${routeVerdict(cd)}`}</Text>
+        </Text>
+        {lines.slice(start, start + bodyRows).map((line, i) => (
+          <Text key={start + i} wrap="truncate-end">
+            {line.length > 0 ? line : " "}
+          </Text>
+        ))}
+        <Text dimColor>s submit · e edit · r route · D discard · esc back</Text>
+      </ClickableBox>
+    );
+  }
+
   // Assess checklist mode.
   if (state.open && state.open.kind === "batch") {
     const batch = state.batches[state.open.batchIdx];
@@ -197,8 +266,8 @@ export function ReviewView({
     );
   }
 
-  // Combined list mode — batches first, then comment drafts.
-  const total = state.batches.length + state.drafts.length;
+  // Combined list mode — batches first, then comment drafts, then chat drafts.
+  const total = state.batches.length + state.drafts.length + state.chatDrafts.length;
   if (total === 0) {
     return (
       <Box paddingX={1}>
@@ -250,6 +319,41 @@ export function ReviewView({
                 ) : (
                   <Text color={theme.accent}>{`${b.findings.length}`}</Text>
                 )}
+              </Box>
+            </ClickableBox>
+          );
+        }
+        if (idx >= batchCount + state.drafts.length) {
+          const cd = state.chatDrafts[idx - batchCount - state.drafts.length];
+          return (
+            <ClickableBox
+              key={cd.id}
+              width="100%"
+              backgroundColor={sel ? theme.selectionBg : undefined}
+              hoverBg={sel ? theme.selectionBg : theme.hoverBg}
+              gap={1}
+              onPress={onRowPress ? () => onRowPress(idx) : undefined}
+            >
+              {/* Same pin discipline (#233): the kind + file names flex. */}
+              <Box flexShrink={0}>
+                <Text color={theme.accent}>{sel ? "▌" : " "}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text dimColor={!sel}>{cd.nwo ?? cd.key}</Text>
+              </Box>
+              <Box flexGrow={1} minWidth={0}>
+                <Text
+                  wrap="truncate"
+                  dimColor={!sel}
+                >{`${cd.kind} · ${cd.files.map((f) => f.name.replace(/\.md$/, "")).join(", ")}`}</Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text color={cd.lintFailed ? theme.error : theme.accent}>
+                  {cd.lintFailed ? "lint ✗" : routeVerdict(cd)}
+                </Text>
+              </Box>
+              <Box flexShrink={0}>
+                <Text dimColor>{fmtAge(cd.createdAt, now)}</Text>
               </Box>
             </ClickableBox>
           );

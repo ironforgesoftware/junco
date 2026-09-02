@@ -29,8 +29,11 @@ import { submitTicket } from "../src/dispatch.js";
 import { ConfigSchema } from "../src/config.js";
 import type { ConfigParsed } from "../src/config.js";
 import type { EnsureResult } from "../src/ensureDaemon.js";
+import { dataTreePaths } from "../src/dataTree.js";
+import { chatSlug } from "../src/chat/chatKey.js";
 import { makeConfig } from "./helpers/config.js";
 import { GH_AUTH_CTX } from "./helpers/dashFixtures.js";
+import { agentStart, runEnd, runStart } from "./helpers/transcriptFixtures.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2778,6 +2781,45 @@ describe("run(['outbox'])", () => {
     expect(code).toBe(0);
     expect(deps.withBotAuthFn).not.toHaveBeenCalled();
     expect(runOutboxCommandFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("run(['transcript', '--chat', ...]) — top-level parseCli must declare --chat (#regression)", () => {
+  // parseCli's own `parseArgs` call parses the FULL argv under strict:true
+  // BEFORE transcript's handler ever sub-slices it — a flag transcriptCmd.ts
+  // knows about but parseCli doesn't never reaches it (Unknown option, exit
+  // 2). This drives `run()` end to end (real transcriptCmd.js, real fs, no
+  // injected transcript seam exists in CliDeps) so a missing `chat` entry in
+  // parseCli's options object fails here even though transcriptCmd.test.ts
+  // (which calls runTranscriptCmd directly) stays green.
+  it("resolves --chat <owner/repo> through the real top-level parser to the chat transcript", async () => {
+    const { cfg, vaultRoot } = freshDispatchVault();
+    const cfgWithDataDir: Config = { ...cfg, dataDir: join(vaultRoot, "state") };
+    const chatPath = join(
+      dataTreePaths(cfgWithDataDir).chats,
+      chatSlug("acme/api"),
+      "transcript.jsonl",
+    );
+    mkdirSync(dirname(chatPath), { recursive: true });
+    // A distinguishing modelId ("chat-e2e-marker") proves the CLI actually
+    // read and rendered THIS file — not just that it failed to error.
+    writeFileSync(
+      chatPath,
+      [
+        runStart({ flow: "qa", modelId: "chat-e2e-marker" }),
+        agentStart(),
+        runEnd({ stopReason: "stop" }),
+      ].join("\n"),
+      "utf8",
+    );
+    const captured: string[] = [];
+    const code = await run(["transcript", "--chat", "acme/api"], {
+      loadConfigFn: () => cfgWithDataDir,
+      printFn: (s) => captured.push(s),
+      env: { HOME: vaultRoot },
+    });
+    expect(code).toBe(0);
+    expect(captured.join("")).toContain("chat-e2e-marker");
   });
 });
 

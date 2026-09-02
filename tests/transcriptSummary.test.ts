@@ -1,8 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { summarizeTranscript, toolCallIds } from "../src/transcriptSummary.js";
+import {
+  anchorIds,
+  draftAnchor,
+  summarizeTranscript,
+  toolCallIds,
+} from "../src/transcriptSummary.js";
 import {
   agentEnd,
   agentStart,
+  chatDraft,
+  chatPrompt,
+  chatReset,
+  chatTurnAborted,
+  chatTurnEnd,
+  chatTurnRejected,
+  chatTurnStart,
+  compactionEnd,
+  compactionStart,
   guardDecision,
   j,
   metaLine,
@@ -12,21 +26,13 @@ import {
   toolEndId,
   toolStartId,
   turnEndFull,
+  v2RunLines,
 } from "./helpers/transcriptFixtures.js";
 
 const CALL = { id: "c1", name: "find", args: { pattern: "*" }, result: "a\nb" };
 
 /** One complete v2 run: meta, frame, a tool call streamed then confirmed by turn_end. */
-const v2 = (): string[] => [
-  metaLine(),
-  runStart({ flow: "assess", modelId: "local/m1", ts: "2026-08-29T01:02:47.000Z" }),
-  agentStart(),
-  toolStartId("c1", "find", { pattern: "*" }),
-  toolEndId("c1", "find", "a\nb"),
-  turnEndFull({ thinking: "hmm", text: "done", calls: [CALL], usage: { input: 10, output: 5 } }),
-  agentEnd(),
-  runEnd({ stopReason: "stop", durationMs: 1234 }),
-];
+const v2 = v2RunLines;
 
 describe("summarizeTranscript", () => {
   it("frames a v2 run: meta, run_start fields, turns, tool results, run_end", () => {
@@ -224,5 +230,127 @@ describe("summarizeTranscript", () => {
       invalidLines: 0,
     });
     expect(summarizeTranscript(["", "  "]).runs).toEqual([]);
+  });
+});
+
+describe("chat records (spec 2026-09-01 §1.3)", () => {
+  const chat = (): string[] => [
+    metaLine({ ticketId: "acme__api" }),
+    chatPrompt(),
+    chatTurnStart(),
+    agentStart(),
+    turnEndFull({
+      thinking: null,
+      text: "because of X",
+      calls: [],
+      usage: { input: 3, output: 4 },
+    }),
+    agentEnd(),
+    chatTurnEnd(),
+    chatDraft(),
+    chatPrompt({ text: "make a ticket" }),
+    chatTurnStart(),
+    agentStart(),
+    compactionStart(),
+    compactionEnd(),
+  ];
+  it("frames chat turns as runs with flow chat, prompt text, and notes; the last is live", () => {
+    const s = summarizeTranscript(chat());
+    expect(s.runs).toHaveLength(2);
+    expect(s.runs[0]).toMatchObject({
+      flow: "chat",
+      modelId: "local/m1",
+      prompt: "why is the build slow?",
+    });
+    expect(s.runs[0]!.end).toMatchObject({
+      stopReason: "stop",
+      errorMessage: null,
+      timedOut: false,
+      durationMs: 1500,
+    });
+    expect(s.runs[0]!.turns[0]!.text).toBe("because of X");
+    expect(s.runs[0]!.notes).toEqual([
+      {
+        kind: "draft",
+        draftId: "acme__api-20260901-120000-1",
+        draftKind: "ticket",
+        status: "parked",
+        ids: ["add-cache"],
+        destination: null,
+        ts: expect.any(String),
+      },
+    ]);
+    expect(s.runs[1]!.prompt).toBe("make a ticket");
+    expect(s.runs[1]!.notes.map((n) => n.kind)).toEqual(["compaction", "compaction"]);
+    expect(s.live).toBe(true);
+  });
+  it("aborted, error, and rejected turns map onto RunEnd / notes", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      agentEnd(),
+      chatTurnAborted({ reason: "timeout" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      agentEnd(),
+      chatTurnEnd({ status: "error", errorClass: "rate_limit", errorMessage: "429" }),
+      chatTurnRejected(),
+    ]);
+    expect(s.runs[0]!.end).toMatchObject({ timedOut: true, stopReason: "aborted:timeout" });
+    expect(s.runs[1]!.end).toMatchObject({ errorMessage: "429", stopReason: "error" });
+    // a note after a closed run lands on that run
+    expect(s.runs).toHaveLength(2);
+    expect(s.runs[1]!.notes[0]).toMatchObject({ kind: "rejected", reason: "rate limited" });
+    expect(s.live).toBe(false);
+  });
+  it("a note before any run gets a prompt-less, already-closed run so it still renders", () => {
+    const s = summarizeTranscript([metaLine(), chatTurnRejected()]);
+    expect(s.runs).toHaveLength(1);
+    expect(s.runs[0]).toMatchObject({ flow: "chat", prompt: null });
+    expect(s.runs[0]!.end).not.toBeNull();
+    expect(s.runs[0]!.notes[0]).toMatchObject({ kind: "rejected" });
+    expect(s.live).toBe(false);
+  });
+  it("anchorIds is tool ids ∪ draft anchors in file order; ticket transcripts unchanged", () => {
+    const s = summarizeTranscript(chat());
+    expect(anchorIds(s)).toEqual([draftAnchor("acme__api-20260901-120000-1")]);
+    const v2run = summarizeTranscript(v2());
+    expect(v2run.runs[0]!.prompt).toBeNull();
+    expect(v2run.runs[0]!.notes).toEqual([]);
+    expect(anchorIds(v2run)).toEqual(toolCallIds(v2run));
+  });
+  it("a steer prompt while a run is open is dropped, not reframed as the next run's prompt", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      chatPrompt({ mode: "steer", text: "actually check Y too" }),
+      agentEnd(),
+      chatTurnEnd(),
+      chatPrompt({ text: "next" }),
+      chatTurnStart(),
+    ]);
+    expect(s.runs).toHaveLength(2);
+    expect(s.runs[0]!.prompt).toBe("why is the build slow?");
+    expect(s.runs[1]!.prompt).toBe("next");
+  });
+  it("session reset and transcript-degraded records attach as notes on the open run", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      chatReset({ reason: "operator_new" }),
+      j({ type: "junco_chat_transcript_degraded", ts: "2026-09-01T00:00:00.000Z" }),
+    ]);
+    expect(s.runs).toHaveLength(1);
+    expect(s.runs[0]!.notes).toEqual([
+      { kind: "reset", reason: "operator_new", ts: expect.any(String) },
+      { kind: "degraded", ts: "2026-09-01T00:00:00.000Z" },
+    ]);
   });
 });

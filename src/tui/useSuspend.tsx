@@ -26,7 +26,15 @@
  * (no isTTY) neither raw mode nor escapes are touched. Without a
  * SuspendProvider ancestor the hook degrades to pause/resume only (begin()
  * resolves immediately). */
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Box, useStdin, useStdout } from "ink";
 import { MOUSE_DISABLE, MOUSE_ENABLE } from "./mouse.js";
 
@@ -87,20 +95,26 @@ export function useSuspend(): <T>(fn: () => Promise<T>) => Promise<T> {
   const { stdin } = useStdin();
   const { stdout } = useStdout();
   const { begin, end } = useContext(SuspendContext);
-  return async <T,>(fn: () => Promise<T>): Promise<T> => {
-    await begin();
-    const outTTY = Boolean(stdout.isTTY);
-    if (outTTY) stdout.write(MOUSE_DISABLE + ALT_SCREEN_LEAVE);
-    // Directly on the stream — NOT Ink's counted setRawMode (see header).
-    if (stdin.isTTY) stdin.setRawMode(false);
-    stdin.pause();
-    try {
-      return await fn();
-    } finally {
-      stdin.resume();
-      if (stdin.isTTY) stdin.setRawMode(true);
-      if (outTTY) stdout.write(ALT_SCREEN_ENTER + MOUSE_ENABLE);
-      end();
-    }
-  };
+  // useCallback'd: every dep here is context-stable, and a fresh identity per
+  // render would churn the dep arrays of the callbacks that suspend around a
+  // child process (useChatDrafts' `edit`), defeating their memoization.
+  return useCallback(
+    async <T,>(fn: () => Promise<T>): Promise<T> => {
+      await begin();
+      const outTTY = Boolean(stdout.isTTY);
+      if (outTTY) stdout.write(MOUSE_DISABLE + ALT_SCREEN_LEAVE);
+      // Directly on the stream — NOT Ink's counted setRawMode (see header).
+      if (stdin.isTTY) stdin.setRawMode(false);
+      stdin.pause();
+      try {
+        return await fn();
+      } finally {
+        stdin.resume();
+        if (stdin.isTTY) stdin.setRawMode(true);
+        if (outTTY) stdout.write(ALT_SCREEN_ENTER + MOUSE_ENABLE);
+        end();
+      }
+    },
+    [stdin, stdout, begin, end],
+  );
 }

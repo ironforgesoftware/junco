@@ -2,9 +2,6 @@ import React, { useMemo } from "react";
 import { Box, Text } from "ink";
 import { bumpRender } from "../renderCount.js";
 import { theme } from "../theme.js";
-import { clampScroll, maxScroll } from "../window.js";
-import { Scrollbar } from "./primitives/Scrollbar.js";
-import { ClickableBox } from "../ClickableBox.js";
 import {
   fmtRunOutcome,
   renderTranscriptRows,
@@ -14,6 +11,7 @@ import {
 } from "../../transcriptRender.js";
 import { toolCallIds } from "../../transcriptSummary.js";
 import type { TranscriptState } from "../hooks/useTranscript.js";
+import { TranscriptBody, bodyWindow, toneProps } from "./TranscriptBody.js";
 
 export interface TranscriptViewProps {
   state: TranscriptState;
@@ -38,33 +36,9 @@ function headerStatus(s: TranscriptState): { text: string; tone?: RowTone } {
   return last === undefined ? { text: "empty", tone: "dim" } : fmtRunOutcome(last, false);
 }
 
-function toneProps(tone: RowTone | undefined): {
-  color?: string;
-  dimColor?: boolean;
-  bold?: boolean;
-} {
-  switch (tone) {
-    case "dim":
-      return { dimColor: true };
-    case "accent":
-      return { color: theme.accent };
-    case "error":
-      return { color: theme.error };
-    case "warn":
-      return { color: theme.warn };
-    case "success":
-      return { color: theme.success };
-    case "bold":
-      return { bold: true };
-    default:
-      return {};
-  }
-}
-
 /** The transcript view (fullscreen, in the review view's slot). Mirrors
- * CommandOutput's shape: header, sliced rows + Scrollbar, footer. Window math
- * mirrors QueueView: base at `scroll` (or the tail while `follow`), then nudge
- * so the cursor's tool row stays visible. Memoized (perf pass #259 discipline). */
+ * CommandOutput's shape: header, body (TranscriptBody), footer. Memoized
+ * (perf pass #259 discipline). */
 export const TranscriptView = React.memo(function TranscriptView({
   state,
   scroll,
@@ -93,18 +67,17 @@ export const TranscriptView = React.memo(function TranscriptView({
           }),
     [state.summary, state.showThinking, state.expanded, textWidth],
   );
+  // Ticket transcripts have no drafts, so the cursor space is tool calls
+  // only — not Task 13's anchorIds (which also carries draft anchors).
   const anchors = state.summary === null ? [] : toolCallIds(state.summary);
-  const anchorId = anchors[state.cursor];
-  const anchorRow = anchorId === undefined ? -1 : rows.findIndex((r) => r.anchor === anchorId);
-  onScrollMax?.(maxScroll(rows.length, visible));
-  let start = state.follow
-    ? maxScroll(rows.length, visible)
-    : clampScroll(scroll, rows.length, visible);
-  if (!state.follow && anchorRow >= 0) {
-    if (anchorRow < start) start = anchorRow;
-    else if (anchorRow >= start + visible) start = anchorRow - visible + 1;
-  }
-  const end = Math.min(start + visible, rows.length);
+  const { start, end } = bodyWindow({
+    rows,
+    anchors,
+    cursor: state.cursor,
+    follow: state.follow,
+    scroll,
+    visible,
+  });
   const status = headerStatus(state);
   const runs = state.summary?.runs.length ?? 0;
   const live = state.summary?.live === true;
@@ -123,31 +96,17 @@ export const TranscriptView = React.memo(function TranscriptView({
         {runs > 0 ? ` · ${runs} run${runs === 1 ? "" : "s"}` : ""} ·{" "}
         <Text {...toneProps(status.tone)}>{status.text}</Text>
       </Text>
-      <Box flexGrow={1}>
-        <Box flexDirection="column" flexGrow={1} minWidth={0}>
-          {rows.slice(start, end).map((row, i) => {
-            const isAnchor = row.anchor !== undefined && row.anchor === anchorId;
-            const idx = row.anchor === undefined ? -1 : anchors.indexOf(row.anchor);
-            return (
-              <ClickableBox
-                key={start + i}
-                hoverBg={row.anchor !== undefined ? theme.hoverBg : undefined}
-                onPress={row.anchor !== undefined && onRowPress ? () => onRowPress(idx) : undefined}
-              >
-                <Text
-                  wrap="truncate-end"
-                  backgroundColor={isAnchor && focused ? theme.selectionBg : undefined}
-                  {...toneProps(row.tone)}
-                >
-                  <Text color={theme.accent}>{isAnchor ? "▌" : " "}</Text>
-                  {row.text || " "}
-                </Text>
-              </ClickableBox>
-            );
-          })}
-        </Box>
-        <Scrollbar offset={start} viewport={visible} total={rows.length} height={visible} />
-      </Box>
+      <TranscriptBody
+        rows={rows}
+        anchors={anchors}
+        cursor={state.cursor}
+        follow={state.follow}
+        scroll={scroll}
+        visible={visible}
+        focused={focused}
+        onScrollMax={onScrollMax}
+        onRowPress={onRowPress}
+      />
       <Text dimColor wrap="truncate">
         ↑/↓ tool · enter expand · [/] scroll · t thinking{live ? " · f follow" : ""}
         {rows.length > 0 ? ` · ${start + 1}–${end}/${rows.length}` : ""}

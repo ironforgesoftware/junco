@@ -9,6 +9,7 @@
  * can render rows with `wrap="truncate-end"` and lose nothing.
  */
 import type { GuardDecisionRecord } from "./agent/transcriptSchema.js";
+import { draftAnchor } from "./transcriptSummary.js";
 import type { RunSummary, ToolResultSummary, TranscriptSummary } from "./transcriptSummary.js";
 
 export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success";
@@ -160,6 +161,15 @@ export function fmtRunOutcome(run: RunSummary, live: boolean): { text: string; t
   const end = run.end;
   if (end === null)
     return live ? { text: "◐ running…", tone: "accent" } : { text: "truncated", tone: "warn" };
+  // A chat turn aborted mid-stream (junco_chat_turn_aborted, spec §1.3) — the
+  // reason (operator/timeout/daemon_stopped/crash) rides in stopReason since
+  // RunEnd has no chat-specific field.
+  if (end.stopReason?.startsWith("aborted:")) {
+    const parts = [`aborted (${end.stopReason.slice(8)})`];
+    if (end.durationMs !== null) parts.push(fmtDuration(end.durationMs));
+    if (end.usage !== null) parts.push(`in ${fmtK(end.usage.input)} out ${fmtK(end.usage.output)}`);
+    return { text: parts.join(" · "), tone: "warn" };
+  }
   const failed = end.errorMessage !== null || end.stopReason === "error";
   const base = end.abortedByGuard
     ? "killed by guard"
@@ -193,24 +203,36 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
   }
   s.runs.forEach((run, i) => {
     if (i > 0) push("");
-    const live = s.live && i === s.runs.length - 1;
-    const outcome = fmtRunOutcome(run, live);
-    const head = [
-      `run ${run.index}/${s.runs.length}`,
-      run.flow === null ? "v1" : fmtFlow(run.flow),
-      run.modelId ?? "?",
-      run.startedAt === null ? null : hhmmss(run.startedAt),
-      outcome.text,
-    ]
-      .filter((x): x is string => x !== null)
-      .join(" · ");
-    push(truncate(`── ${head} ──`, width), "bold");
-    // String(): a malformed record's errorMessage need not be a string (the
-    // transcript schema is not validated at parse time) — the renderer runs
-    // inside React's render, where a throw takes the whole dashboard down.
-    if (run.end?.errorMessage)
-      for (const l of wrapText(`✗ ${firstLine(String(run.end.errorMessage))}`, width - 3))
-        push(`   ${l}`, "error");
+    if (run.prompt !== null)
+      for (const l of wrapText(`you: ${run.prompt}`, width)) push(l, "accent");
+    // R23: a note (e.g. junco_chat_turn_rejected) that lands before ANY run
+    // parks on a synthetic, prompt-less, turn-less run closed with a null
+    // stopReason (transcriptSummary.ts's noteRun) purely so it has somewhere
+    // to render — printing `── run 1/1 · chat · ? · stop ──` above it would
+    // claim a run happened when none did. Skip the header (and the
+    // error/guard rows that hang off it — a run in this shape carries
+    // neither) for such a run; the notes below still render.
+    const syntheticNoteRun = run.flow === "chat" && run.prompt === null && run.turns.length === 0;
+    if (!syntheticNoteRun) {
+      const live = s.live && i === s.runs.length - 1;
+      const outcome = fmtRunOutcome(run, live);
+      const head = [
+        `run ${run.index}/${s.runs.length}`,
+        run.flow === null ? "v1" : fmtFlow(run.flow),
+        run.modelId ?? "?",
+        run.startedAt === null ? null : hhmmss(run.startedAt),
+        outcome.text,
+      ]
+        .filter((x): x is string => x !== null)
+        .join(" · ");
+      push(truncate(`── ${head} ──`, width), "bold");
+      // String(): a malformed record's errorMessage need not be a string (the
+      // transcript schema is not validated at parse time) — the renderer runs
+      // inside React's render, where a throw takes the whole dashboard down.
+      if (run.end?.errorMessage)
+        for (const l of wrapText(`✗ ${firstLine(String(run.end.errorMessage))}`, width - 3))
+          push(`   ${l}`, "error");
+    }
     const guardRow = (g: GuardDecisionRecord): void =>
       push(
         truncate(
@@ -248,6 +270,45 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
       for (const g of run.guardDecisions) if (g.turnIndex === turn.index) guardRow(g);
     }
     for (const g of run.guardDecisions) if (g.turnIndex >= run.turns.length) guardRow(g);
+    for (const n of run.notes) {
+      switch (n.kind) {
+        case "rejected":
+          push(
+            truncate(
+              `   ⏸ turn rejected: ${n.reason}${n.until ? ` (until ${hhmmss(n.until)})` : ""}`,
+              width,
+            ),
+            "warn",
+          );
+          break;
+        case "draft": {
+          const what = `${n.draftKind} · ${n.ids.join(", ") || n.draftId}`;
+          const text =
+            n.status === "parked"
+              ? `   ▣ draft parked · ${what} — s submit · e edit · r route · D discard`
+              : n.status === "lint_failed"
+                ? `   ▣ draft parked (lint failed) · ${what} — e edit · D discard`
+                : n.status === "submitted"
+                  ? `   ▣ draft submitted → ${n.destination ?? "?"} · ${what}`
+                  : `   ▣ draft discarded · ${what}`;
+          push(
+            truncate(text, width),
+            n.status === "lint_failed" ? "warn" : n.status === "submitted" ? "success" : "bold",
+            draftAnchor(n.draftId),
+          );
+          break;
+        }
+        case "reset":
+          push(`   ↺ session reset (${n.reason})`, "warn");
+          break;
+        case "degraded":
+          push("   ⚠ transcript disabled — history will not survive a reconnect", "warn");
+          break;
+        case "compaction":
+          push(n.phase === "start" ? "   ⋯ compacting context…" : "   ⋯ context compacted", "dim");
+          break;
+      }
+    }
   });
   return rows;
 }

@@ -66,6 +66,8 @@ function makeSpies() {
     runAction: vi.fn(),
     runLocalAction: vi.fn(),
     askConfirm: vi.fn(),
+    openChat: vi.fn(),
+    openIssueTranscript: vi.fn(),
   };
 }
 
@@ -98,6 +100,9 @@ function mount(
     sysSection: null,
     selectedRow: { kind: "repo", repo: REPO },
     currentNwo: "acme/widgets",
+    currentRepoKey: "acme/widgets",
+    openChat: spies.openChat,
+    openIssueTranscript: spies.openIssueTranscript,
     currentIssue: ISSUE,
     currentRepo: MAPPING,
     selectedPane3Pr: null,
@@ -137,6 +142,7 @@ const ALL_IDS = [
   "assess",
   "assessAutoPlan",
   "browser",
+  "chat",
   "commands",
   "delete",
   "dispatch",
@@ -152,6 +158,7 @@ const ALL_IDS = [
   "restart",
   "retry",
   "review",
+  "transcript",
   "unwatch",
 ];
 
@@ -167,6 +174,31 @@ describe("useMainActions — the main view's action table", () => {
     api["quit"]?.();
     expect(spies.exit).toHaveBeenCalledTimes(1);
     expect(spies.onExit).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("chat opens the selected row's session and focuses the chat pane, or toasts on a system row", () => {
+    const { api, spies, unmount } = mount({ pane: 1 });
+    api["chat"]?.();
+    expect(spies.openChat).toHaveBeenCalledWith("acme/widgets");
+    expect(spies.setView).toHaveBeenCalledWith("chat");
+    expect(spies.setPane).toHaveBeenCalledWith(2);
+    unmount();
+    const sys = mount({ currentRepoKey: null });
+    sys.api["chat"]?.();
+    expect(sys.spies.openChat).not.toHaveBeenCalled();
+    expect(sys.spies.showToast).toHaveBeenCalledWith("info", "no repo selected");
+    sys.unmount();
+  });
+
+  // `t`'s other reading (#330): the same derived letter, a separate verb —
+  // viewActions' `bodyVerbs` decides which one the pane offers (R27), so this
+  // handler carries no pane branch of its own.
+  it("transcript opens the selected issue's ticket transcript", () => {
+    const { api, spies, unmount } = mount({ pane: 2 });
+    api["transcript"]?.();
+    expect(spies.openIssueTranscript).toHaveBeenCalledWith("acme/widgets", ISSUE);
+    expect(spies.openChat).not.toHaveBeenCalled();
     unmount();
   });
 
@@ -196,6 +228,7 @@ describe("useMainActions — the main view's action table", () => {
         error: "old",
         batches: [],
         drafts: [],
+        chatDrafts: [],
         cursor: 5,
         open: { kind: "draft", draftIdx: 1 },
       }),

@@ -16,6 +16,8 @@ const KIND_LABEL: Record<PlanItemKind, (n: number) => string> = {
   "assess-history": () => "audit history",
   mirror: () => "mirror",
   "github-cache": () => "github cache",
+  "chat-session": () => "chat session",
+  "chat-draft": (n) => `${n} pending chat draft(s)`,
 };
 
 /** Derived from KIND_LABEL's insertion order: the Record is total over

@@ -1,16 +1,23 @@
 /**
- * `junco transcript <ticket-id | path.jsonl> [--thinking] [--tools] [--width N] [--json]`
+ * `junco transcript <ticket-id | path.jsonl> | --chat <owner/repo | path> [--thinking] [--tools] [--width N] [--json]`
  * — prints a recorded per-ticket event transcript as the transcript viewer
  * renders it: run headers, turns, tool calls with result summaries (bodies
  * with --tools), the agent's text (thinking with --thinking). Target
  * resolution mirrors replayCmd.ts: a bare id resolves through the data tree
  * (config required); a literal path (ends in .jsonl or contains "/") reads
- * as-is, config optional.
+ * as-is, config optional. `--chat <key>` (spec 2026-09-01 §9) is a third,
+ * mutually-exclusive mode — the KEY is the same one the dashboard's rail
+ * uses (a watched "owner/repo" or a local checkout path); `chatSlug`
+ * (chat/chatKey.ts) resolves it to <chats>/<slug>/transcript.jsonl, always
+ * through the data tree (config required — there is no direct-path form for
+ * chat transcripts, unlike the ticket-id branch above).
  */
 import { parseArgs } from "node:util";
+import { join } from "node:path";
 import type { Config } from "./types.js";
 import { transcriptPathFor } from "./slug.js";
 import { dataTreePaths } from "./dataTree.js";
+import { chatSlug } from "./chat/chatKey.js";
 import { summarizeTranscript, toolCallIds } from "./transcriptSummary.js";
 import { renderTranscriptRows, MIN_WIDTH } from "./transcriptRender.js";
 
@@ -25,7 +32,8 @@ export interface TranscriptCmdDeps {
 }
 
 const USAGE =
-  "Usage: junco transcript <ticket-id | path.jsonl> [--thinking] [--tools] [--width N] [--json]";
+  "Usage: junco transcript <ticket-id | path.jsonl> | --chat <owner/repo | path> " +
+  "[--thinking] [--tools] [--width N] [--json]";
 
 function isPathLike(target: string): boolean {
   return target.endsWith(".jsonl") || target.includes("/");
@@ -41,6 +49,7 @@ export async function runTranscriptCmd(argv: string[], deps: TranscriptCmdDeps):
         tools: { type: "boolean", default: false },
         width: { type: "string" },
         json: { type: "boolean", default: false },
+        chat: { type: "string" },
       },
       allowPositionals: true,
       strict: true,
@@ -52,10 +61,11 @@ export async function runTranscriptCmd(argv: string[], deps: TranscriptCmdDeps):
   }
   const { values, positionals } = parsed;
   const target = positionals[0];
-  if (!target) {
-    deps.stdout(USAGE);
-    return 2;
-  }
+  // parseArgs's loosely-typed `values` (ReturnType<typeof parseArgs> isn't
+  // parameterized by the literal options object) types every value as
+  // `string | boolean | (string | boolean)[]`; `chat` never declares
+  // `multiple`, so a string is the only shape it ever actually takes.
+  const chatKey = typeof values.chat === "string" ? values.chat : undefined;
   let width = deps.columns;
   if (values.width !== undefined) {
     width = Number(values.width);
@@ -72,7 +82,24 @@ export async function runTranscriptCmd(argv: string[], deps: TranscriptCmdDeps):
     cfg = undefined;
   }
   let transcriptPath: string;
-  if (isPathLike(target)) {
+  if (chatKey !== undefined) {
+    // --chat takes no positional — the two target forms are mutually exclusive.
+    if (target !== undefined) {
+      deps.stdout(USAGE);
+      return 2;
+    }
+    if (!cfg) {
+      deps.stdout(
+        `junco transcript: no config found — cannot resolve chat key '${chatKey}' to a ` +
+          "transcript path",
+      );
+      return 1;
+    }
+    transcriptPath = join(dataTreePaths(cfg).chats, chatSlug(chatKey), "transcript.jsonl");
+  } else if (target === undefined) {
+    deps.stdout(USAGE);
+    return 2;
+  } else if (isPathLike(target)) {
     transcriptPath = target;
   } else {
     if (!cfg) {

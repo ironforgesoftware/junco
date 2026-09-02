@@ -238,6 +238,12 @@ export function assembleConfig(
       mergePollSeconds: d.planSets.mergePollSeconds,
       maxTasks: d.planSets.maxTasks,
     },
+    chat: {
+      enabled: d.chat.enabled,
+      modelId: d.chat.modelId ?? null,
+      thinkingLevel: d.chat.thinkingLevel ?? null,
+      turnTimeoutMinutes: d.chat.turnTimeoutMinutes ?? null,
+    },
   };
 }
 

@@ -1245,3 +1245,28 @@ describe("planSets section (spec 2026-08-20)", () => {
     expect(cfg.planSets).toEqual({ enabled: true, mergePollSeconds: 120, maxTasks: 5 });
   });
 });
+
+describe("chat section (spec 2026-09-01 §10)", () => {
+  it("defaults: enabled, every override inherits (null)", () => {
+    const cfg = loadConfig(writeJson({}));
+    expect(cfg.chat).toEqual({
+      enabled: true,
+      modelId: null,
+      thinkingLevel: null,
+      turnTimeoutMinutes: null,
+    });
+  });
+  it("explicit values parse through", () => {
+    const cfg = loadConfig(
+      writeJson({
+        chat: { enabled: false, modelId: "x/big", thinkingLevel: "high", turnTimeoutMinutes: 5 },
+      }),
+    );
+    expect(cfg.chat).toEqual({
+      enabled: false,
+      modelId: "x/big",
+      thinkingLevel: "high",
+      turnTimeoutMinutes: 5,
+    });
+  });
+});

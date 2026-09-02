@@ -114,6 +114,7 @@ const EXPECTED_ORDER = [
   "data-tree-modes",
   "split-queue",
   "health-bind",
+  "chat",
   "github-bridge",
   "outbox",
   "audit-review",

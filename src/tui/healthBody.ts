@@ -11,6 +11,7 @@ import type { Config } from "../types.js";
 import type { MetricsSnapshot } from "../metrics.js";
 import type { GateStatus } from "../providerGate.js";
 import type { SpendStatus } from "../healthServer.js";
+import type { ChatHealth } from "../chat/chatManager.js";
 import { HEALTH_TIMEOUT_MS } from "../config.js";
 
 export interface HealthBody {
@@ -26,6 +27,8 @@ export interface HealthBody {
    * entirely on an older daemon build. Optional here so both shapes
    * typecheck. */
   spend?: SpendStatus | null;
+  /** Dashboard chat (spec 2026-09-01) — absent entirely on an older daemon. */
+  chats?: ChatHealth | null;
 }
 
 /** Single AbortController-timed GET /health — the ONE owner of the probe's

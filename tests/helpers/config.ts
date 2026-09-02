@@ -143,6 +143,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     },
     botAccount: { enabled: false, configDir: "/sbxroot/junco-gh" },
     planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
+    chat: { enabled: true, modelId: null, thinkingLevel: null, turnTimeoutMinutes: null },
     ...overrides,
   };
 }

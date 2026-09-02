@@ -9,11 +9,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, type Key } from "ink";
 import { bumpRender } from "./renderCount.js";
-import type { DashboardClient } from "./ghClient.js";
+import type { DashboardClient, HealthInfo } from "./ghClient.js";
 import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState } from "./state.js";
 import { githubTicketId, lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
+import { defaultEditFile } from "./editFile.js";
 import type { GithubRepoMapping } from "../types.js";
 import type { UpdateInfo } from "../updateCheck.js";
 import { useTerminalSize, type TerminalSize } from "./useTerminalSize.js";
@@ -57,6 +58,7 @@ import { CommandOutput } from "./components/CommandOutput.js";
 import { QueueView } from "./components/QueueView.js";
 import { ReviewView } from "./components/ReviewView.js";
 import { TranscriptView } from "./components/TranscriptView.js";
+import { ChatView } from "./components/ChatView.js";
 import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
@@ -86,6 +88,10 @@ import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useGithubData } from "./hooks/useGithubData.js";
 import { useLogOverlayActions } from "./hooks/useLogOverlayActions.js";
 import { useViewActions } from "./hooks/useViewActions.js";
+import { useChat } from "./hooks/useChat.js";
+import { useChatDrafts } from "./hooks/useChatDrafts.js";
+import { useChatInput } from "./hooks/useChatInput.js";
+import { useSuspend } from "./useSuspend.js";
 import { useMainActions, type LocalRow } from "./hooks/useMainActions.js";
 import { summarizeUnwatchPlan } from "./unwatchSummary.js";
 // Type-only: unwatchCmd is a pure module, but the dashboard drives it through
@@ -109,6 +115,22 @@ export interface AppProps {
    * useLogTail. Resolved by dashboardCmd where cfg is in scope; read only while
    * the logs surface is on screen. */
   logPath: string;
+  /** A parked chat draft's file on disk (`draftStore.draftFilePath`, cfg
+   * pre-bound like `clonesDir`/`logPath` above): the path `e` opens in the
+   * editor and the byte-identical path `s` hands the CLI. */
+  draftFilePathFn: (id: string, name: string) => string;
+  /** `$EDITOR` spawn for the chat draft `e` verb, injectable so tests never
+   * open an editor (spec 2026-09-01 §8.6). Default: `defaultEditFile`
+   * (src/tui/editFile.ts).
+   *
+   * Contract (Ruling R34): resolves when the editor exits, whatever its exit
+   * code; REJECTS when it could not be run at all. Every call site is inside
+   * a useChatDrafts verb, and each of those catches and toasts — nothing here
+   * may reach Node as an unhandled rejection. */
+  editFileFn?: (path: string) => Promise<void>;
+  /** The chat's resolved model id (`chatCfgFor(cfg).model.id`), for the chat
+   * header strip; null when it cannot be resolved. */
+  chatModelId: string | null;
   /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
    * tests pass large values. */
   refreshPollMs?: number;
@@ -170,7 +192,8 @@ export type View =
   | "prs"
   | "prDetail"
   | "review"
-  | "transcript";
+  | "transcript"
+  | "chat";
 
 interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
@@ -243,6 +266,18 @@ function optimisticLabels(action: DashAction, labels: string[], trigger: string)
       break;
   }
   return [...set];
+}
+
+/** One repo row's ambient chat signal (spec 2026-09-01 §8.6), off the health
+ * poll: `●` while a turn streams, `N▣` for parked drafts, both when both,
+ * null when this repo has no session worth mentioning. */
+function chatBadgeFor(chats: HealthInfo["chats"], key: string): string | null {
+  const s = chats?.sessions.find((x) => x.key === key);
+  if (!s) return null;
+  const badge = [s.streaming ? "●" : "", s.draftsParked > 0 ? `${s.draftsParked}▣` : ""]
+    .filter(Boolean)
+    .join(" ");
+  return badge === "" ? null : badge;
 }
 
 /** Equality key for the cheap local snapshot: the daemon section renders
@@ -359,7 +394,29 @@ export function App(props: AppProps): React.JSX.Element {
     watchlistError,
     askConfirm,
   });
-  const { cmd, cmdElapsed, runPaletteCommand } = useCmdOutput(runCliFn, setView);
+  const { cmd, cmdElapsed, runPaletteCommand, showCmdResult } = useCmdOutput(runCliFn, setView);
+  const suspend = useSuspend();
+  const chatApi = useChat({ client, aliveRef });
+  // `chatApi` is a fresh object every render, so everything below closes over
+  // these members instead (each a stable useCallback) — react-hooks deps.
+  const { chat: chatState, openChat, moveCursor: moveChatCursor, reloadDrafts } = chatApi;
+  // A draft verb changes both surfaces that list it: the review view and the
+  // chat pane's own card (spec §6.6).
+  const onDraftChanged = useCallback((): void => {
+    void loadReview();
+    void reloadDrafts();
+  }, [loadReview, reloadDrafts]);
+  const chatDraftActions = useChatDrafts({
+    client,
+    runCliFn,
+    showCmdResult,
+    editFileFn: props.editFileFn ?? defaultEditFile,
+    suspend,
+    showToast,
+    aliveRef,
+    onChanged: onDraftChanged,
+    draftFilePath: props.draftFilePathFn,
+  });
   const {
     paletteFilter,
     paletteSel,
@@ -435,6 +492,15 @@ export function App(props: AppProps): React.JSX.Element {
     view,
   });
   const currentNwo = body?.kind === "issues" ? body.nwo : undefined;
+  // The chat session key behind the selected rail row (chatKey.ts): a watched
+  // repo keys by nwo, a local checkout by its resolved path — exactly the
+  // rail's own selection key. null on a system row (nothing to chat with).
+  const currentRepoKey =
+    body?.kind === "issues"
+      ? body.nwo.toLowerCase()
+      : body?.kind === "repoDetail"
+        ? body.repo.key
+        : null;
   // The watched mapping behind the selected issues row — external gate, unwatch
   // and the pane-1 `o` read it exactly as they always did.
   const currentRepo = currentNwo
@@ -476,9 +542,12 @@ export function App(props: AppProps): React.JSX.Element {
     if (logOverlay) return "logOverlay";
     if (view === "review" && reviewState.open?.kind === "draft")
       return `draft:${reviewState.open.draftIdx}`;
+    if (view === "review" && reviewState.open?.kind === "chatDraft")
+      return `chatDraft:${reviewState.open.idx}`;
     if (view === "cmdOutput" && cmd) return `cmd:${cmd.token}`;
     // `transcript:<id>` — t/expand keep the offset (the clamp absorbs shrink).
     if (view === "transcript" && transcript) return `transcript:${transcript.id}`;
+    if (view === "chat" && chatState) return `chat:${chatState.key}`;
     if (view === "detail" && detail) return `detail:${detail.nwo}#${detail.issue.number}`;
     if (view === "repoDetail" && repoDetailTarget) return `repoView:${repoDetailTarget.key}`;
     if (view === "main" && body?.kind === "repoDetail") return `repo:${body.repo.key}`;
@@ -490,6 +559,7 @@ export function App(props: AppProps): React.JSX.Element {
     reviewState.open,
     cmd,
     transcript,
+    chatState,
     detail,
     repoDetailTarget,
     body,
@@ -625,13 +695,14 @@ export function App(props: AppProps): React.JSX.Element {
     if (view === "review") return ["review"];
     if (view === "cmdOutput" && cmd) return ["command", cmd.title];
     if (view === "transcript" && transcript) return ["transcript", transcript.id];
+    if (view === "chat" && chatState) return ["chat", chatState.key];
     if (view === "detail" && detail) return [detail.nwo, `#${detail.issue.number}`];
     if (view === "prDetail" && prDetail) return [prDetail.pr.nwo, `PR #${prDetail.pr.number}`];
     if (view === "repoDetail" && repoDetailTarget)
       return [repoDetailTarget.nwo ?? truncStart(repoDetailTarget.path, 30)];
     if (body?.kind === "section") return ["system", body.section];
     return [currentNwo ?? "no repo"];
-  }, [view, cmd, transcript, detail, prDetail, repoDetailTarget, body, currentNwo]);
+  }, [view, cmd, transcript, chatState, detail, prDetail, repoDetailTarget, body, currentNwo]);
 
   // Window slices live HERE (not inside the list components) so that rendering
   // and mouse hit-testing share one offset — the sticky prevStart refs move up
@@ -1210,12 +1281,64 @@ export function App(props: AppProps): React.JSX.Element {
     setView("repoDetail");
   }, []);
 
+  // ── The chat view (spec 2026-09-01 §8): the key cascade, the id-keyed
+  // verbs, and the composer's slash router all live in the hook; App keeps
+  // the spine — this call, the rail-switch effect, and the render branch. ──
+  const { handleChatKey, chatHandlers, onComposerSubmit } = useChatInput({
+    view,
+    pane,
+    chatApi,
+    chatDraftActions,
+    client,
+    aliveRef,
+    showToast,
+    currentNwo,
+    setView,
+    setPane,
+    scrollBy,
+    toEnd,
+    moveRail,
+    moveRailTo,
+    railCount: railRows.length,
+  });
+  // Spec §8.1: the rail stays the nav spine while the chat is open, so moving
+  // its selection switches the subscription to the newly selected row.
+  const chatKey = chatState?.key ?? null;
+  const composerFocused = chatState?.composerFocused === true;
+  useEffect(() => {
+    if (
+      view === "chat" &&
+      currentRepoKey !== null &&
+      chatKey !== null &&
+      chatKey !== currentRepoKey
+    )
+      openChat(currentRepoKey);
+  }, [view, currentRepoKey, chatKey, openChat]);
+  // Anchor-row click: the mouse form of ↑/↓ (a delta off the live cursor).
+  const chatCursor = chatState?.cursor ?? 0;
+  const chatRowPress = useCallback(
+    (idx: number): void => moveChatCursor(idx - chatCursor),
+    [moveChatCursor, chatCursor],
+  );
+  // Ambient chat signal per rail row (spec §8.6), from the health poll. Keyed
+  // to `health.chats` alone, not `health`: depending on the whole probe would
+  // re-identify this callback on every Header-only tick and cost UnifiedRail
+  // its memo bail-out (pinned by tests/renderPerf.test.tsx).
+  const chats = health?.chats ?? null;
+  const chatBadge = useCallback((key: string) => chatBadgeFor(chats, key), [chats]);
+
   // ── Derived-mnemonic bindings (mnemonic spec §2/§4): ONE context table
   // drives the footer chips, the help modal, and the keyboard dispatch tail —
   // render and input consume the same derivation and cannot drift. ──
   const bindingContext: BindingContext = useMemo((): BindingContext => {
     if (logOverlay) return { kind: "logOverlay" };
     if (filtering) return { kind: "structuralOnly", view: "filtering" };
+    // A focused composer derives NOTHING (spec §8.3): the empty keymap is
+    // what keeps typed prose off the mnemonic dispatch at layer 3d.
+    if (view === "chat")
+      return composerFocused
+        ? { kind: "structuralOnly", view: "chatCompose" }
+        : { kind: "view", view: "chat" };
     switch (view) {
       case "help":
       case "palette":
@@ -1233,6 +1356,7 @@ export function App(props: AppProps): React.JSX.Element {
       case "main":
         return {
           kind: "main",
+          pane,
           body:
             body?.kind === "issues"
               ? "issues"
@@ -1241,10 +1365,10 @@ export function App(props: AppProps): React.JSX.Element {
                 : "repoDetail",
         };
     }
-  }, [logOverlay, filtering, view, body]);
+  }, [logOverlay, filtering, view, composerFocused, body, pane]);
   const bindings = useMemo(
-    () => buildContextBindings(bindingContext, pane, layout.mode),
-    [bindingContext, pane, layout.mode],
+    () => buildContextBindings(bindingContext, layout.mode),
+    [bindingContext, layout.mode],
   );
   // Help opens over the MAIN view only; the modal lists the bindings of the
   // surface underneath it (the help context itself derives nothing).
@@ -1253,6 +1377,7 @@ export function App(props: AppProps): React.JSX.Element {
       buildContextBindings(
         {
           kind: "main",
+          pane,
           body:
             body?.kind === "issues"
               ? "issues"
@@ -1260,7 +1385,6 @@ export function App(props: AppProps): React.JSX.Element {
                 ? body.section
                 : "repoDetail",
         },
-        pane,
         layout.mode,
       ),
     [body, pane, layout.mode],
@@ -1331,6 +1455,8 @@ export function App(props: AppProps): React.JSX.Element {
     toEnd,
     reviewState,
     setReviewState,
+    chatDraftActions,
+    chatHandlers,
   });
   const mainActions = useMainActions({
     client,
@@ -1343,6 +1469,9 @@ export function App(props: AppProps): React.JSX.Element {
     sysSection,
     selectedRow,
     currentNwo,
+    currentRepoKey,
+    openChat,
+    openIssueTranscript,
     currentIssue,
     currentRepo,
     selectedPane3Pr,
@@ -1418,6 +1547,11 @@ export function App(props: AppProps): React.JSX.Element {
       case "config":
         return { esc: () => setView("main") };
       case "help":
+        return {};
+      case "chat":
+        // Deliberately none (like `help`): the chat view's `esc` is a state
+        // machine (abort / blur / leave, spec §8.3) owned by useChatInput, and
+        // a chip recipe here would be a second copy of it. Keyboard-only.
         return {};
       case "main":
         return {
@@ -1666,6 +1800,13 @@ export function App(props: AppProps): React.JSX.Element {
 
     // layer 4 ── the view cascade ──
 
+    // The chat view owns EVERY key while it is open (its composer types
+    // prose), so it heads the cascade — ahead of the other view branches and,
+    // decisively, of the main-view tail below, which is not view-gated. The
+    // recipes live in hooks/useChatInput.ts; the s/e/D/r/t/f/q mnemonics have
+    // already dispatched at layer 3d above.
+    if (handleChatKey(input, key)) return;
+
     if (view === "help") {
       setView("main"); // any key closes
       return;
@@ -1778,6 +1919,13 @@ export function App(props: AppProps): React.JSX.Element {
         if (key.return) return void actionHandlers["file"]?.();
         return;
       }
+      // Chat-draft preview mode: scroll + back (the verbs are keymap-derived).
+      if (rs.open && rs.open.kind === "chatDraft") {
+        if (key.escape) return void setReviewState((s) => ({ ...s, open: null }));
+        if (input === "k" || key.upArrow) return void scrollBy(-1);
+        if (input === "j" || key.downArrow) return void scrollBy(1);
+        return;
+      }
       // Assess checklist mode.
       if (rs.open && rs.open.kind === "batch") {
         const batch = rs.batches[rs.open.batchIdx];
@@ -1824,7 +1972,10 @@ export function App(props: AppProps): React.JSX.Element {
       if (input === "j" || key.downArrow) {
         return void setReviewState((s) => ({
           ...s,
-          cursor: Math.min(Math.max(0, s.batches.length + s.drafts.length - 1), s.cursor + 1),
+          cursor: Math.min(
+            Math.max(0, s.batches.length + s.drafts.length + s.chatDrafts.length - 1),
+            s.cursor + 1,
+          ),
         }));
       }
       if (key.return) {
@@ -1847,6 +1998,9 @@ export function App(props: AppProps): React.JSX.Element {
             };
           }
           const draftIdx = s.cursor - s.batches.length;
+          const chatIdx = draftIdx - s.drafts.length;
+          if (chatIdx >= 0)
+            return s.chatDrafts[chatIdx] ? { ...s, open: { kind: "chatDraft", idx: chatIdx } } : s;
           if (!s.drafts[draftIdx]) return s;
           return { ...s, open: { kind: "draft", draftIdx } };
         });
@@ -1959,10 +2113,11 @@ export function App(props: AppProps): React.JSX.Element {
     if (input === "k" || key.upArrow) return void moveIssue(-1);
     if (input === "g") return void moveIssueTo(0);
     if (input === "G") return void moveIssueTo(filteredIssues.length - 1);
-    if (input === "t") return void openIssueTranscript(currentNwo, currentIssue);
     if (key.return) return void openDetail();
     // Named issue verbs (dispatch/approve/analyze + shift variants)
-    // dispatch at layer 3d via the derived keymap.
+    // dispatch at layer 3d via the derived keymap — `t` among them since the
+    // chat verb claimed it (spec 2026-09-01 §8.1); the handler is what keeps
+    // the issue-row reading (#330) on this pane. See useMainActions' `chat`.
   });
 
   // Review-view mouse handlers — duplicate the key recipes EXACTLY (same
@@ -1989,6 +2144,9 @@ export function App(props: AppProps): React.JSX.Element {
         };
       }
       const draftIdx = idx - s.batches.length;
+      const chatIdx = draftIdx - s.drafts.length;
+      if (chatIdx >= 0)
+        return s.chatDrafts[chatIdx] ? { ...s, open: { kind: "chatDraft", idx: chatIdx } } : s;
       if (!s.drafts[draftIdx]) return s;
       return { ...s, open: { kind: "draft", draftIdx } };
     });
@@ -2271,6 +2429,33 @@ export function App(props: AppProps): React.JSX.Element {
             onRowPress={transcriptRowPress}
           />
         </ClickableBox>
+      ) : view === "chat" && chatState ? (
+        // Full-screen like the transcript (spec §8.1); the rail stays the nav
+        // spine through the pane doors even though it isn't painted here.
+        <ClickableBox
+          flexGrow={1}
+          onWheel={(d) => {
+            if (d < 0 && chatState.follow) {
+              toEnd();
+              chatApi.setFollow(false);
+            }
+            scrollBy(d);
+          }}
+        >
+          <ChatView
+            state={chatState}
+            modelId={props.chatModelId}
+            costUsd={health?.chats?.costUsd ?? null}
+            scroll={scroll}
+            height={listHeight}
+            width={size.columns}
+            focused={pane === 2}
+            onScrollMax={onScrollMax}
+            onRowPress={chatRowPress}
+            onComposerChange={chatApi.setComposer}
+            onComposerSubmit={onComposerSubmit}
+          />
+        </ClickableBox>
       ) : view === "review" ? (
         <ReviewView
           state={reviewState}
@@ -2293,6 +2478,7 @@ export function App(props: AppProps): React.JSX.Element {
             heavy={localHeavy}
             issueCounts={issueCounts}
             assess={railAssess}
+            chatBadge={chatBadge}
             width={layout.railWidth}
             height={listHeight}
             now={now}

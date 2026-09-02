@@ -882,6 +882,22 @@ export const CHECKS: DoctorCheck[] = [
     ];
   }),
 
+  // Dashboard chat (spec 2026-09-01 §9) — it rides on the health server's
+  // /chat/* routes and /health.chats, so it needs healthEnabled regardless of
+  // health-bind's own loopback/network warning above. Silent when chat is off.
+  needsConfig("chat", (_ctx, cfg) => {
+    if (!cfg.chat.enabled) return [];
+    if (!cfg.healthEnabled) {
+      return [
+        warn(
+          "chat",
+          "chat requires the health server (observability.healthEnabled) — the dashboard chat view will be unavailable",
+        ),
+      ];
+    }
+    return [ok("chat", `enabled · sessions under ${dataTreePaths(cfg).chats}`)];
+  }),
+
   // Github bridge (only when enabled — disabled setups print nothing)
   needsConfig("github-bridge", async (ctx, cfg) => {
     if (!cfg.github.enabled) return [];

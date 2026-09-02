@@ -18,12 +18,16 @@ export interface CmdState {
 
 /**
  * cmdOutput-view domain: owns the palette-command output state (`cmd`) plus
- * its elapsed-run ticker, and `runPaletteCommand` — which spawns the CLI,
- * switches to the cmdOutput view, and lands the result guarded by a
- * monotonic token so a stale (superseded) subprocess resolution can never
- * clobber a newer run's state. `setCmd` is intentionally NOT exposed: the
- * only writer is `runPaletteCommand` itself; the view closes via `setView`
- * navigation, not by nulling `cmd`.
+ * its elapsed-run ticker, and the two writers that fill it:
+ * `runPaletteCommand`, which spawns the CLI and lands the result when it
+ * resolves, and `showCmdResult`, which lands an ALREADY-completed result (a
+ * chat-draft submit the CLI refused). Both switch to the cmdOutput view and
+ * both mint a fresh monotonic token, which is what makes them safe together:
+ * a still-running palette command whose subprocess resolves after either
+ * writer has moved on sees a stale token and drops its update instead of
+ * clobbering the newer state. `setCmd` stays unexposed — those two are the
+ * whole write surface; the view closes via `setView` navigation, not by
+ * nulling `cmd`.
  */
 export function useCmdOutput(
   runCliFn: (name: string, extraArgs: string[]) => Promise<CliRunResult>,
@@ -32,6 +36,7 @@ export function useCmdOutput(
   cmd: CmdState | null;
   cmdElapsed: number;
   runPaletteCommand: (name: string, extraArgs: string[]) => void;
+  showCmdResult: (name: string, extraArgs: string[], r: CliRunResult) => void;
 } {
   const [cmd, setCmd] = useState<CmdState | null>(null);
   const [cmdElapsed, setCmdElapsed] = useState(0);
@@ -71,5 +76,27 @@ export function useCmdOutput(
     [runCliFn, setView],
   );
 
-  return { cmd, cmdElapsed, runPaletteCommand };
+  /** Land an already-completed result (a chat-draft submit that failed, spec
+   * 2026-09-01 §6.6) in the cmdOutput view. name/extraArgs are kept so `r`
+   * re-runs the same invocation — the token is bumped like a real run's so a
+   * still-in-flight palette command can never overwrite it on resolution. */
+  const showCmdResult = useCallback(
+    (name: string, extraArgs: string[], r: CliRunResult): void => {
+      const token = ++cmdTokenRef.current;
+      setCmd({
+        title: ["junco", name, ...extraArgs].join(" "),
+        running: false,
+        output: r.output,
+        exitCode: r.code,
+        timedOut: r.timedOut,
+        name,
+        extraArgs,
+        token,
+      });
+      setView("cmdOutput");
+    },
+    [setView],
+  );
+
+  return { cmd, cmdElapsed, runPaletteCommand, showCmdResult };
 }

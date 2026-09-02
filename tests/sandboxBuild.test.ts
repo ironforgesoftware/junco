@@ -102,6 +102,43 @@ describe("buildSandbox", () => {
     expect(calls.map((c) => c.name)).toEqual(["read"]);
     expect(res.customTools).toEqual([{ __tool: "read" }]);
   });
+
+  it("threads appendSystemPrompt into the loader as an override plus the four no* flags; absent, the args are unchanged", () => {
+    const { factories, loaderOpts } = fakeFactories();
+    buildSandbox(factories as any, {
+      cwd: "/work/tree",
+      toolNames: ["read"],
+      backend: noneBackend,
+      policy,
+      home: "/home/x",
+      appendSystemPrompt: "X",
+    });
+    expect(loaderOpts[0]).toMatchObject({
+      cwd: "/work/tree",
+      agentDir: "/home/x/.pi/agent",
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    expect(typeof loaderOpts[0].appendSystemPromptOverride).toBe("function");
+    expect(loaderOpts[0].appendSystemPromptOverride([])).toEqual(["X"]);
+
+    const { factories: factories2, loaderOpts: loaderOpts2 } = fakeFactories();
+    buildSandbox(factories2 as any, {
+      cwd: "/work/tree",
+      toolNames: ["read"],
+      backend: noneBackend,
+      policy,
+      home: "/home/x",
+    });
+    expect(loaderOpts2[0]).toEqual({
+      cwd: "/work/tree",
+      agentDir: "/home/x/.pi/agent",
+      noExtensions: true,
+    });
+  });
 });
 
 describe("sandbox op mutual-exclusion (#159)", () => {

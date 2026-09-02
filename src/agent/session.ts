@@ -61,6 +61,20 @@ export interface AgentSessionLike {
 }
 
 /**
+ * The chat seam (spec 2026-09-01 §2.1): the interactive subset of the SDK
+ * session the dashboard chat drives. Extends — never mutates — AgentSessionLike
+ * so every existing fake keeps compiling. Verified against SDK 0.84.4
+ * `dist/core/agent-session.d.ts`: steer(text) line 380; isStreaming line 300,
+ * isIdle line 302; messages getter line 327.
+ */
+export interface ChatSessionLike extends AgentSessionLike {
+  steer(text: string): Promise<void>;
+  readonly isStreaming: boolean;
+  readonly isIdle: boolean;
+  readonly messages: unknown[];
+}
+
+/**
  * Sink for the per-ticket transcript. `runAgent` writes one already-serialized
  * JSON line per non-delta event (plus synthetic guard-decision records) through
  * this seam — injectable so the fs writes sit behind a deps boundary like every
@@ -438,6 +452,15 @@ export interface SessionOverrides {
    *  flows (Q&A, audit, investigate), whose cwd is the operator's live
    *  checkout — the sandbox enforces read-only independently of `tools`. */
   readOnly?: boolean;
+  /** Chat (spec 2026-09-01 §2.1): a file-backed SDK SessionManager built by
+   *  makeSessionManager. Absent → SessionManager.inMemory(cwd), unchanged for
+   *  every other caller. Opaque here; typed at the SDK boundary only. */
+  sessionManager?: unknown;
+  /** Chat (spec 2026-09-01 §6.5): appended to pi's default coding prompt
+   *  (never a replacement) via the resource loader's
+   *  `appendSystemPromptOverride` + `reload()`. Absent → the loader is built
+   *  exactly as before (sandboxed) or skipped entirely (unsandboxed). */
+  appendSystemPrompt?: string;
 }
 
 export interface ResolveSandboxDeps {
@@ -818,9 +841,39 @@ export function makePiSessionFactory(
         backend: resolved.backend,
         policy: resolved.policy,
         home: homedir(),
+        appendSystemPrompt: overrides?.appendSystemPrompt,
       });
       sandboxTools = built.customTools;
       sandboxLoader = built.resourceLoader;
+      // The SDK only reloads a resource loader it constructs itself
+      // (createAgentSession, sdk.js: `if (!resourceLoader) { … await
+      // resourceLoader.reload(); }`) — a caller-supplied loader, which this
+      // always is, is used exactly as-is. `appendSystemPromptOverride` is
+      // materialized only inside `reload()` (resource-loader.js), so without
+      // this call an appended chat prompt would silently never appear. Gated
+      // on `appendSystemPrompt` so the ticket path's loader — built the same
+      // way today as before this feature — is never reloaded and its
+      // behavior stays byte-identical.
+      if (overrides?.appendSystemPrompt)
+        await (sandboxLoader as { reload(): Promise<void> }).reload();
+    } else if (overrides?.appendSystemPrompt) {
+      // Sandbox off, but chat still needs its prompt appended: build the same
+      // inert loader directly (noExtensions + the other four no* flags) so
+      // chat never picks up ambient extensions/skills/prompts/themes/context
+      // files even unsandboxed — it is read-only by contract regardless of
+      // sandbox.enabled.
+      const { DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
+      sandboxLoader = new DefaultResourceLoader({
+        cwd,
+        agentDir: join(homedir(), ".pi", "agent"),
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+        appendSystemPromptOverride: () => [overrides.appendSystemPrompt!],
+      });
+      await (sandboxLoader as { reload(): Promise<void> }).reload();
     }
 
     const { session } = await createAgentSession({
@@ -832,7 +885,7 @@ export function makePiSessionFactory(
       // The critic passes `[]` (no tools — diff-vs-spec review needs none);
       // default is the configured worker allowlist.
       tools: overrides?.tools ?? cfg.tools,
-      sessionManager: SessionManager.inMemory(cwd),
+      sessionManager: (overrides?.sessionManager as never) ?? SessionManager.inMemory(cwd),
       // Never read ~/.pi/agent/settings.json or the target repo's
       // .pi/settings.json (trusted by default by the SDK — a repo-controlled
       // injection surface for a queue worker). Retry knobs come from config;
@@ -856,4 +909,65 @@ export function makePiSessionFactory(
     });
     return session;
   };
+}
+
+export type SessionManagerMode =
+  | { create: { cwd: string; dir: string } }
+  | { open: { file: string; dir: string; cwd: string } };
+
+/**
+ * Chat sessions persist under a junco-owned dir (spec 2026-09-01 §2.1) —
+ * never ~/.pi. SDK 0.84.4 `dist/core/session-manager.d.ts`: create(cwd,
+ * sessionDir) line 318, open(path, sessionDir, cwdOverride) line 325,
+ * getSessionFile() line 208.
+ *
+ * Verified against the installed SDK (0.84.4) directly, since both facts
+ * below are easy to assume wrong from the `.d.ts` alone:
+ *   - create() writes nothing to disk immediately: getSessionFile() reports a
+ *     path right away, but session-manager.js's _persist() (line 726, the
+ *     write path) skips every write until the first ASSISTANT reply lands
+ *     (the `hasAssistant` gate, line 729). A session with zero completed
+ *     turns leaves no file on disk at all.
+ *   - open() on a missing path never throws — with or without a
+ *     cwdOverride. The static open()'s only existsSync+header-read guard
+ *     (session-manager.js line 1193) is skipped whenever cwdOverride is
+ *     defined, which we always pass; even without that guard,
+ *     `_setSessionFile`'s (line 616) "file doesn't exist" branch (line 641)
+ *     just calls `newSession()` and reassigns the explicit path, silently
+ *     yielding a fresh, empty session AT that path instead of erroring.
+ *
+ * That second fact is exactly what we want here: "created, no turn yet,
+ * daemon restarted" and "file lost" both mean the same thing — there is
+ * nothing to recover — so a missing path becoming a fresh empty session at
+ * that path IS the correct behavior, not a failure to guard against. The
+ * caller (chatSession.ts, a later task) is the one with enough context to
+ * tell those two cases apart if it ever needs to (e.g. by consulting its own
+ * chat-transcript record of whether a reply was ever recorded) and to decide
+ * whether a missing file means "nothing lost, carry on" or "reset the chat
+ * state accordingly" — this helper only surfaces the SDK's file-contract
+ * primitives faithfully, it doesn't guess at that policy.
+ */
+export async function makeSessionManager(
+  mode: SessionManagerMode,
+): Promise<{ manager: unknown; file: string }> {
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const manager =
+    "create" in mode
+      ? SessionManager.create(mode.create.cwd, mode.create.dir)
+      : SessionManager.open(mode.open.file, mode.open.dir, mode.open.cwd);
+  const file = (manager as { getSessionFile(): string | undefined }).getSessionFile();
+  if (!file) throw new Error("SDK SessionManager reported no session file (not persisting)");
+  return { manager, file };
+}
+
+/** Same build as makePiSessionFactory; the real SDK session structurally
+ * satisfies the wider ChatSessionLike, so the widening is one cast at the
+ * SDK boundary. */
+export function makeChatSessionFactory(
+  cfg: Config,
+  cwd: string,
+  overrides: SessionOverrides,
+): () => Promise<ChatSessionLike> {
+  const inner = makePiSessionFactory(cfg, cwd, overrides);
+  return async () => (await inner()) as unknown as ChatSessionLike;
 }

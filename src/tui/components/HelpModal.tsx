@@ -75,6 +75,10 @@ export function HelpModal({
           ["g/G", "first / last"],
           ["enter", "open detail — repo (rail), issue (list), PR (monitor / PRs view)"],
           ["t on an issue", "transcript of the ticket junco built for it (live while it runs)"],
+          [
+            "t on a repo row",
+            "chat with the agent about that repo (rail / PR pane, or a local repo body)",
+          ],
           ["/", "filter issues (esc clears)"],
           [",", "config editor"],
           [":", "command palette (alias of the commands chip)"],
