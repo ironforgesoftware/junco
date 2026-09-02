@@ -73,6 +73,19 @@ function setup(over: Partial<ChatManagerDeps> = {}, scripts = [chatScriptText("h
   return { m, cfg, gate, spend, root };
 }
 
+/** Admission AND the detached turn — what `await m.prompt(...)` meant before
+ * Ruling R33 made the route answer on admission. */
+async function runTurn(
+  m: ChatManager,
+  key: string,
+  text: string,
+): Promise<{ ok: boolean; mode?: string; error?: string }> {
+  const r = await m.prompt(key, text);
+  if (!r.ok) return { ok: false, error: r.error };
+  await r.value.done;
+  return { ok: true, mode: r.value.mode };
+}
+
 const lines = (p: string) =>
   readFileSync(p, "utf8")
     .trim()
@@ -85,8 +98,8 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     const { m, spend } = setup({
       onTurnComplete: async (_s, r, src) => void done.push(`${src}:${r.status}`),
     });
-    const r = await m.prompt("acme/api", "hello");
-    expect(r).toEqual({ ok: true, value: { mode: "prompt" } });
+    const r = await runTurn(m, "acme/api", "hello");
+    expect(r).toEqual({ ok: true, mode: "prompt" });
     expect(spend.calls).toEqual([0.3]);
     expect(done).toEqual(["operator:ok"]);
     const h = m.health();
@@ -104,18 +117,37 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     const { m, spend } = setup({
       onTurnComplete: () => Promise.reject(new Error("draft parking exploded")),
     });
-    const r = await m.prompt("acme/api", "hello");
-    expect(r).toEqual({ ok: true, value: { mode: "prompt" } });
+    const r = await runTurn(m, "acme/api", "hello");
+    expect(r).toEqual({ ok: true, mode: "prompt" });
     expect(spend.calls).toEqual([0.3]);
     expect(m.health().turns).toBe(1);
+  });
+
+  it("prompt answers on ADMISSION; the turn, its spend and its hook run inside `done` (R33)", async () => {
+    const hook: string[] = [];
+    const { m, spend } = setup({ onTurnComplete: async () => void hook.push("ran") }, [
+      { ...chatScriptText("hi", 0.3), delayMs: 40 },
+    ]);
+    const r = await m.prompt("acme/api", "hello");
+    expect(r.ok && r.value.mode).toBe("prompt");
+    // The route has its answer while the model is still streaming.
+    expect(m.status("acme/api")?.streaming).toBe(true);
+    expect(m.health().turns).toBe(0);
+    expect(spend.calls).toEqual([]);
+    expect(hook).toEqual([]);
+    if (!r.ok) return;
+    await r.value.done;
+    expect(m.health().turns).toBe(1);
+    expect(spend.calls).toEqual([0.3]);
+    expect(hook).toEqual(["ran"]);
   });
 
   it("gate-blocked: no model call, a junco_chat_turn_rejected record with until, mode rejected", async () => {
     const { m } = setup({ gate: fakeGate("rate limited: 429") });
     const s = await m.get("acme/api");
     expect(s.ok).toBe(true);
-    const r = await m.prompt("acme/api", "hello");
-    expect(r).toEqual({ ok: true, value: { mode: "rejected" } });
+    const r = await runTurn(m, "acme/api", "hello");
+    expect(r).toEqual({ ok: true, mode: "rejected" });
     const recs = lines((s as { value: { transcriptPath: string } }).value.transcriptPath);
     const rej = recs.find((x) => x.type === "junco_chat_turn_rejected");
     expect(rej).toMatchObject({ reason: "rate limited: 429", until: "2026-09-01T18:00:00.000Z" });
@@ -137,22 +169,22 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
       resolveCwd: async () => ({ ok: true, cwd: root, kind: "watched", nwo: "acme/api" }),
       session: { makeSessionManager: fakeSm, sessionFactoryFor: () => fakeChatSession([]) },
     });
-    const r = await m.prompt("acme/api", "hello");
+    const r = await runTurn(m, "acme/api", "hello");
     expect(gate.budget).toHaveLength(1);
     expect(gate.budget[0]![1]).toBe("daily budget $5.00 reached ($10.00 spent)");
-    expect(r).toEqual({ ok: true, value: { mode: "rejected" } });
+    expect(r).toEqual({ ok: true, mode: "rejected" });
   });
 
   it("a gate-class provider failure during a turn reports into the gate (symmetric with tickets)", async () => {
     const { m, gate } = setup({}, [{ events: [], throws: "fetch failed: 429 too many requests" }]);
-    const r = await m.prompt("acme/api", "hello");
-    expect(r).toEqual({ ok: true, value: { mode: "prompt" } });
+    const r = await runTurn(m, "acme/api", "hello");
+    expect(r).toEqual({ ok: true, mode: "prompt" });
     expect(gate.failures).toEqual([["rate_limit", "fetch failed: 429 too many requests"]]);
   });
 
   it("an unknown-class failure does not touch the gate", async () => {
     const { m, gate } = setup({}, [{ events: [], throws: "something odd" }]);
-    await m.prompt("acme/api", "hello");
+    await runTurn(m, "acme/api", "hello");
     expect(gate.failures).toEqual([]);
   });
 
@@ -210,7 +242,7 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
       gate: fakeGate(),
       spend: fakeSpend(),
     });
-    expect(await off.prompt("acme/api", "x")).toEqual({ ok: false, error: "chat_disabled" });
+    expect(await runTurn(off, "acme/api", "x")).toEqual({ ok: false, error: "chat_disabled" });
     const unknown = new ChatManager({
       cfg: () => cfg,
       gate: fakeGate(),
@@ -226,7 +258,7 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
       { events: [], delayMs: 10_000 },
       chatScriptText("c"),
     ]);
-    await m.prompt("acme/api", "one");
+    await runTurn(m, "acme/api", "one");
     const live: string[] = [];
     const sub = await m.subscribe("acme/api", 0, {
       onLine: (l) => live.push(JSON.parse(l).type),
@@ -235,10 +267,10 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     expect(sub.ok).toBe(true);
     if (!sub.ok) return;
     expect(sub.value.replay.map((r) => JSON.parse(r.line).type)).toContain("junco_chat_turn_end");
-    const p = m.prompt("acme/api", "two");
+    const p = await m.prompt("acme/api", "two");
     await vi.waitFor(() => expect(m.status("acme/api")?.streaming).toBe(true));
     expect(await m.abort("acme/api")).toEqual({ ok: true, value: { aborted: true } });
-    await p;
+    if (p.ok) await p.value.done;
     expect(live).toContain("junco_chat_turn_aborted");
     expect(await m.abort("acme/api")).toEqual({ ok: true, value: { aborted: false } });
     expect(await m.fresh("acme/api")).toEqual({ ok: true, value: null });
@@ -275,20 +307,25 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
       },
       [chatScriptText("first"), chatScriptText("second")],
     );
-    await m.prompt("acme/api", "hello");
+    await runTurn(m, "acme/api", "hello");
     expect(seen).toEqual(["operator", "auto_lint"]);
     expect(m.health().turns).toBe(2);
   });
 
-  it("drain aborts every streaming session and ends every subscriber", async () => {
-    const { m } = setup({}, [{ events: [], delayMs: 10_000 }]);
+  it("drain aborts every streaming session, awaits its detached turn, and ends every subscriber", async () => {
+    const hook: string[] = [];
+    const { m } = setup({ onTurnComplete: async () => void hook.push("ran") }, [
+      { events: [], delayMs: 10_000 },
+    ]);
     const ends: string[] = [];
     await m.subscribe("acme/api", 0, { onLine: () => {}, onEnd: (r) => ends.push(r) });
-    const p = m.prompt("acme/api", "slow");
+    const p = await m.prompt("acme/api", "slow");
     await vi.waitFor(() => expect(m.status("acme/api")?.streaming).toBe(true));
     await m.drain();
-    await p;
+    // R33: the tail outlives the response, so shutdown is what waits for it.
+    expect(hook).toEqual(["ran"]);
     expect(ends).toEqual(["daemon_stopped"]);
     expect(m.health().sessions[0]?.streaming).toBe(false);
+    if (p.ok) await p.value.done;
   });
 });

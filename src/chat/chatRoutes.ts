@@ -235,6 +235,11 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
         if (typeof text !== "string") return json(res, 400, { error: "bad request" });
         if (Buffer.byteLength(text, "utf8") > maxTextBytes)
           return json(res, 413, { error: "text too large" });
+        // Ruling R33: `prompt` resolves on ADMISSION and the turn runs on
+        // `r.value.done` — deliberately NOT awaited here. Awaiting it holds
+        // the response open for the whole turn, and the dashboard's fetch
+        // (undici, 300 s headersTimeout) rejects with "fetch failed" on any
+        // turn longer than five minutes while the daemon keeps streaming.
         const r = await manager.prompt(key, text, { source: "operator" });
         if (!r.ok) return fail(r.error);
         return json(res, r.value.mode === "rejected" ? 200 : 202, { mode: r.value.mode });

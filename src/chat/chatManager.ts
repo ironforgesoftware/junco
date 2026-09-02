@@ -41,6 +41,13 @@ export interface ChatHealth {
   tokensIn: number;
   tokensOut: number;
 }
+/** Ruling R33: what `prompt()` answers with the moment the turn is admitted.
+ *  `done` settles when the turn (and its one auto-lint follow-up) is over and
+ *  never rejects — the HTTP route ignores it, `drain()` awaits it. */
+export interface AdmittedPrompt {
+  mode: "prompt" | "steer" | "rejected";
+  done: Promise<void>;
+}
 export type ChatError = ChatCwdError | "chat_disabled";
 export type ChatResult<T> = { ok: true; value: T } | { ok: false; error: ChatError };
 
@@ -74,6 +81,9 @@ export class ChatManager {
   /** Slug → the in-flight build, so a concurrent first-touch of the same key
    *  joins it instead of racing a second ChatSession onto the same dir. */
   private readonly pending = new Map<string, Promise<ChatResult<ChatSession>>>();
+  /** Slug → the turn tails that outlived their HTTP response (Ruling R33). */
+  private readonly inFlightTurns = new Map<string, Set<Promise<void>>>();
+  private draining = false;
   private turns = 0;
   private costUsd = 0;
   private tokensIn = 0;
@@ -149,11 +159,17 @@ export class ChatManager {
     return { reason, until: this.deps.gate.status().until };
   }
 
+  /**
+   * Ruling R33: resolves on ADMISSION — the gate check plus the
+   * prompt/steer decision — so the HTTP route can answer 202/200/409 while
+   * the model is still streaming. The turn itself (spend, the draft hook, the
+   * one auto-lint follow-up) runs detached on `done`, which never rejects.
+   */
   async prompt(
     key: string,
     text: string,
     opts: { source?: "operator" | "auto_lint" } = {},
-  ): Promise<ChatResult<{ mode: "prompt" | "steer" | "rejected" }>> {
+  ): Promise<ChatResult<AdmittedPrompt>> {
     const got = await this.get(key);
     if (!got.ok) return got;
     const session = got.value;
@@ -168,48 +184,85 @@ export class ChatManager {
         reason: block.reason,
         until: block.until,
       });
-      return { ok: true, value: { mode: "rejected" } };
+      return { ok: true, value: { mode: "rejected", done: Promise.resolve() } };
     }
     const cfg = this.deps.cfg();
     const timeoutMs = (cfg.chat.turnTimeoutMinutes ?? cfg.defaultTimeoutMinutes) * 60_000;
-    const result = await session.prompt(text, {
+    const started = await session.startPrompt(text, {
       source,
       timeoutMs,
       abortGraceMs: this.deps.abortGraceMs,
       classify: (m) => classifyProviderFailure(m),
     });
-    // A steer opened no turn of its own: it neither counts nor spends — the
-    // running turn's end record carries the usage it contributed to.
-    if (result.mode === "steer") return { ok: true, value: { mode: "steer" } };
-    this.turns++;
-    this.costUsd += result.usage.costUsd;
-    this.tokensIn += result.usage.input;
-    this.tokensOut += result.usage.output;
-    if (result.usage.costUsd > 0) this.deps.spend.recordUsd(result.usage.costUsd);
-    // Symmetric with runOnce.ts's GATE_CLASSES routing: a chat 429/auth/quota
-    // pauses ticket claiming exactly as a ticket's would.
-    if (result.status === "error" && result.errorMessage !== null) {
-      const cls = classifyProviderFailure(result.errorMessage);
-      if (GATE_CLASSES.has(cls)) this.deps.gate.reportFailure(cls, result.errorMessage);
-    }
-    let followUp: string | undefined;
-    if (this.deps.onTurnComplete) {
-      try {
-        const r = await this.deps.onTurnComplete(session, result, source);
-        followUp = r && "followUp" in r ? r.followUp : undefined;
-      } catch (e) {
-        log.warn("chat onTurnComplete threw; ignoring", {
-          error: e instanceof Error ? e.message : String(e),
-        });
+    const done = this.track(session.slug, this.finishTurn(key, session, started.done, source));
+    return { ok: true, value: { mode: started.mode, done } };
+  }
+
+  /**
+   * The turn's tail, after the route has answered. NEVER rejects: a model
+   * failure is already a `junco_chat_turn_end{status:"error"}` record and a
+   * gate report, so anything reaching the catch is a bug in this layer and is
+   * logged as one.
+   */
+  private async finishTurn(
+    key: string,
+    session: ChatSession,
+    turn: Promise<ChatTurnResult>,
+    source: "operator" | "auto_lint",
+  ): Promise<void> {
+    try {
+      const result = await turn;
+      // A steer opened no turn of its own: it neither counts nor spends — the
+      // running turn's end record carries the usage it contributed to.
+      if (result.mode === "steer") return;
+      this.turns++;
+      this.costUsd += result.usage.costUsd;
+      this.tokensIn += result.usage.input;
+      this.tokensOut += result.usage.output;
+      if (result.usage.costUsd > 0) this.deps.spend.recordUsd(result.usage.costUsd);
+      // Symmetric with runOnce.ts's GATE_CLASSES routing: a chat 429/auth/quota
+      // pauses ticket claiming exactly as a ticket's would.
+      if (result.status === "error" && result.errorMessage !== null) {
+        const cls = classifyProviderFailure(result.errorMessage);
+        if (GATE_CLASSES.has(cls)) this.deps.gate.reportFailure(cls, result.errorMessage);
       }
+      let followUp: string | undefined;
+      if (this.deps.onTurnComplete) {
+        try {
+          const r = await this.deps.onTurnComplete(session, result, source);
+          followUp = r && "followUp" in r ? r.followUp : undefined;
+        } catch (e) {
+          log.warn("chat onTurnComplete threw; ignoring", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+      // Spec §6.3: exactly one automatic lint follow-up, never chained — the
+      // `operator` guard is what makes that hold no matter what the hook returns
+      // off the retry turn. Not while draining: the session is already stopping,
+      // and drain() waits on these tails.
+      if (followUp !== undefined && source === "operator" && !this.draining) {
+        const retry = await this.prompt(key, followUp, { source: "auto_lint" });
+        if (retry.ok) await retry.value.done;
+      }
+    } catch (e) {
+      log.error("chat turn tail failed", {
+        key,
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
-    // Spec §6.3: exactly one automatic lint follow-up, never chained — the
-    // `operator` guard is what makes that hold no matter what the hook returns
-    // off the retry turn.
-    if (followUp !== undefined && source === "operator") {
-      await this.prompt(key, followUp, { source: "auto_lint" });
-    }
-    return { ok: true, value: { mode: "prompt" } };
+  }
+
+  /** Per-slug in-flight tails, so drain() can wait for every one of them. */
+  private track(slug: string, done: Promise<void>): Promise<void> {
+    const set = this.inFlightTurns.get(slug) ?? new Set<Promise<void>>();
+    this.inFlightTurns.set(slug, set);
+    set.add(done);
+    void done.finally(() => {
+      set.delete(done);
+      if (set.size === 0) this.inFlightTurns.delete(slug);
+    });
+    return done;
   }
 
   async abort(key: string): Promise<ChatResult<{ aborted: boolean }>> {
@@ -286,8 +339,15 @@ export class ChatManager {
 
   /** Graceful stop (spec §2.4): every session drains before the health server
    * closes. Concurrently — one wedged session must not hold the others' SSE
-   * clients open past the shutdown deadline. */
+   * clients open past the shutdown deadline. Then the detached tails (R33):
+   * the abort above makes each turn settle, and this is what waits for the
+   * spend/hook/record work that used to sit inside the POST. `draining`
+   * stops an auto-lint follow-up from being admitted mid-shutdown, which is
+   * also what makes the loop terminate. */
   async drain(): Promise<void> {
+    this.draining = true;
     await Promise.all([...this.sessions.values()].map((s) => s.drain()));
+    while (this.inFlightTurns.size > 0)
+      await Promise.all([...this.inFlightTurns.values()].flatMap((s) => [...s]));
   }
 }

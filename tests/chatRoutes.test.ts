@@ -28,7 +28,10 @@ function fakeManager(over: Partial<ChatRoutesManager> = {}) {
     end: () => subs.forEach((s) => s.onEnd("daemon_stopped")),
     subsCount: () => subs.size,
     enabled: () => true,
-    prompt: async (...a) => (calls.push(["prompt", ...a]), { ok: true, value: { mode: "prompt" } }),
+    prompt: async (...a) => (
+      calls.push(["prompt", ...a]),
+      { ok: true, value: { mode: "prompt", done: Promise.resolve() } }
+    ),
     abort: async (...a) => (calls.push(["abort", ...a]), { ok: true, value: { aborted: true } }),
     fresh: async (...a) => (calls.push(["fresh", ...a]), { ok: true, value: null }),
     note: async (...a) => (calls.push(["note", ...a]), { ok: true, value: null }),
@@ -144,9 +147,33 @@ describe("/chat routes (spec 2026-09-01 §5)", () => {
     expect(m.calls[0]).toEqual(["prompt", "acme/api", "hi", { source: "operator" }]);
   });
 
+  it("POST /chat/prompt answers on ADMISSION — the turn's `done` is never awaited (R33)", async () => {
+    // A turn can run for many minutes; undici's 300 s headersTimeout would
+    // reject the dashboard's fetch long before a held-open response arrived.
+    let endTurn!: () => void;
+    let ended = false;
+    const turn = new Promise<void>((r) => (endTurn = r)).then(() => {
+      ended = true;
+    });
+    const url = await serve(
+      fakeManager({ prompt: async () => ({ ok: true, value: { mode: "prompt", done: turn } }) }),
+    );
+    const r = await fetch(`${url}/chat/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ key: "acme/api", text: "hi" }),
+    });
+    expect(r.status).toBe(202);
+    expect(await r.json()).toEqual({ mode: "prompt" });
+    expect(ended).toBe(false); // answered while the turn is still running
+    endTurn();
+    await turn;
+  });
+
   it("gate-rejected prompt → 200 {mode:'rejected'}", async () => {
     const url = await serve(
-      fakeManager({ prompt: async () => ({ ok: true, value: { mode: "rejected" } }) }),
+      fakeManager({
+        prompt: async () => ({ ok: true, value: { mode: "rejected", done: Promise.resolve() } }),
+      }),
     );
     const r = await fetch(`${url}/chat/prompt`, {
       method: "POST",

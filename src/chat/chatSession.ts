@@ -45,6 +45,23 @@ export interface ChatMeta {
   createdAt: string;
 }
 
+export interface PromptOpts {
+  source: "operator" | "auto_lint";
+  timeoutMs: number;
+  abortGraceMs?: number;
+  /** The manager owns the gate + classifier; it passes one in so the end
+   *  record carries the class (spec §1.3). Absent → null. */
+  classify?: (message: string) => ProviderFailureClass | null;
+}
+
+/** Ruling R33: what a prompt looks like the moment it is ADMITTED. `done` is
+ *  the turn itself — awaited by drain() and by the manager's tail, never by
+ *  the HTTP route. */
+export interface StartedTurn {
+  mode: "prompt" | "steer";
+  done: Promise<ChatTurnResult>;
+}
+
 export interface ChatSubscriber {
   /** offset = byte position after the line's newline; null for bus-only lines. */
   onLine(line: string, offset: number | null): void;
@@ -478,17 +495,20 @@ export class ChatSession {
 
   // ---- turns ---------------------------------------------------------------------
 
-  async prompt(
-    text: string,
-    opts: {
-      source: "operator" | "auto_lint";
-      timeoutMs: number;
-      abortGraceMs?: number;
-      /** The manager owns the gate + classifier; it passes one in so the end
-       *  record carries the class (spec §1.3). Absent → null. */
-      classify?: (message: string) => ProviderFailureClass | null;
-    },
-  ): Promise<ChatTurnResult> {
+  /** The whole turn, for callers with nothing else to do — `startPrompt`
+   *  followed by its `done`. */
+  async prompt(text: string, opts: PromptOpts): Promise<ChatTurnResult> {
+    return (await this.startPrompt(text, opts)).done;
+  }
+
+  /**
+   * Ruling R33: resolves once the turn is ADMITTED — the SDK session is
+   * built and the prompt/steer decision is made — with the turn itself on
+   * `done`. The HTTP route answers off this resolution; a turn that runs for
+   * half an hour no longer holds a response open past undici's 300 s
+   * headersTimeout.
+   */
+  async startPrompt(text: string, opts: PromptOpts): Promise<StartedTurn> {
     // All of this happens BEFORE the first await. `starting` is what tells
     // abort()/reset()/drain() that a turn exists during the window in which
     // the SDK session is still being built — `inFlight` is not set until the
@@ -505,36 +525,37 @@ export class ChatSession {
     if (owns) this.turnAbort = ctl;
     this.starting++;
     try {
-      return await this.runPrompt(text, opts, gen, startedAt, ctl);
+      // `starting` covers exactly the admission window: by the time this
+      // returns, a prompt turn is on `inFlight` and a steer has already been
+      // delivered, so abort()/reset()/drain() can see it either way.
+      return await this.admit(text, opts, gen, startedAt, ctl);
     } finally {
       this.starting--;
     }
   }
 
-  private async runPrompt(
+  private async admit(
     text: string,
-    opts: {
-      source: "operator" | "auto_lint";
-      timeoutMs: number;
-      abortGraceMs?: number;
-      classify?: (message: string) => ProviderFailureClass | null;
-    },
+    opts: PromptOpts,
     gen: number,
     startedAt: number,
     ctl: AbortController,
-  ): Promise<ChatTurnResult> {
+  ): Promise<StartedTurn> {
+    const startedElsewhere = (): StartedTurn => ({
+      mode: "prompt",
+      done: Promise.resolve(this.abortedWhileStarting(text, opts.source, startedAt)),
+    });
     let sdk: ChatSessionLike;
     try {
       sdk = await this.ensureSession();
     } catch (e) {
-      if (e instanceof StaleChatSessionError || gen !== this.generation)
-        return this.abortedWhileStarting(text, opts.source, startedAt);
+      if (e instanceof StaleChatSessionError || gen !== this.generation) return startedElsewhere();
       throw e;
     }
     // The build succeeded but a reset/drain landed while it ran (or just
     // after): `this.sdk` has already been disposed and nulled, so this
     // session must not be prompted.
-    if (gen !== this.generation) return this.abortedWhileStarting(text, opts.source, startedAt);
+    if (gen !== this.generation) return startedElsewhere();
     const chatCfg = chatCfgFor(this.cfg);
     // A turn is in flight when THIS object owns one (`inFlight`) OR the SDK is
     // mid-run. Testing `sdk.isStreaming` alone loses the same-tick race: two
@@ -548,13 +569,16 @@ export class ChatSession {
       await sdk.steer(text);
       return {
         mode: "steer",
-        status: "ok",
-        abortReason: null,
-        errorMessage: null,
-        usage: ZERO_USAGE,
-        durationMs: this.now() - start,
-        finalText: "",
-        allText: "",
+        done: Promise.resolve({
+          mode: "steer",
+          status: "ok",
+          abortReason: null,
+          errorMessage: null,
+          usage: ZERO_USAGE,
+          durationMs: this.now() - start,
+          finalText: "",
+          allText: "",
+        }),
       };
     }
     this.writeRecord({ type: "junco_chat_prompt", text, mode: "prompt", source: opts.source });
@@ -578,6 +602,12 @@ export class ChatSession {
       now: this.now,
     });
     this.inFlight = run;
+    return { mode: "prompt", done: this.settle(run, opts) };
+  }
+
+  /** The turn's own tail: the end record and the in-flight bookkeeping. Runs
+   *  detached from admission (R33) — the route already answered. */
+  private async settle(run: Promise<ChatTurnResult>, opts: PromptOpts): Promise<ChatTurnResult> {
     try {
       const r = await run;
       this.turns++;
