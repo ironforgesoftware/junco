@@ -209,6 +209,7 @@ describe("runDoctor", () => {
       sandbox: {
         enabled: true,
         backend: "bwrap",
+        requireBackend: false,
         network: "deny",
         extraDenyRead: [],
         extraAllowWrite: [],
@@ -342,6 +343,7 @@ describe("runDoctor", () => {
       sandbox: {
         enabled: true,
         backend: "auto",
+        requireBackend: false,
         network: "deny",
         extraDenyRead: [],
         extraAllowWrite: [],
@@ -365,6 +367,43 @@ describe("runDoctor", () => {
     expect(code).toBe(0); // degrade does not fail the preflight
     expect(lines.join("")).toMatch(/⚠ sandbox/);
     expect(lines.join("")).toMatch(/degrading to none/);
+  });
+
+  // #344: the ⚠ above is the only signal that the default config is running
+  // agent bash unconfined. With requireBackend on, the degrade is a refusal —
+  // doctor must say so with the same ✗ (exit 1) an explicit backend gets.
+  it("reports ✗ and fails when backend=auto has no OS backend and requireBackend is on (#344)", async () => {
+    const lines: string[] = [];
+    const cfg = sandboxConfig({
+      sandbox: {
+        enabled: true,
+        backend: "auto",
+        requireBackend: true,
+        network: "deny",
+        extraDenyRead: [],
+        extraAllowWrite: [],
+        bashTimeoutSeconds: 600,
+      },
+    } as unknown as Partial<Config>);
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        env: sandboxEnv,
+        execFn: async (cmd: string) =>
+          cmd === "bwrap" || cmd === "sandbox-exec"
+            ? { code: 127, stdout: "", stderr: "not found" }
+            : { code: 0, stdout: "ok", stderr: "" },
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(code).toBe(1);
+    const out = lines.join("");
+    expect(out).toMatch(/✗ sandbox/);
+    expect(out).not.toMatch(/degrading to none/);
+    // Names the lever that turned the degrade into a refusal, so the operator
+    // knows which knob (not sandbox.enabled) buys the old behavior back.
+    expect(out).toMatch(/sandbox\.requireBackend/);
   });
 
   // #312: an unavailable backend used to report only "install bubblewrap",

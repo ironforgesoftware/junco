@@ -485,7 +485,12 @@ export async function resolveSandbox(
   let backend = selectBackend(cfg.sandbox.backend, platform);
   const availability: BackendAvailability =
     backend.name === "none" ? { available: true } : await backend.checkAvailability(probe);
-  const outcome = classifyAvailability(cfg.sandbox.backend, backend.name, availability.available);
+  const outcome = classifyAvailability(
+    cfg.sandbox.backend,
+    backend.name,
+    availability.available,
+    cfg.sandbox.requireBackend,
+  );
   // #312: the probe's own words, when it had any. "Install bubblewrap" is
   // actively misleading when bubblewrap IS installed and the kernel refused
   // (ubuntu-24.04's kernel.apparmor_restrict_unprivileged_userns=1), so the
@@ -494,10 +499,15 @@ export async function resolveSandbox(
   const why = availability.reason === undefined ? "" : ` Probe said: ${availability.reason}.`;
   if (outcome === "fail-closed") {
     // Explicit backend the operator demanded is unavailable — never silently
-    // run less-sandboxed than they asked. (auto degrades instead; see below.)
+    // run less-sandboxed than they asked. (auto degrades instead, see below —
+    // unless sandbox.requireBackend turned that degrade into this refusal, in
+    // which case the opt-out to name is that lever, not the whole sandbox.)
+    const optOut =
+      cfg.sandbox.backend === "auto"
+        ? `sandbox.requireBackend is on — install it, or set sandbox.requireBackend=false to degrade to backend="none".`
+        : `Install it, or set sandbox.backend="none" / sandbox.enabled=false.`;
     throw new SandboxUnavailableError(
-      `sandbox backend "${backend.name}" unavailable (binary missing or non-functional).${why} ` +
-        `Install it, or set sandbox.backend="none" / sandbox.enabled=false.`,
+      `sandbox backend "${backend.name}" unavailable (binary missing or non-functional).${why} ${optOut}`,
     );
   }
   if (outcome === "degrade") {

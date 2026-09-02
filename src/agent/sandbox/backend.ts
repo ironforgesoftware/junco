@@ -315,7 +315,9 @@ export type SandboxOutcome = "ok" | "degrade" | "fail-closed";
  * - available → OK.
  * - unavailable + configured `"auto"` → **degrade**: `auto` means "best
  *   available", so fall back to `none` (env scrub + filesystem tool-jail still
- *   apply; agent bash is not OS-confined) rather than failing the ticket.
+ *   apply; agent bash is not OS-confined) rather than failing the ticket —
+ *   unless `requireBackend` (#344), which turns that degrade into fail-closed
+ *   so an operator can demand OS isolation without pinning a backend per host.
  * - unavailable + an EXPLICIT backend → **fail-closed**: honor the operator's
  *   explicit choice; never silently downgrade what they demanded.
  */
@@ -323,10 +325,11 @@ export function classifyAvailability(
   configured: "auto" | "seatbelt" | "bwrap" | "none",
   selected: SandboxBackend["name"],
   available: boolean,
+  requireBackend = false,
 ): SandboxOutcome {
   if (selected === "none") return "ok";
   if (available) return "ok";
-  return configured === "auto" ? "degrade" : "fail-closed";
+  return configured === "auto" && !requireBackend ? "degrade" : "fail-closed";
 }
 
 export function selectBackend(

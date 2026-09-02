@@ -110,6 +110,7 @@ describe("buildPolicy", () => {
     cfg: {
       enabled: true,
       backend: "auto" as const,
+      requireBackend: false,
       network: "deny" as const,
       extraDenyRead: ["/sbxroot/extra/secret"],
       extraAllowWrite: ["/sbxroot/extra/writable"],
@@ -207,6 +208,7 @@ describe("buildPolicy", () => {
       cfg: {
         enabled: true,
         backend: "none",
+        requireBackend: false,
         network: "deny",
         extraDenyRead: [],
         extraAllowWrite: [],
@@ -238,6 +240,7 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
     cfg: {
       enabled: true,
       backend: "auto" as const,
+      requireBackend: false,
       network: "deny" as const,
       extraDenyRead: [],
       extraAllowWrite: [],
@@ -279,6 +282,7 @@ describe("buildPolicy — default <dataDir>-rooted layout (JS jail)", () => {
       cfg: {
         enabled: true,
         backend: "auto" as const,
+        requireBackend: false,
         network: "deny" as const,
         extraDenyRead: [],
         extraAllowWrite: [],
@@ -351,6 +355,7 @@ describe("readRules — allow-over-deny precedence (#277)", () => {
       cfg: {
         enabled: true,
         backend: "auto" as const,
+        requireBackend: false,
         network: "deny" as const,
         extraDenyRead: [],
         extraAllowWrite: [],
@@ -374,6 +379,7 @@ describe("readRules — allow-over-deny precedence (#277)", () => {
       cfg: {
         enabled: true,
         backend: "auto" as const,
+        requireBackend: false,
         network: "deny" as const,
         extraDenyRead: ["/sbxroot/wt/.env"],
         extraAllowWrite: [],
@@ -396,6 +402,7 @@ describe("readRules — allow-over-deny precedence (#277)", () => {
       cfg: {
         enabled: true,
         backend: "auto" as const,
+        requireBackend: false,
         network: "deny" as const,
         extraDenyRead: [],
         extraAllowWrite: [],
@@ -436,6 +443,7 @@ describe("buildPolicy — an allow above a deny FILE is refused (#311)", () => {
     cfg: {
       enabled: true,
       backend: "auto" as const,
+      requireBackend: false,
       network: "deny" as const,
       extraDenyRead: [],
       extraAllowWrite: [],
@@ -601,6 +609,7 @@ describe("buildPolicy — extra_deny_read is classified by observation (#311/F5)
     cfg: {
       enabled: true,
       backend: "auto" as const,
+      requireBackend: false,
       network: "deny" as const,
       extraDenyRead: [] as string[],
       extraAllowWrite: [] as string[],
@@ -698,6 +707,7 @@ describe("buildPolicy — builtin credential files are classified by observation
     cfg: {
       enabled: true,
       backend: "auto" as const,
+      requireBackend: false,
       network: "deny" as const,
       extraDenyRead: [] as string[],
       extraAllowWrite: [] as string[],
@@ -758,6 +768,7 @@ describe("traversalMetadataPaths — the denied ancestors of every allow", () =>
     cfg: {
       enabled: true,
       backend: "auto" as const,
+      requireBackend: false,
       network: "deny" as const,
       extraDenyRead: [] as string[],
       extraAllowWrite: [] as string[],

@@ -53,7 +53,8 @@ A ticket is a Markdown file with a YAML frontmatter block validated against the 
     When [sandbox].enabled, makePiSessionFactory replaces the built-in tools with
     sandboxed ones (agent/sandbox/): bash runs under an OS sandbox (Seatbelt/bwrap)
     with a scrubbed env + no network by default; read/write/edit/ls/find/grep get a
-    JS path-jail to the worktree. Fails closed if the backend is unavailable. On by
+    JS path-jail to the worktree. Fails closed if an explicit backend is unavailable
+    ("auto" degrades to none instead, unless [sandbox].requireBackend). On by
     default; inert when [sandbox].enabled is false or backend is "none".
 
     Escalation ladder (worker.applyFallbackToAgent, default true): a failed

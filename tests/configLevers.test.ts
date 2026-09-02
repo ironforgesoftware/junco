@@ -138,6 +138,21 @@ describe("botAccount levers", () => {
   });
 });
 
+describe("sandbox levers", () => {
+  it("registers sandbox.requireBackend as a live boolean lever defaulting to false (#344)", () => {
+    const byPath = new Map(LEVERS.map((l) => [l.path, l]));
+    expect(byPath.get("sandbox.requireBackend")).toMatchObject({
+      type: "boolean",
+      default: false,
+      reload: "live",
+      editable: true,
+    });
+    // The description must say what the lever buys: auto fails closed
+    // instead of degrading, so nobody reads it as a synonym for `enabled`.
+    expect(byPath.get("sandbox.requireBackend")?.description).toMatch(/fail(s)? closed/i);
+  });
+});
+
 describe("path helpers", () => {
   it("gets and sets nested dotted paths", () => {
     const obj: Record<string, unknown> = {};
