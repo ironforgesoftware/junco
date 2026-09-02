@@ -60,7 +60,15 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
   it("kinds by frontmatter shape, with precedence audit > investigate > amend > apply > ticket; legacy keys accepted, canonical wins", () => {
     const k = (fm: string, body = "# T") => extractDrafts(fence(fm, body), ctx)[0]!.kind;
     expect(k("id: a\namends_pr: 42")).toBe("amend");
-    expect(k("id: a", "# T\n\n```junco-patch\nFrom 0 Mon Sep 17 00:00:00 2001\n```")).toBe("apply");
+    // The outer junco-ticket fence must use MORE backticks than the nested
+    // junco-patch fence (planPrompt.ts's system prompt teaches this) — a
+    // same-count nesting is a different, honest-failure case covered below.
+    expect(
+      extractDrafts(
+        "````junco-ticket\n---\nid: a\n---\n# T\n\n```junco-patch\nFrom 0 Mon Sep 17 00:00:00 2001\n```\n````",
+        ctx,
+      )[0]!.kind,
+    ).toBe("apply");
     expect(k("id: a\naudit:\n  auto_plan: true")).toBe("audit");
     expect(k("id: a\ninvestigate:\n  issue: 7")).toBe("investigate");
     expect(k("id: a\naudit: {}\ninvestigate:\n  issue: 7\namends_pr: 1")).toBe("audit");
@@ -73,6 +81,17 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
     expect(both.commandArgs).toEqual(["audit", "acme/api#3"]); // canonical wins
     expect(both.files[0]!.frontmatter.assess).toBeUndefined(); // the losing legacy key is dropped
     expect(both.files[0]!.droppedKeys).toEqual(["assess"]);
+  });
+
+  it("a junco-patch fence at the same backtick count as its outer ticket fence is flagged, not silently classified as apply", () => {
+    const [d] = extractDrafts(
+      fence("id: a", "# T\n\n```junco-patch\nFrom 0 Mon Sep 17 00:00:00 2001\n```"),
+      ctx,
+    );
+    expect(d!.kind).toBe("ticket");
+    expect(d!.problems).toEqual([
+      "junco-patch fence is not closed — use more backticks for the outer junco-ticket fence",
+    ]);
   });
 
   it("audit/investigate derive commandArgs at extraction; a missing issue is a problem", () => {

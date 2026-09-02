@@ -60,6 +60,17 @@ export interface ExtractCtx {
 
 const FM_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/;
 
+// A `junco-patch` fence whose OPENING line survived into the body but whose
+// closer didn't: same-backtick-count nesting (outer junco-ticket fence, inner
+// junco-patch fence both ```) makes allFencedBlocks's ticket-level scan
+// consume the inner fence's own closer as the outer's, truncating the body
+// one line short of a complete junco-patch block (real CommonMark ambiguity,
+// not a bug — planPrompt.ts's system prompt already tells the model to use
+// more backticks on the outer fence for exactly this reason). Detected here
+// so the drop is visible on the card instead of silently shipping a ticket
+// whose "patch" is missing its last line.
+const OPEN_PATCH_FENCE_RE = /^`{3,}junco-patch\s*$/m;
+
 const slug = (s: string): string =>
   s
     .toLowerCase()
@@ -126,6 +137,11 @@ function splitFile(raw: string, ctx: ExtractCtx, problems: string[]): SplitResul
   kept.repo = ctx.nwo ?? ctx.repo;
   const id = typeof kept.id === "string" ? kept.id : null;
   const trimmedBody = body.replace(/^\n+/, "").replace(/\s+$/, "");
+  if (OPEN_PATCH_FENCE_RE.test(trimmedBody) && extractPatchBody(trimmedBody) === null) {
+    problems.push(
+      "junco-patch fence is not closed — use more backticks for the outer junco-ticket fence",
+    );
+  }
   const content = `---\n${stringifyYaml(kept).trimEnd()}\n---\n${trimmedBody}\n`;
   const file: ExtractedFile = {
     name: `${id ?? "ticket"}.md`,
@@ -150,19 +166,12 @@ function requestBlock(
   return null;
 }
 
-// `rawText` is the WHOLE message, not the per-ticket slice: a model-authored
-// junco-patch fence sharing its outer ticket fence's backtick count (the
-// system prompt asks for more backticks on the outer, but chat can't enforce
-// that) makes allFencedBlocks's ticket-level scan consume the patch fence's
-// own closer as ITS closer, truncating the per-ticket body one line short of
-// a complete junco-patch block. A fresh, independent scan of the whole text
-// for the junco-patch tag finds its real closer untouched by that collision.
-function kindOf(f: ExtractedFile, rawText: string): DraftKind {
+function kindOf(f: ExtractedFile): DraftKind {
   const fm = f.frontmatter;
   if (requestBlock(fm, "audit", "assess") !== null) return "audit";
   if (requestBlock(fm, "investigate", "analyze") !== null) return "investigate";
   if (fm.amends_pr !== undefined && fm.amends_pr !== null) return "amend";
-  if (extractPatchBody(rawText) !== null) return "apply";
+  if (extractPatchBody(f.body) !== null) return "apply";
   return "ticket";
 }
 
@@ -208,7 +217,7 @@ function extractTicketDraft(text: string, ctx: ExtractCtx): ExtractedDraft | nul
   if (tickets.length === 1) {
     const problems: string[] = [];
     const { file } = splitFile(tickets[0]!, ctx, problems);
-    const kind = kindOf(file, text);
+    const kind = kindOf(file);
     const commandArgs = commandArgsFor(kind, file, ctx, problems);
     return { kind, files: [file], blocked: null, commandArgs, problems };
   }
