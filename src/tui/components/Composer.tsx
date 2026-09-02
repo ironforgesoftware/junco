@@ -77,17 +77,24 @@ export function Composer({
 
   useGuardedInput(
     (input, key) => {
-      if (matches.length > 0) {
+      // R22 applies to the match list too: two keypresses delivered in one
+      // stdin read (or two back-to-back stdin.write calls in a test) run
+      // against the SAME render closure, so the render-time `matches` (closed
+      // over the pre-edit `value` prop) can be one keystroke stale. Recompute
+      // off `valueRef.current` for every list-navigation decision; `matches`
+      // stays for rendering only (it reflects the `value` prop, per R22).
+      const m = slashMatches(valueRef.current);
+      if (m.length > 0) {
         if (key.upArrow) {
           setSlashSel((s) => Math.max(0, s - 1));
           return;
         }
         if (key.downArrow) {
-          setSlashSel((s) => Math.min(matches.length - 1, s + 1));
+          setSlashSel((s) => Math.min(m.length - 1, s + 1));
           return;
         }
         if (key.tab) {
-          const c = matches[Math.min(slashSel, matches.length - 1)]!;
+          const c = m[Math.min(slashSel, m.length - 1)]!;
           edit(`/${c.name}${c.takesArg ? " " : ""}`);
           setSlashSel(0);
           return;

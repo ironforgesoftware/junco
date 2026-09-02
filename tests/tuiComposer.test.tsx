@@ -88,6 +88,21 @@ describe("Composer (spec 2026-09-01 §8.2, §8.4)", () => {
     expect(sent[0]).toBe("/audit");
   });
 
+  it("a slash char and tab chained with no await still open the list and complete against it", async () => {
+    // Regression for fix round 1: two stdin.write calls with no tick between
+    // them run against the SAME render closure (R22's hazard), so the tab
+    // handler must recompute the match list off valueRef.current rather than
+    // reading the render-time `matches` closed over the pre-edit value prop.
+    const sent: string[] = [];
+    const r = render(<Host onSubmit={(v) => sent.push(v)} />);
+    r.stdin.write("/a");
+    r.stdin.write("\t"); // chained: no await between the "/a" write and the tab
+    await until(() => r.lastFrame()!.includes("/audit") && !r.lastFrame()!.includes("/abort"));
+    r.stdin.write("\r");
+    await until(() => sent.length === 1);
+    expect(sent[0]).toBe("/audit");
+  });
+
   it("down arrow moves the highlighted slash entry; tab picks the highlighted one", async () => {
     const sent: string[] = [];
     const r = render(<Host onSubmit={(v) => sent.push(v)} />);
