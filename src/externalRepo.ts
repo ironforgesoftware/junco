@@ -8,12 +8,11 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { gh, git, GitOpError } from "./git.js";
+import { gh, git, GitOpError, GH_TIMEOUT_MS } from "./git.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
 import { log } from "./logging.js";
 import type { Config } from "./types.js";
 
-const GH_TIMEOUT = 60_000;
 const CLONE_TIMEOUT = 300_000; // full clone; big repos take a while
 
 export interface ExternalRepoDeps {
@@ -64,19 +63,19 @@ export async function ensureFork(
 ): Promise<string> {
   const ghFn = deps.ghFn ?? gh;
   await ghFn(cfg, ["repo", "fork", nwo, "--clone=false"], {
-    timeoutMs: GH_TIMEOUT,
+    timeoutMs: GH_TIMEOUT_MS,
     retryNetwork: true,
   });
   const viewer = (
     await ghFn(cfg, ["api", "user", "--jq", ".login"], {
-      timeoutMs: GH_TIMEOUT,
+      timeoutMs: GH_TIMEOUT_MS,
       retryNetwork: true,
     })
   ).stdout.trim();
   const candidate = `${viewer}/${nwo.split("/")[1]}`;
   const stdout = (
     await ghFn(cfg, ["repo", "view", candidate, "--json", "parent"], {
-      timeoutMs: GH_TIMEOUT,
+      timeoutMs: GH_TIMEOUT_MS,
       retryNetwork: true,
     })
   ).stdout;

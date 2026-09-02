@@ -1573,7 +1573,7 @@ describe("planner model override", () => {
 });
 
 describe("assess routing", () => {
-  // A zeroed RunResult, mirroring assessFlow.ts's emptyRunResult — the fake
+  // A zeroed RunResult, mirroring agent/runResult.ts's emptyRunResult — the fake
   // assessFlowFn below needs a well-formed `result` field on its
   // AssessFlowResult since outcomeFromQa dereferences it.
   function fakeRunResult(finalText: string): AssessFlowResult["result"] {

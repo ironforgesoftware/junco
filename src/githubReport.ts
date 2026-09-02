@@ -20,7 +20,7 @@ import {
   COMMENT_LIMIT,
   PLAN_SET_FENCE,
 } from "./githubInbox.js";
-import { gh } from "./git.js";
+import { gh, describeError, GH_TIMEOUT_MS } from "./git.js";
 import { sanitizeFindingText } from "./findings.js";
 import { log } from "./logging.js";
 import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
@@ -30,9 +30,6 @@ import { transcriptPathFor } from "./slug.js";
 // COMMENT_LIMIT is defined in githubInbox.ts (buildPlanComment shares it);
 // re-exported here so existing importers keep working without an import cycle.
 export { COMMENT_LIMIT };
-
-const GH_TIMEOUT = 60_000;
-const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** A generous excerpt of the agent's final message. First-paragraph-only
  * proved too narrow in practice (models often open with process narration
@@ -134,7 +131,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
         "--remove-label",
         remove,
       ],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
   };
   // Outbox-aware guard: on a network-shaped failure, fn's side effect is
@@ -152,7 +149,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
     } catch (e) {
       log.warn(`github reporter: ${label} failed (issue state on GitHub may be stale)`, {
         id,
-        error: errMsg(e),
+        error: describeError(e),
       });
     }
   };
@@ -165,7 +162,7 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
     writeFileSync(file, withCommentMarker(g.nwo, g.issue, body), "utf8");
     try {
       await ghFn(cfg, ["issue", "comment", String(g.issue), "--repo", g.nwo, "--body-file", file], {
-        timeoutMs: GH_TIMEOUT,
+        timeoutMs: GH_TIMEOUT_MS,
         retryNetwork: true,
       });
     } finally {

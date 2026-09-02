@@ -12,7 +12,7 @@ import { dataTreePaths } from "../dataTree.js";
 import { cachePathFor, prCachePathFor } from "../githubCachePaths.js";
 import { transcriptPathFor } from "../slug.js";
 import { summarizeTranscript, type TranscriptSummary } from "../transcriptSummary.js";
-import { gh, git } from "../git.js";
+import { gh, git, describeError } from "../git.js";
 import { lifecycleLabels, nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
 import { tryOrEnqueue, isOffline, type OutboxOp } from "../githubOutbox.js";
 import type { DashIssue, DashAction } from "./state.js";
@@ -225,8 +225,10 @@ export interface GhClientDeps {
   analyzeCoreFn?: typeof analyzeIssueCore;
 }
 
+/** Deliberately shorter than git.ts's GH_TIMEOUT_MS: this client backs an
+ * INTERACTIVE pane, where a stuck call must give the dashboard a failed row to
+ * repaint long before the daemon's one-minute budget would return. */
 const GH_TIMEOUT = 30_000;
-const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): DashboardClient {
   const ghFn = deps.ghFn ?? gh;
@@ -245,7 +247,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
     try {
       return { ok: true, value: await fn() };
     } catch (e) {
-      return { ok: false, error: errMsg(e) };
+      return { ok: false, error: describeError(e) };
     }
   };
 

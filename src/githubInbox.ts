@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config, GithubRepoMapping } from "./types.js";
-import { gh, git } from "./git.js";
+import { gh, git, describeError, GH_TIMEOUT_MS } from "./git.js";
 import { queuePaths } from "./config.js";
 import { submitTicket } from "./dispatch.js";
 import { log } from "./logging.js";
@@ -455,9 +455,6 @@ export interface BridgeDeps {
   onFlush?: (r: FlushResult) => void;
 }
 
-const GH_TIMEOUT = 60_000;
-const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
 const LABEL_SPECS: ReadonlyArray<[keyof LifecycleLabels, string, string]> = [
   ["queued", "FBCA04", "junco: queued for the worker"],
   ["working", "1D76DB", "junco: worker is on it"],
@@ -493,7 +490,7 @@ async function originOkFor(
   } catch (e) {
     log.error("github bridge: origin check failed; repo disabled this run", {
       nwo: repo.nwo,
-      error: errMsg(e),
+      error: describeError(e),
     });
   }
   state.originOk.set(key, ok);
@@ -524,7 +521,7 @@ async function ensureLabels(
         description,
         "--force",
       ],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
   }
   state.labelsEnsured.add(nwo);
@@ -555,7 +552,7 @@ export async function verifyLabelApplier(
         "--jq",
         '.[] | select(.event == "labeled") | {actor: .actor.login, label: .label.name, created_at: .created_at}',
       ],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
     const events = ev.stdout
       .trim()
@@ -567,7 +564,7 @@ export async function verifyLabelApplier(
     const perm = await ghFn(
       cfg,
       ["api", `repos/${nwo}/collaborators/${last.actor}/permission`, "--jq", ".permission"],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
     const p = perm.stdout.trim();
     const atMs = last.created_at ? Date.parse(last.created_at) : null;
@@ -578,7 +575,7 @@ export async function verifyLabelApplier(
       nwo,
       issue: issueNumber,
       label,
-      error: errMsg(e),
+      error: describeError(e),
     });
     return { verdict: "unverified", atMs: null };
   }
@@ -612,7 +609,7 @@ async function fetchParent(
         "--jq",
         ".data.repository.issue.parent",
       ],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
     const out = r.stdout.trim();
     if (!out || out === "null") return null;
@@ -667,7 +664,7 @@ async function fetchIssueLastEdited(
         "--jq",
         ".data.repository.issue.lastEditedAt",
       ],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
     const out = r.stdout.trim();
     if (!out || out === "null") return { verified: true, lastEditedMs: null };
@@ -677,7 +674,7 @@ async function fetchIssueLastEdited(
     log.warn("github bridge: issue lastEditedAt lookup failed", {
       nwo,
       issue: issueNumber,
-      error: errMsg(e),
+      error: describeError(e),
     });
     return { verified: false };
   }
@@ -686,7 +683,7 @@ async function fetchIssueLastEdited(
 async function viewerLogin(cfg: Config, state: BridgeState, ghFn: typeof gh): Promise<string> {
   if (state.login === null) {
     const r = await ghFn(cfg, ["api", "user", "--jq", ".login"], {
-      timeoutMs: GH_TIMEOUT,
+      timeoutMs: GH_TIMEOUT_MS,
       retryNetwork: true,
     });
     state.login = r.stdout.trim();
@@ -719,7 +716,7 @@ export async function findOwnPlanComment(
       "--jq",
       ".[] | {author: .user.login, body: .body, created_at: .created_at, updated_at: .updated_at}",
     ],
-    { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+    { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
   );
   let found: { body: string; createdAtMs: number; updatedAtMs: number } | null = null;
   for (const line of r.stdout.trim().split("\n").filter(Boolean)) {
@@ -842,7 +839,7 @@ async function postIssueComment(
   writeFileSync(file, withCommentMarker(nwo, issueNumber, body), "utf8");
   try {
     await ghFn(cfg, ["issue", "comment", String(issueNumber), "--repo", nwo, "--body-file", file], {
-      timeoutMs: GH_TIMEOUT,
+      timeoutMs: GH_TIMEOUT_MS,
       retryNetwork: true,
     });
   } finally {
@@ -868,7 +865,7 @@ async function guardOrQueue(
   } catch (e) {
     log.warn(`github bridge: ${label} failed (issue state on GitHub may be stale)`, {
       id,
-      error: errMsg(e),
+      error: describeError(e),
     });
   }
 }
@@ -925,7 +922,7 @@ export async function processIssue(
       // cleanup — never re-submit — and move on.
       if ([ll.queued, ll.working, ll.done, ll.failed].some((n) => names.has(n))) {
         await ghFn(cfg, labelSwapArgs(cfg, repo.nwo, issue.number, { remove: ll.planReady }), {
-          timeoutMs: GH_TIMEOUT,
+          timeoutMs: GH_TIMEOUT_MS,
           retryNetwork: true,
         });
         log.info("github bridge: plan-ready lingering after dispatch; cleaned up labels", {
@@ -1030,7 +1027,7 @@ export async function processIssue(
                   add: ll.failed,
                   remove: ll.planReady,
                 }),
-                { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+                { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
               );
             },
           );
@@ -1076,7 +1073,7 @@ export async function processIssue(
         await ghFn(
           cfg,
           labelSwapArgs(cfg, repo.nwo, issue.number, { add: ll.queued, remove: ll.planReady }),
-          { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+          { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
         );
         log.info("github bridge: approved plan set dispatched", {
           nwo: repo.nwo,
@@ -1104,7 +1101,7 @@ export async function processIssue(
         try {
           submitFn(cfg, t.content, { idHint: t.id });
         } catch (e) {
-          if (!errMsg(e).includes("already queued")) throw e;
+          if (!describeError(e).includes("already queued")) throw e;
           log.info("github bridge: execution ticket already queued; re-marking", {
             id: t.id,
           });
@@ -1113,7 +1110,7 @@ export async function processIssue(
       await ghFn(
         cfg,
         labelSwapArgs(cfg, repo.nwo, issue.number, { add: ll.queued, remove: ll.planReady }),
-        { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+        { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
       );
       log.info("github bridge: approved plan dispatched for execution", {
         nwo: repo.nwo,
@@ -1125,7 +1122,7 @@ export async function processIssue(
       log.warn("github bridge: approval scan failed for issue; retrying next sweep", {
         nwo: repo.nwo,
         issue: issue.number,
-        error: errMsg(e),
+        error: describeError(e),
       });
     }
     return false;
@@ -1137,7 +1134,7 @@ export async function processIssue(
     await ghFn(
       cfg,
       ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.denied],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
     log.warn("github bridge: trigger label applied without write permission", {
       nwo: repo.nwo,
@@ -1195,7 +1192,7 @@ export async function processIssue(
           await ghFn(
             cfg,
             ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.failed],
-            { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+            { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
           );
         },
       );
@@ -1211,7 +1208,7 @@ export async function processIssue(
     await ghFn(
       cfg,
       ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", ll.queued],
-      { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+      { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
     log.info("github bridge: issue-body plan set dispatched", {
       nwo: repo.nwo,
@@ -1266,14 +1263,14 @@ export async function processIssue(
     try {
       submitFn(cfg, t.content, { idHint: t.id });
     } catch (e) {
-      if (!errMsg(e).includes("already queued")) throw e;
+      if (!describeError(e).includes("already queued")) throw e;
       log.info("github bridge: ticket already queued; re-marking", { id: t.id });
     }
   }
   await ghFn(
     cfg,
     ["issue", "edit", String(issue.number), "--repo", repo.nwo, "--add-label", stateLabel],
-    { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+    { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
   );
   log.info("github bridge: dispatched issue", {
     nwo: repo.nwo,
@@ -1313,7 +1310,7 @@ export async function pollGithubInbox(
     const fr = await flushFn(cfg);
     deps.onFlush?.(fr);
   } catch (e) {
-    log.warn("github bridge: outbox flush failed; continuing sweep", { error: errMsg(e) });
+    log.warn("github bridge: outbox flush failed; continuing sweep", { error: describeError(e) });
   }
   let bridged = 0;
 
@@ -1337,7 +1334,7 @@ export async function pollGithubInbox(
           "--json",
           "number,title,body,labels",
         ],
-        { timeoutMs: GH_TIMEOUT, retryNetwork: true },
+        { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
       );
       const issues = JSON.parse(list.stdout) as GhIssue[];
 
@@ -1348,14 +1345,14 @@ export async function pollGithubInbox(
           log.warn("github bridge: issue skipped", {
             nwo: repo.nwo,
             issue: issue.number,
-            error: errMsg(e),
+            error: describeError(e),
           });
         }
       }
     } catch (e) {
       log.warn("github bridge: repo sweep failed; queue unaffected", {
         nwo: repo.nwo,
-        error: errMsg(e),
+        error: describeError(e),
       });
     }
   }
@@ -1369,7 +1366,7 @@ export async function pollGithubInbox(
     try {
       await maintainPlanSets(cfg, { ghFn });
     } catch (e) {
-      log.warn("plan-set maintenance failed; queue unaffected", { error: errMsg(e) });
+      log.warn("plan-set maintenance failed; queue unaffected", { error: describeError(e) });
     }
   }
 

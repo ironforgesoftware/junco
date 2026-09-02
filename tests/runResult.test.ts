@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { RunAccumulator } from "../src/agent/runResult.js";
+import { RunAccumulator, emptyRunResult } from "../src/agent/runResult.js";
 
 // Event shapes below mirror the REAL Pi SDK: tool args arrive on
 // `tool_execution_start` (end carries `result`), and usage uses `totalTokens`.
@@ -287,5 +287,27 @@ describe("progress tracking", () => {
     } as any);
     acc.observe({ type: "tool_execution_start", toolName: "edit", args: {} } as any);
     expect(acc.progress()).toEqual({ turns: 1, lastTool: "edit", outputTokens: 2 });
+  });
+});
+
+describe("emptyRunResult", () => {
+  it("zeroes every field and carries the reason in errorMessage", () => {
+    expect(emptyRunResult("clone failed")).toEqual({
+      finalText: "",
+      toolCalls: [],
+      usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+      stopReason: null,
+      errorMessage: "clone failed",
+      timedOut: false,
+      durationMs: 0,
+      abortedByGuard: false,
+    });
+  });
+
+  it("returns a fresh usage/toolCalls object per call (callers mutate results)", () => {
+    const a = emptyRunResult("x");
+    const b = emptyRunResult("y");
+    expect(a.usage).not.toBe(b.usage);
+    expect(a.toolCalls).not.toBe(b.toolCalls);
   });
 });
