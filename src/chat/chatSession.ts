@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Config } from "../types.js";
+import type { Config, Usage } from "../types.js";
 import {
   makeChatSessionFactory,
   makeSessionManager,
@@ -90,6 +90,10 @@ export function chatCfgFor(cfg: Config): Config {
     model: { ...cfg.model, id: cfg.chat.modelId ?? cfg.github.plannerModelId ?? cfg.model.id },
   };
 }
+
+/** A steer opens no turn of its own: the running turn's end record carries the
+ * usage the steered text contributed to. */
+const ZERO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
 
 const realFs: ChatFs = {
   existsSync,
@@ -399,10 +403,26 @@ export class ChatSession {
   ): Promise<ChatTurnResult> {
     const sdk = await this.ensureSession();
     const chatCfg = chatCfgFor(this.cfg);
-    if (sdk.isStreaming) {
-      // steer: the running turn's own records frame this
+    // A turn is in flight when THIS object owns one (`inFlight`) OR the SDK is
+    // mid-run. Testing `sdk.isStreaming` alone loses the same-tick race: two
+    // operator POSTs can both observe an idle SDK before the first run starts,
+    // and the SDK rejects a second concurrent prompt() (no streamingBehavior).
+    // Steer directly rather than through runChatTurn — there is no turn to
+    // frame here, and the running turn's own records already cover the text.
+    if (this.inFlight !== null || sdk.isStreaming) {
       this.writeRecord({ type: "junco_chat_prompt", text, mode: "steer", source: opts.source });
-      return runChatTurn(sdk, { text, timeoutMs: opts.timeoutMs, emit: () => {} });
+      const start = this.now();
+      await sdk.steer(text);
+      return {
+        mode: "steer",
+        status: "ok",
+        abortReason: null,
+        errorMessage: null,
+        usage: ZERO_USAGE,
+        durationMs: this.now() - start,
+        finalText: "",
+        allText: "",
+      };
     }
     this.writeRecord({ type: "junco_chat_prompt", text, mode: "prompt", source: opts.source });
     this.writeRecord({
@@ -473,9 +493,16 @@ export class ChatSession {
       this.fs.mkdirSync(archive);
       this.fs.renameSync(this.dir, join(archive, `${this.slug}-${this.now()}`));
     }
+    // The archived dir is gone, so the next ensureMeta starts a clean
+    // transcript and every bit of state derived from the old one resets with
+    // it: the degraded latch (the dead sink was archived away too) and the
+    // daemon_stopped abort latch included.
     this.metaReady = false;
     this.size = 0;
     this.turns = 0;
+    this.degraded = false;
+    this.lastActivityAt = null;
+    this.drainReason = null;
     log.info("chat session reset", { slug: this.slug, reason });
   }
 

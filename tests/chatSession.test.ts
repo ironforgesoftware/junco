@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatSession, chatCfgFor } from "../src/chat/chatSession.js";
-import type { SessionManagerMode } from "../src/agent/session.js";
+import type { ChatSessionLike, SessionManagerMode } from "../src/agent/session.js";
 import { makeConfig, READ_ONLY_TOOLS } from "./helpers/config.js";
 import { fakeChatSession, chatScriptText, type FakeChatSession } from "./helpers/fakeSession.js";
 import { parseTranscriptLine } from "../src/agent/transcriptSchema.js";
@@ -54,6 +54,55 @@ function makeSession(dir: string, scripts = [chatScriptText("hi", 0.1)]) {
     },
   );
   return { session, sdk: () => last };
+}
+
+/**
+ * A ChatSessionLike whose `isStreaming` flips only AFTER prompt()'s first
+ * await — the real SDK's shape (the run loop sets it), and the window in which
+ * two same-tick prompts both observe an idle session. prompt() then blocks
+ * until abort().
+ */
+function laggingChatSession(): ChatSessionLike & { prompts: string[]; steers: string[] } {
+  const prompts: string[] = [];
+  const steers: string[] = [];
+  let streaming = false;
+  let running = false;
+  let release: (() => void) | null = null;
+  return {
+    prompts,
+    steers,
+    messages: [],
+    get isStreaming() {
+      return streaming;
+    },
+    get isIdle() {
+      return !streaming;
+    },
+    subscribe: () => () => {},
+    async prompt(text: string) {
+      // The SDK rejects a second concurrent prompt() (no streamingBehavior) —
+      // which is the failure this guard exists to prevent.
+      if (running) throw new Error("prompt() called while a run is active");
+      running = true;
+      prompts.push(text);
+      try {
+        await Promise.resolve(); // the SDK's own first await …
+        streaming = true; // … only now does the run loop report streaming
+        await new Promise<void>((r) => (release = r));
+      } finally {
+        streaming = false;
+        running = false;
+      }
+    },
+    async steer(text: string) {
+      steers.push(text);
+    },
+    async abort() {
+      release?.();
+      release = null;
+    },
+    dispose() {},
+  };
 }
 
 const records = (path: string) =>
@@ -256,6 +305,10 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
     const archive = join(root, "_archive");
     expect(existsSync(archive)).toBe(true);
     expect(ends).toEqual(["session_reset"]);
+    // every bit of state derived from the archived transcript resets with it
+    expect(session.turns).toBe(0);
+    expect(session.lastActivityAt).toBeNull();
+    expect(session.degraded).toBe(false);
   });
 
   it("a dead sink degrades: live delivery continues, one degraded record is published, offsets are null", async () => {
@@ -274,5 +327,120 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
     expect(session.degraded).toBe(true);
     expect(bus.filter((b) => b.type === "junco_chat_transcript_degraded")).toHaveLength(1);
     expect(bus.every((b) => b.offset === null)).toBe(true);
+    // reset archives the dead sink away, so the latch must not survive it
+    await session.reset("operator_new");
+    expect(session.degraded).toBe(false);
+  });
+
+  it("offsets are BYTE lengths, not string lengths", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const multibyte = "héllo — ünïcode ✓";
+    const { session } = makeSession(root, [chatScriptText(multibyte)]);
+    const busOffsets: Array<number | null> = [];
+    session.subscribe({ onLine: (_l, o) => busOffsets.push(o), onEnd: () => {} });
+    await session.prompt(multibyte, { source: "operator", timeoutMs: 5_000 });
+    const bytes = readFileSync(session.transcriptPath).length;
+    const chars = readFileSync(session.transcriptPath, "utf8").length;
+    expect(bytes).toBeGreaterThan(chars); // the multibyte text really is in there
+    const lines = session.readLines(0);
+    let acc = 0;
+    for (const l of lines) {
+      acc += Buffer.byteLength(l.line, "utf8") + 1; // + the newline the offset sits after
+      expect(l.offset).toBe(acc);
+    }
+    expect(lines[lines.length - 1]!.offset).toBe(bytes);
+    // the live (persist-side) counter must agree with the file, byte for byte
+    expect(busOffsets.filter((o) => o !== null)).toEqual(lines.map((l) => l.offset));
+  });
+
+  it("a second prompt in the same tick steers the running turn instead of racing it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    // NOT tests/helpers/fakeSession's fakeChatSession: that one flips
+    // isStreaming SYNCHRONOUSLY inside prompt(), which closes the very window
+    // under test (a `sdk.isStreaming`-only guard passes against it). The real
+    // SDK reports streaming only once its run loop starts — after prompt()'s
+    // first await — so two same-tick POSTs both observe an idle session, and
+    // only `inFlight` tells the second one that a turn is already running.
+    const sdk = laggingChatSession();
+    const session = new ChatSession(
+      {
+        cfg,
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        dir: join(root, "acme__api"),
+      },
+      { makeSessionManager: fakeSm, sessionFactoryFor: () => async () => sdk },
+    );
+    const one = session.prompt("one", { source: "operator", timeoutMs: 60_000, abortGraceMs: 50 });
+    const two = session.prompt("two", { source: "operator", timeoutMs: 60_000 });
+    expect(await two).toMatchObject({ mode: "steer", status: "ok", finalText: "" });
+    expect(sdk.prompts).toEqual(["one"]);
+    expect(sdk.steers).toEqual(["two"]);
+    expect(await session.abort()).toBe(true);
+    expect(await one).toMatchObject({ mode: "prompt", status: "aborted" });
+    const modes = readFileSync(session.transcriptPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.type === "junco_chat_prompt")
+      .map((r) => r.mode);
+    expect(modes).toEqual(["prompt", "steer"]);
+  });
+
+  it("a subscriber whose onLine throws is dropped; the others keep receiving", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root);
+    let bad = 0;
+    session.subscribe({
+      onLine: () => {
+        bad++;
+        throw new Error("boom");
+      },
+      onEnd: () => {
+        throw new Error("boom-end");
+      },
+    });
+    const good: string[] = [];
+    session.subscribe({ onLine: (l) => good.push(l), onEnd: () => {} });
+    const r = await session.prompt("hello", { source: "operator", timeoutMs: 5_000 });
+    expect(r.status).toBe("ok");
+    expect(bad).toBe(1); // dropped after its first throw, never called again
+    expect(good.length).toBeGreaterThan(3);
+    await expect(session.drain()).resolves.toBeUndefined(); // an onEnd throw is swallowed too
+  });
+
+  it("drain() then reset() ends each subscriber exactly once and clears the drain latch", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root, [{ events: [], delayMs: 10_000 }]);
+    const first: string[] = [];
+    session.subscribe({ onLine: () => {}, onEnd: (r) => first.push(r) });
+    const slow = session.prompt("one", { source: "operator", timeoutMs: 60_000, abortGraceMs: 50 });
+    await new Promise((r) => setTimeout(r, 5));
+    await session.drain();
+    await slow;
+    await session.drain(); // idempotent: no second end for the first subscriber
+    const second: string[] = [];
+    session.subscribe({ onLine: () => {}, onEnd: (r) => second.push(r) });
+    await session.reset("operator_new");
+    expect(first).toEqual(["daemon_stopped"]);
+    expect(second).toEqual(["session_reset"]);
+    // the daemon_stopped latch cleared with the reset: the next abort is the operator's
+    const again = session.prompt("two", {
+      source: "operator",
+      timeoutMs: 60_000,
+      abortGraceMs: 50,
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await session.abort()).toBe(true);
+    await again;
+    const reasons = readFileSync(session.transcriptPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l))
+      .filter((r) => r.type === "junco_chat_turn_aborted")
+      .map((r) => r.reason);
+    expect(reasons).toEqual(["operator"]);
   });
 });
