@@ -492,8 +492,10 @@ moves from "none" to "an allowlist": `fenceExtract` parses the fence's frontmatt
 only `id`, `pr_title`, `branch_name`, `base_branch`, `priority`, `labels`, `reviewers`, `draft`,
 `depends_on`, `amends_pr`, `timeout_minutes`, `github_request`, `audit`, `investigate`, and the
 legacy `assess`, `analyze`. Junco
-sets `repo:` itself from the session (`nwo` for a watched repo, `cwd` for a local one) and
-**drops** everything else — `tools`, `network`, `workdir`, `push_remote`, `not_before`,
+sets `repo:` itself — always the session's checkout PATH (`cwd`), for watched and local repos
+alike: `decideRoute`/`junco submit` match a path to the watched repo by its origin, exactly as
+the dispatch skill instructs ("leave `repo:` as the working checkout"); the nwo is only the
+audit/investigate command target — and **drops** everything else — `tools`, `network`, `workdir`, `push_remote`, `not_before`,
 `retry_count`, `deps_satisfied`, `plan`, and any unknown key — recording the dropped names as
 `DraftFile.droppedKeys` so the card shows them. An operator who wants one of those adds it in
 `e` edit, which is operator-authored input. The prompt tells the model the allowlist.
