@@ -1,6 +1,6 @@
 /**
- * PR-flow orchestration — faithful port of worker.py `_run_pr_flow`
- * (lines 3032-3311), `_build_pr_body` (2770-2827), and `PrOutcome` (2320-2338).
+ * PR-flow orchestration — faithful port of worker.py `_run_pr_flow`,
+ * `_build_pr_body`, and `PrOutcome`.
  *
  * Phase sequence: validate → plan-lint → worktree → agent → (hard-exit check)
  * → commits/since-ref → no-commits gate → post-session review (verify + critic
@@ -62,7 +62,7 @@ import { queuePaths } from "./config.js";
 import { log } from "./logging.js";
 
 // ---------------------------------------------------------------------------
-// PrOutcome — PR-flow side metadata (port of worker.py PrOutcome, 2320-2338).
+// PrOutcome — PR-flow side metadata (port of worker.py `PrOutcome`).
 // ---------------------------------------------------------------------------
 
 export interface PrOutcome {
@@ -267,7 +267,7 @@ function fmtDuration(seconds: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// buildPrBody — port of worker.py `_build_pr_body` (2770-2827).
+// buildPrBody — port of worker.py `_build_pr_body`.
 // ---------------------------------------------------------------------------
 
 export function buildPrBody(
@@ -397,7 +397,7 @@ export function buildPrBody(
 }
 
 // ---------------------------------------------------------------------------
-// runPrFlow — port of worker.py `_run_pr_flow` (3032-3311).
+// runPrFlow — port of worker.py `_run_pr_flow`.
 // ---------------------------------------------------------------------------
 
 export interface PrFlowDeps {

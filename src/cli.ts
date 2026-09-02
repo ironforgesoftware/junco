@@ -1,25 +1,18 @@
 #!/usr/bin/env node
 /**
- * Junco CLI — M4 restructure.
+ * Junco CLI — argv parsing and the subcommand dispatch table.
  *
- * Subcommands:
- *   junco start [--once]                     — daemon (acquire lock, run mainLoop)
- *   junco run-once                           — dev/cron one-shot (no lock)
- *   junco                                    — bare → ensure the supervised daemon
- *                                              is up (interactive TTY), then open
- *                                              the dashboard; first run (no config)
- *                                              opens the setup walkthrough
- *   junco dashboard                          — interactive dashboard; first run
- *                                              opens the guided setup walkthrough
- *   junco config init                        — headless: scaffold a default
- *                                              config.json + queue dirs, no prompts
- *   junco --help | -h                        — usage
+ * The subcommand list is NOT duplicated here: `USAGE` below is the single
+ * authored inventory (and what `junco --help` prints), and ARCHITECTURE.md's
+ * module map says which module each one drives. A bare `junco` ensures the
+ * supervised daemon is up (interactive TTY) and opens the dashboard; a first
+ * run with no config opens the setup walkthrough instead.
  *
  * `run(argv, deps)` is a pure-ish function that returns an exit code without
  * calling process.exit — testable without real daemon/lock/signals/fs.
  * The thin top-level calls run(process.argv.slice(2)) and process.exit(code).
  *
- * Port of worker.py main() + parse_argv() (lines 3411-3440).
+ * Port of worker.py main() + parse_argv().
  */
 
 import { parseArgs } from "node:util";
@@ -593,10 +586,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     //
     // Python's main() locks even for --once because its startup recover_orphans
     // sweep would otherwise steal the live daemon's in-flight task into failed/
-    // (worker.py:569-572). That risk is STRUCTURALLY ABSENT here: run-once calls
-    // runOnce() directly and never runs recoverOrphans (only mainLoop does). The
-    // claim is an atomic rename, so a manual run-once and a live daemon can never
-    // win the same ticket. Keeping it lock-free makes it a clean cron/dev poke.
+    // (worker.py's `recover_orphans`). That risk is STRUCTURALLY ABSENT here:
+    // run-once calls runOnce() directly and never runs recoverOrphans (only
+    // mainLoop does). The claim is an atomic rename, so a manual run-once and a
+    // live daemon can never win the same ticket. Keeping it lock-free makes it a
+    // clean cron/dev poke.
     //
     // ⚠️ If you ever add an orphan sweep (or any processing/ mutation) to this
     // path, you MUST acquire the lock first — otherwise you reintroduce exactly

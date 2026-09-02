@@ -1,12 +1,13 @@
 /**
  * `junco audit` orchestrator — an audit ticket runs through here. It mirrors
- * the Q&A path (runOnce.ts:120-260) for containment, read-only tools, the
- * supervisor/guard wiring, the transcript, the transient requeue, and the
- * finalize, then layers on the assess-specific work: an `npm audit` dependency
- * scan, parsing the agent's findings, a hallucination filter, severity +
- * fingerprint dedup, GitHub-side dedup, and PARKING the surviving findings in
- * the durable review store (assessReview.ts) for a separate, human-confirmed
- * filing step (`junco audit file <id>` → assessFiling.ts).
+ * the Q&A path (the Q&A branch of `executeClaimed` in runOnce.ts) for
+ * containment, read-only tools, the supervisor/guard wiring, the transcript,
+ * the transient requeue, and the finalize, then layers on the assess-specific
+ * work: an `npm audit` dependency scan, parsing the agent's findings, a
+ * hallucination filter, severity + fingerprint dedup, GitHub-side dedup, and
+ * PARKING the surviving findings in the durable review store (assessReview.ts)
+ * for a separate, human-confirmed filing step (`junco audit file <id>` →
+ * assessFiling.ts).
  *
  * Design posture (ported from prFlow.ts): expected failures NEVER throw out of
  * runAssessFlow — a fatal phase error finalizes the ticket to failed/ with the
@@ -150,8 +151,9 @@ export async function runAssessFlow(
     // audit only the code the issue implicates, so letting one refresh the
     // repo's freshness would overstate coverage — and for runs that died
     // before nwo resolution (recordNwo === null: nothing to key on).
-    // Only "completed" routes to done/ (finalize.ts:19-23), so a timeout or a
-    // guard-kill correctly records as a failure and leaves the age alone.
+    // Only "completed" routes to done/ (finalize.ts's `statusFor`), so a
+    // timeout or a guard-kill correctly records as a failure and leaves the
+    // age alone.
     if (recordNwo !== null && ticket.assess?.issue === undefined) {
       const at = nowFn().toISOString();
       recordRun(
@@ -173,7 +175,7 @@ export async function runAssessFlow(
   };
 
   // --- Phase 1: Target resolution + containment. Mirror resolveQaCwd's
-  // containment semantics (runOnce.ts:128-153) EXACTLY — including the
+  // containment semantics (runOnce.ts) EXACTLY — including the
   // "empty allowedRepoRoots ⇒ anywhere" rule — but a violation is a phase
   // error here rather than a fall-back to the default cwd. ---
   const repoRaw = ticket.frontmatter.repo;
@@ -252,7 +254,8 @@ export async function runAssessFlow(
     warnings.push(`npm audit did not run: ${describeError(e)}`);
   }
 
-  // --- Phase 4: Agent audit. Mirror the Q&A agent block (runOnce.ts:201-257):
+  // --- Phase 4: Agent audit. Mirror the Q&A agent block in runOnce.ts's
+  // `executeClaimed`:
   // read-only tool default, cwd = repoPath, supervisor gated the same way,
   // same transcript convention, timeout from the ticket, abortSignal threaded.
   // `readOnly` (#346): repoPath is the operator's live checkout, so the sandbox
@@ -285,10 +288,11 @@ export async function runAssessFlow(
     },
   );
 
-  // Transient failure → requeue with backoff (mirror runOnce.ts:243-254). Safe
-  // because nothing has been filed yet: a rerun converges through dedup. On a
-  // successful requeue return early with zero counts; an exhausted budget falls
-  // through to the normal flow (which finalizes to failed/ exactly as Q&A does).
+  // Transient failure → requeue with backoff (mirror `executeClaimed`'s
+  // transient-failure requeue in runOnce.ts). Safe because nothing has been
+  // filed yet: a rerun converges through dedup. On a successful requeue return
+  // early with zero counts; an exhausted budget falls through to the normal
+  // flow (which finalizes to failed/ exactly as Q&A does).
   if (isTransientFailure(agentResult, 0)) {
     const rq = requeueTicket(
       cfg,

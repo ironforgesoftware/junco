@@ -1,8 +1,6 @@
 /**
- * Repo validation + amend-target resolution — faithful port of worker.py:
- *   - AmendTarget             (lines 1767-1774)
- *   - resolveAmendTarget      (lines 1776-1812)
- *   - validateRepoContext     (lines 1815-1874)
+ * Repo validation + amend-target resolution — faithful port of worker.py's
+ * `AmendTarget`, `resolve_amend_target`, and `validate_repo_context`.
  */
 
 import { existsSync } from "node:fs";
@@ -31,7 +29,7 @@ export interface AmendTarget {
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `resolve_amend_target` (lines 1776-1812).
+ * Port of worker.py `resolve_amend_target`.
  *
  * Queries gh for the PR's metadata; refuses closed/merged PRs, and refuses
  * cross-repo PRs unless the head is the operator's own fork (ctx.forkNwo).
@@ -223,7 +221,7 @@ function exactRefSha(lsRemoteStdout: string, branchName: string): string | null 
 }
 
 /**
- * Port of worker.py `validate_repo_context` (lines 1815-1874).
+ * Port of worker.py `validate_repo_context`.
  *
  * Verifies repo, remote, and base branch. Returns the repo's nameWithOwner.
  * Raises GitOpError on any precondition failure.

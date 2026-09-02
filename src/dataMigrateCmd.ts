@@ -995,8 +995,8 @@ export async function runDataMigrate(
       print("\nstate tree: nothing pending\n");
     } else {
       print("\nstate tree:\n");
-      // Item 4 (#281) investigation: unlike `flatToV2Pairs` (dataMigrate.ts:127
-      // filters `p.from !== p.to`), `stateTreeMigrations` carries no identity
+      // Item 4 (#281) investigation: unlike `flatToV2Pairs` (dataMigrate.ts,
+      // which filters `p.from !== p.to`), `stateTreeMigrations` carries no identity
       // filter of its own — but it does not need one. Every one of its six
       // pairs hardcodes a DIFFERENT literal old-name and v2-shaped subpath
       // (e.g. "github-outbox" -> outbox's `L.outbox` ["outbox"|"data/outbox"],

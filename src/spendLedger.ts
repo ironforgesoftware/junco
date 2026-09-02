@@ -3,9 +3,9 @@
  * injected clock) for the budget gate's `until`. Backed by a single JSON file
  * (the FULL path is the caller's — a caller passes `dataTreePaths(cfg).spendFile`;
  * dataTree.ts is the only place that joins "spend.json" onto the data root);
- * same atomic-write discipline as the watchlist (`src/watchlist.ts:22-77`):
- * mkdir -p, sibling `.tmp`, rename. Read discipline mirrors `readWatchlist`
- * (`src/watchlist.ts:28-77`): missing/corrupt/stale file never throws — it
+ * same atomic-write discipline as the watchlist (`writeWatchlist` in
+ * `src/watchlist.ts`): mkdir -p, sibling `.tmp`, rename. Read discipline
+ * mirrors `readWatchlist` there: missing/corrupt/stale file never throws — it
  * degrades to a fresh `{today, 0}` instead.
  *
  * Input discipline: `recordUsd` accepts only finite, positive amounts.
@@ -57,8 +57,8 @@ export function makeSpendLedger(file: string, deps: SpendLedgerDeps = {}): Spend
 
   /** Never throws: missing → {today, 0}; corrupt/invalid shape → {today, 0};
    * stale day (rollover) → {today, 0} (watchlist read discipline,
-   * src/watchlist.ts:28-77 — same shape of try/catch, just a single record
-   * instead of an array). */
+   * `readWatchlist` in src/watchlist.ts — same shape of try/catch, just a
+   * single record instead of an array). */
   function read(): LedgerFile {
     const today = localDateString(now());
     let raw: string;
@@ -87,7 +87,8 @@ export function makeSpendLedger(file: string, deps: SpendLedgerDeps = {}): Spend
     return { date: p.date, usd: p.usd };
   }
 
-  /** Atomic write: mkdir -p, sibling tmp, rename (watchlist.ts:72-77). */
+  /** Atomic write: mkdir -p, sibling tmp, rename (watchlist.ts's
+   * `writeWatchlist`). */
   function write(ledger: LedgerFile): void {
     mkdirFn(dirname(file), { recursive: true });
     const tmp = file + ".tmp";

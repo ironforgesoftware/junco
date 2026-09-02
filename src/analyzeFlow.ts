@@ -216,9 +216,10 @@ export async function runAnalyzeFlow(
   );
 
   // --- Phase 4: Transient failure → requeue with backoff (mirror
-  // assessFlow.ts:271-290). Safe because nothing is parked yet: a rerun
-  // overwrites the draft and converges. On a successful requeue return early;
-  // an exhausted budget falls through to the normal (failed/) finalize. ---
+  // `runAssessFlow`'s transient-requeue phase in assessFlow.ts). Safe because
+  // nothing is parked yet: a rerun overwrites the draft and converges. On a
+  // successful requeue return early; an exhausted budget falls through to the
+  // normal (failed/) finalize. ---
   if (isTransientFailure(agentResult, 0)) {
     const rq = requeueTicket(
       cfg,
@@ -242,7 +243,7 @@ export async function runAnalyzeFlow(
   // run, not just the last message: #36 redefined finalText as the last
   // assistant message only, so a fence banked before a trailing closing
   // message would be dropped and the run would spuriously fail (#67 class —
-  // mirror assessFlow.ts:299's allText ?? finalText). No complete fence (or an
+  // mirror assessFlow.ts's `allText ?? finalText`). No complete fence (or an
   // all-whitespace one) means the agent produced nothing to review: finalize to
   // failed/ with a clear reason, park nothing. When the run also carries a
   // transient errorMessage (endpoint hiccup, truncated stream), fold it in — a

@@ -25,12 +25,11 @@ export interface ResultMeta {
 
 const BLOCK_RE = /<!-- junco-result\n([\s\S]*?)(?:-->|$)/g;
 
-/** The exact human-facing sentence finalize.ts's renderPrResult
- * (src/finalize.ts:158-161) writes into the `## Result` section when a PR
- * finalizes with its push→PR sequence parked in the outbox. Shared with
- * finalize.ts so the write-back's self-consistency rewrite below can find and
- * replace the exact string that module produces — duplicating it as an
- * inline literal in two files would drift silently. */
+/** The exact human-facing sentence finalize.ts's `renderPrResult` writes into
+ * the `## Result` section when a PR finalizes with its push→PR sequence parked
+ * in the outbox. Shared with finalize.ts so the write-back's self-consistency
+ * rewrite below can find and replace the exact string that module produces —
+ * duplicating it as an inline literal in two files would drift silently. */
 export const PR_QUEUED_SENTENCE =
   "PR queued for offline push — junco will open it automatically when GitHub is reachable.";
 

@@ -136,9 +136,10 @@ export const FINDINGS_FENCE = "junco-findings";
 // CommonMark fence-length-aware extraction of the LAST COMPLETE fenced block
 // tagged `fence`: opening line /^(`{3,})\s*<fence>\s*$/, closed by a line of
 // at least as many backticks (whitespace-trimmed). Returns the inner text, or
-// null when no complete block exists. Mirrors extractPlanBody in
-// src/githubInbox.ts:189-231 (implemented locally — that module owns the
-// junco-ticket plan fence, this one owns junco-findings).
+// null when no complete block exists. Mirrors `extractFencedBlock` in
+// src/githubInbox.ts (the helper behind its `extractPlanBody`) — implemented
+// locally because that module owns the junco-ticket plan fence, this one owns
+// junco-findings.
 export function extractLastFencedBlock(text: string, fence: string): string | null {
   const lines = text.split("\n");
   const openRe = new RegExp("^(`{3,})\\s*" + fence + "\\s*$");
@@ -430,7 +431,7 @@ const ISSUE_BODY_LIMIT = 60_000;
 const TRUNCATED_DESCRIPTION_CAP = 2_000;
 
 // Longest run of consecutive backticks at the START of any line in `text`.
-// Local copy of the identically-named helper in src/githubInbox.ts:172
+// Local copy of the identically-named helper in src/githubInbox.ts
 // (buildPlanComment's dynamic-fence precedent) — mirrored rather than
 // imported to keep this module import-cycle-free and I/O-free, same
 // rationale as extractLastFencedBlock above.
@@ -485,7 +486,7 @@ function renderIssueBody(
 
   // Dynamic fence: JSON.stringify does not escape backticks, so a description
   // containing ``` could close a fixed 3-backtick fence early (the
-  // buildPlanComment lesson, src/githubInbox.ts:227).
+  // `buildPlanComment` lesson, src/githubInbox.ts).
   const json = JSON.stringify(f, null, 2);
   const fence = "`".repeat(Math.max(4, longestBacktickRun(json) + 1));
   sections.push(

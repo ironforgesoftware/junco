@@ -12,11 +12,12 @@
  * this module only reduces lines → decisions.
  *
  * Fidelity boundaries, all of them structural (see `caveats` on the report):
- *   - Transcripts do not contain `message_update` deltas (session.ts:261 skips
- *     them), so rep-guard input is synthesized from each `message_end`'s
- *     content blocks — ONE delta per block. A live mid-stream trip fires
- *     partway through a message; replay's fires at the end of it, and a
- *     post-nudge re-trip needs fresh text the recorded stream cannot supply.
+ *   - Transcripts do not contain `message_update` deltas (`runAgent`'s
+ *     subscribe handler in session.ts skips them), so rep-guard input is
+ *     synthesized from each `message_end`'s content blocks — ONE delta per
+ *     block. A live mid-stream trip fires partway through a message; replay's
+ *     fires at the end of it, and a post-nudge re-trip needs fresh text the
+ *     recorded stream cannot supply.
  *   - Everything after a decision is a what-if trajectory: a replayed nudge is
  *     never injected, so the recorded events that follow are the model's
  *     reaction to the ORIGINAL decision (or to none at all).
@@ -79,7 +80,8 @@ const CAVEAT_V1_BOUNDARIES = "v1 transcript: run boundaries inferred from agent_
 interface ActiveRun {
   run: ReplayRun;
   gm: GuardManager;
-  /** Mirrors session.ts:271-273 — once a kill is decided, stop feeding the guard. */
+  /** Mirrors `runAgent`'s post-kill early return (session.ts) — once a kill is
+   * decided, stop feeding the guard. */
   killed: boolean;
 }
 

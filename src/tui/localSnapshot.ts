@@ -121,7 +121,8 @@ function walkOwnerName(
 /**
  * Union of the repos junco knows about, deduped by resolve(path) (first source
  * wins): (1) cfg.github.repos; (2) the RAW watchlist — readWatchlist, NOT
- * resolveWatchedRepos, so external:true forks survive (watchlist.ts:92);
+ * resolveWatchedRepos, so external:true forks survive (the `includeExternal`
+ * filter in watchlist.ts's `resolveWatched`);
  * (3) externalReposRoot walk; (4) <dataDir>/repos walk. Pure fs (no git), so
  * enumerateWorktrees can reuse it for the discriminator reverse-map.
  */
@@ -217,13 +218,13 @@ const OLD_TS_RE = /\.old-(\d+)$/;
 
 /**
  * Walk cfg.worktreeRoot (layout worktreeRoot/<repoDiscriminator>/<slug> +
- * `.old-<ts>` backups, worktree.ts:148-162). Display class only: a `.old-<ts>`
+ * `.old-<ts>` backups, worktree.ts's `prepareWorktree`). Display class only: a `.old-<ts>`
  * dir → backup; a dir whose listing contains `.git` → live; else → stale (the
  * FS class is display-only, NOT the prune safety signal). Reverse-maps the
  * discriminator by precomputing repoDiscriminator() over the same candidate
  * union enumerateRepos uses — no git needed for the map; unmatched → repoNwo
  * null (⟨unmapped⟩). HEAD via a lock-free rev-parse through gitFn (mirrors
- * currentHeadSha, worktree.ts:71, but seam-injectable + --no-optional-locks).
+ * currentHeadSha in worktree.ts, but seam-injectable + --no-optional-locks).
  */
 export async function enumerateWorktrees(
   cfg: Config,
@@ -384,7 +385,7 @@ function emptyDaemon(cfg: Config): DaemonDetail {
 
 /** Compose DaemonDetail from an ALREADY-fetched /health body (no second
  * request) plus an independent inference-endpoint probe (endpointReachable
- * hits /models, health.ts:40 — reachability is independent of the daemon).
+ * hits /models, health.ts — reachability is independent of the daemon).
  * The probe goes through `deps.reachableFn` when injected (makeLocalCheapFn
  * passes its per-factory cached probe); otherwise a direct uncached call —
  * per-call `fetchFn` injection stays honored, never a warm result from a
@@ -509,7 +510,7 @@ function emptyQueue(cfg: Config): QueueSnapshot {
   };
 }
 
-/** Deps-injectable `.md` count (mirrors statusCmd.ts:28 countMd). */
+/** Deps-injectable `.md` count (mirrors statusCmd.ts's `countMd`). */
 function countMd(dir: string, deps: LocalSnapshotDeps): number {
   const readdirFn = deps.readdirFn ?? readdirSync;
   try {
@@ -531,9 +532,10 @@ export function makeLocalCheapFn(
 ): (opts?: { section?: LocalSection }) => Promise<LocalCheap> {
   // One TTL-cached endpoint probe per FACTORY (dashboardCmd constructs this
   // once per process), so cheap-tick polling can't multiply upstream /models
-  // probes — mirrors the daemon's own shared cache (daemon.ts:471, health.ts
-  // makeCachedProbe). Closure-scoped, NOT module-level: cfg/fetchFn are fixed
-  // at construction, so per-call deps injection elsewhere stays isolated.
+  // probes — mirrors the daemon's own shared cache (`mainLoop` in daemon.ts,
+  // over health.ts's `makeCachedProbe`). Closure-scoped, NOT module-level:
+  // cfg/fetchFn are fixed at construction, so per-call deps injection elsewhere
+  // stays isolated.
   const cachedReachable =
     deps.reachableFn ?? makeCachedProbe(() => endpointReachable(cfg, { fetchFn: deps.fetchFn }));
   // Constructed ONCE per factory, like cachedReachable above: the queue-

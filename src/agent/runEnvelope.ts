@@ -79,7 +79,8 @@ function openTicketTranscript(
 }
 
 /**
- * Best-effort transcript write (#78 discipline, mirroring session.ts:259-269):
+ * Best-effort transcript write (#78 discipline, mirroring `runAgent`'s
+ * observability try/catch in session.ts):
  * a broken sink (a full disk, a closed stream) must NOT throw up through
  * `runEnveloped` and turn a completed/failed run into a rejection the caller
  * never asked for — degrade to a warning instead. Observability must never

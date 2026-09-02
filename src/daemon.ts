@@ -1,16 +1,19 @@
 /**
  * Daemon main loop + graceful shutdown — the integration heart of M4.
  *
- * Faithful port of worker.py:
- *   - StopFlag                  (lines 2690-2697)
- *   - _sleep_interruptible      (lines 2700-2706)
- *   - main_loop                 (lines 3368-3399)
- *   - _install_signal_handlers  (lines 3406-3408)
+ * Faithful port of worker.py's `StopFlag`, `_sleep_interruptible`, `main_loop`,
+ * and `_install_signal_handlers`.
  *
- * Graceful shutdown semantics: a signal sets stopFlag.requested; the loop
- * finishes the IN-FLIGHT runOnce (no abort), then exits.  runOnce does NOT take
- * a stopFlag — a task runs to completion; the stopFlag governs only the poll
- * cadence (sleepInterruptible) and the loop guard.
+ * Shutdown is a three-stage escalation, one stage per signal
+ * (`installSignalHandlers`):
+ *   1. graceful — `stopFlag.requested` latches; the poll loop (or runScheduler)
+ *      finishes the IN-FLIGHT ticket without aborting it, then exits.  The flag
+ *      governs the poll cadence (`sleepInterruptible`) and the loop guard.
+ *   2. force    — `stopFlag.requestForceStop()` aborts `stopFlag.forceSignal`,
+ *      which mainLoop/runScheduler thread into runOnce/executeClaimed as
+ *      `abortSignal`.  runAgent listens on it and SOFT-aborts the session, so
+ *      commits made so far are still salvaged into a PR (guard-kill semantics).
+ *   3. hard     — a third signal exits 130 outright.
  */
 
 import { join } from "node:path";

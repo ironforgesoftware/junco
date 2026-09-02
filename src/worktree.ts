@@ -1,11 +1,11 @@
 /**
  * Git worktree provisioning — faithful port of worker.py:
- *   - worktreeSlug            (lines 1915)
- *   - currentHeadSha          (lines 2021-2022)
- *   - linkNodeModules         (lines 1877-1901)
- *   - prepareWorktree         (lines 1904-1982)
- *   - cleanupWorktree         (lines 2066-2070)
- *   - pruneStaleWorktrees     (lines 588-609)
+ *   - worktreeSlug            (the inline slug in `prepare_worktree`)
+ *   - currentHeadSha          (`current_head_sha`)
+ *   - linkNodeModules         (`_link_node_modules`)
+ *   - prepareWorktree         (`prepare_worktree`)
+ *   - cleanupWorktree         (`cleanup_worktree`)
+ *   - pruneStaleWorktrees     (`prune_stale_worktrees`)
  */
 
 import {
@@ -54,7 +54,7 @@ export function worktreesLockPath(cfg: Pick<Config, "worktreeRoot">): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Port of the inline slug in worker.py prepare_worktree (line 1915):
+ * Port of the inline slug in worker.py's `prepare_worktree`:
  *   re.sub(r"[^A-Za-z0-9._-]+", "-", task_id).strip("-") or "ticket"
  *
  * NOTE: Unlike the branch slug (which allows "/"), the worktree DIR slug
@@ -88,7 +88,7 @@ export function repoDiscriminator(repoPath: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `current_head_sha` (lines 2021-2022).
+ * Port of worker.py `current_head_sha`.
  */
 export async function currentHeadSha(cfg: Pick<Config, "gitBin">, wtPath: string): Promise<string> {
   const result = await git(cfg, ["rev-parse", "HEAD"], { cwd: wtPath });
@@ -100,7 +100,7 @@ export async function currentHeadSha(cfg: Pick<Config, "gitBin">, wtPath: string
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `_link_node_modules` (lines 1877-1901).
+ * Port of worker.py `_link_node_modules`.
  *
  * Symlinks `<repoPath>/node_modules` into `<wtPath>/node_modules` if:
  *   - repoPath/node_modules is a directory
@@ -169,7 +169,7 @@ async function seedBotIdentity(cfg: Config, repoPath: string, wtPath: string): P
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `prepare_worktree` (lines 1904-1982).
+ * Port of worker.py `prepare_worktree`.
  *
  * Fresh-ticket mode: fetch base branch, create a new feature branch from
  *   origin/<baseBranch>.
@@ -343,7 +343,7 @@ export async function prepareWorktree(
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `cleanup_worktree` (lines 2066-2070).
+ * Port of worker.py `cleanup_worktree`.
  *
  * Best-effort removal — swallows all errors (logs a warning).
  */
@@ -384,7 +384,7 @@ export async function cleanupWorktree(
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `prune_stale_worktrees` (lines 588-609).
+ * Port of worker.py `prune_stale_worktrees`.
  *
  * Removes `*.old-<unix-ts>` dirs under worktreeRoot that are older than
  * maxAgeSeconds. Uses the timestamp embedded in the name (not dir mtime).

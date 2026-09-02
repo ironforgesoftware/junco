@@ -12,7 +12,7 @@ import { join } from "node:path";
  * everywhere ids reach the filesystem — `worktreeSlug` (src/worktree.ts),
  * `submitTicket` (src/dispatch.ts), and the branch slug (src/repoContext.ts)
  * use the identical `re.sub(r"[^A-Za-z0-9._-]+", "-").strip("-") or "ticket"`
- * pattern (worker.py prepare_worktree line 1915). A frontmatter id like
+ * pattern (worker.py's `prepare_worktree`). A frontmatter id like
  * `../../../../etc/anything` therefore becomes one inert filename component,
  * closing the transcript-path traversal hole (issue #32).
  */

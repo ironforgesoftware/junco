@@ -1,5 +1,6 @@
 /**
- * PR operations — faithful port of worker.py lines 1985-2081.
+ * PR operations — faithful port of worker.py's PR helpers
+ * (`count_new_commits_since` … `derive_pr_title`).
  *
  * Provides:
  *   - Commit      — {sha, subject} shape
@@ -29,7 +30,7 @@ export interface Commit {
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `count_new_commits_since` (lines 1985-1990).
+ * Port of worker.py `count_new_commits_since`.
  * Returns the number of commits reachable from HEAD but not from sinceRef.
  * Returns 0 on any git error (e.g. bad ref).
  */
@@ -51,7 +52,7 @@ export async function countNewCommits(
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `list_new_commits_since` (lines 2002-2014).
+ * Port of worker.py `list_new_commits_since`.
  * Returns commits between sinceRef (exclusive) and HEAD (inclusive),
  * newest first. Each entry has a short sha and subject line.
  *
@@ -84,7 +85,7 @@ export async function listNewCommits(
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `commit_leftovers` (lines 2025-2031).
+ * Port of worker.py `commit_leftovers`.
  * Stages all changes and commits with the given message.
  * Uses `-c commit.gpgsign=false` to avoid GPG prompts.
  * Passes `--allow-empty-message` to allow an empty commit message.
@@ -105,7 +106,7 @@ export async function commitLeftovers(
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `push_branch` (lines 2034-2035).
+ * Port of worker.py `push_branch`.
  * Pushes the named branch with --set-upstream to `remote` (default "origin";
  * fork-PR mode threads through the ticket's `push_remote`).
  * Uses network retry and a 3-minute timeout. `retryBaseDelayMs` overrides the
@@ -143,7 +144,7 @@ export async function pushBranch(
 // ---------------------------------------------------------------------------
 
 /**
- * Port of worker.py `open_pull_request` (lines 2038-2063).
+ * Port of worker.py `open_pull_request`.
  *
  * Builds the gh pr create argv faithfully:
  *   gh pr create --repo nwo --base ctx.baseBranch --head [<fork-owner>:]branch
@@ -237,7 +238,7 @@ function firstH1OrId(body: string, id: string): string {
 }
 
 /**
- * Port of worker.py `derive_pr_title` (lines 2073-2081), extended for apply
+ * Port of worker.py `derive_pr_title`, extended for apply
  * tickets (spec 2026-08-31-apply-tickets-design.md): a body carrying a
  * `junco-patch` fence must never have its title scraped from arbitrary diff
  * content — a unified-diff CONTEXT line (` # Heading`) trims to `# Heading`

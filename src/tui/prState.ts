@@ -123,7 +123,7 @@ export function reduceChecks(rollup: unknown): {
 }
 
 /**
- * Port-adjacent to `deriveBranchName` (src/repoContext.ts:31-35): a branch is
+ * Port-adjacent to `deriveBranchName` (src/repoContext.ts): a branch is
  * `<prefix ending in "/"><slug>`. Given the branch and the configured prefix,
  * recover the slug — the free ticket linkage a junco-authored PR carries in
  * its own branch name. Returns null when the branch doesn't start with the
