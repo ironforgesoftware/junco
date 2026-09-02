@@ -472,4 +472,20 @@ describe("classifyAvailability", () => {
     expect(classifyAvailability("bwrap", "bwrap", false)).toBe("fail-closed");
     expect(classifyAvailability("seatbelt", "seatbelt", false)).toBe("fail-closed");
   });
+  // #344: auto's degrade is a fail-open — on a Linux host without bubblewrap the
+  // default config runs agent bash unconfined while status looks healthy.
+  // requireBackend lets an operator demand the guarantee without pinning
+  // bwrap vs seatbelt per host.
+  it("auto + unavailable + requireBackend fails closed instead of degrading (#344)", () => {
+    expect(classifyAvailability("auto", "bwrap", false, true)).toBe("fail-closed");
+    expect(classifyAvailability("auto", "seatbelt", false, true)).toBe("fail-closed");
+  });
+  it("requireBackend changes nothing when the backend is available, explicit, or none", () => {
+    expect(classifyAvailability("auto", "bwrap", true, true)).toBe("ok");
+    expect(classifyAvailability("bwrap", "bwrap", false, true)).toBe("fail-closed");
+    expect(classifyAvailability("none", "none", false, true)).toBe("ok");
+    // auto on an unsupported platform selects none with no probe to fail —
+    // the lever governs the probe's verdict, not platform support.
+    expect(classifyAvailability("auto", "none", false, true)).toBe("ok");
+  });
 });

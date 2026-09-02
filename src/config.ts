@@ -436,10 +436,14 @@ export const ConfigSchema = z.object({
   sandbox: z
     .object({
       // On by default: agent tool execution is confined unless explicitly
-      // disabled. Fails closed if the OS backend is unavailable (junco doctor
-      // preflights it) — set enabled:false or backend:"none" to opt out.
+      // disabled. An explicit backend fails closed if unavailable (junco doctor
+      // preflights it); "auto" degrades to none unless requireBackend is set.
+      // Set enabled:false or backend:"none" to opt out.
       enabled: z.boolean().default(true),
       backend: z.enum(["auto", "seatbelt", "bwrap", "none"]).default("auto"),
+      // #344: demand the OS guarantee under "auto" — a failed probe fails the
+      // ticket closed (and doctor ✗) instead of degrading to none.
+      requireBackend: z.boolean().default(false),
       network: z.enum(["deny", "allow"]).default("deny"),
       extraDenyRead: z.array(z.string()).default([]),
       extraAllowWrite: z.array(z.string()).default([]),
@@ -774,6 +778,7 @@ export function assembleConfig(
     sandbox: {
       enabled: d.sandbox.enabled,
       backend: d.sandbox.backend,
+      requireBackend: d.sandbox.requireBackend,
       network: d.sandbox.network,
       extraDenyRead: d.sandbox.extraDenyRead.map(expandHome),
       extraAllowWrite: d.sandbox.extraAllowWrite.map(expandHome),

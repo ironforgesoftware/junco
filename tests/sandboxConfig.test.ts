@@ -27,11 +27,22 @@ describe("sandbox config", () => {
     expect(cfg.sandbox).toEqual({
       enabled: true,
       backend: "auto",
+      requireBackend: false,
       network: "deny",
       extraDenyRead: [],
       extraAllowWrite: [],
       bashTimeoutSeconds: 600,
     });
+  });
+
+  it("accepts sandbox.requireBackend (#344) and rejects a non-boolean", () => {
+    expect(
+      loadConfig(writeConfig({ ...BASE, sandbox: { requireBackend: true } })).sandbox
+        .requireBackend,
+    ).toBe(true);
+    expect(() =>
+      loadConfig(writeConfig({ ...BASE, sandbox: { requireBackend: "yes" } })),
+    ).toThrow();
   });
 
   it("parses an explicit section and expands ~ in path lists", () => {

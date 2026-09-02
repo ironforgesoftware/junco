@@ -522,6 +522,15 @@ export const LEVERS: Lever[] = [
       "Sandbox backend: auto (seatbelt on macOS, bwrap on Linux), a forced one, or none.",
   },
   {
+    path: "sandbox.requireBackend",
+    type: "boolean",
+    default: false,
+    editable: true,
+    reload: "live",
+    description:
+      "With backend=auto, fail closed when the OS backend probe fails (tickets refuse, doctor ✗) instead of degrading to none.",
+  },
+  {
     path: "sandbox.network",
     type: "enum",
     enumValues: ["deny", "allow"],

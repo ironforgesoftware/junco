@@ -133,6 +133,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     sandbox: {
       enabled: false,
       backend: "auto",
+      requireBackend: false,
       network: "deny",
       extraDenyRead: [],
       extraAllowWrite: [],

@@ -123,6 +123,10 @@ export interface SandboxConfig {
   // auto → seatbelt on darwin, bwrap on linux. none = no OS wrapping (env
   // scrub + JS path-jail still apply; bash keeps network + can read anywhere).
   backend: "auto" | "seatbelt" | "bwrap" | "none";
+  // Under "auto", fail closed when the OS backend probe fails instead of
+  // degrading to none (#344). Inert for an explicit backend (already
+  // fail-closed) and for none.
+  requireBackend: boolean;
   // Default egress for agent tool subprocesses. Per-ticket `network: true`
   // frontmatter overrides to allow for one ticket.
   network: "deny" | "allow";

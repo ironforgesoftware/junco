@@ -102,6 +102,7 @@ async function run(
     cfg: {
       enabled: true,
       backend: "auto",
+      requireBackend: false,
       network: "deny",
       extraDenyRead: opts.extraDeny ?? [],
       extraAllowWrite: [],

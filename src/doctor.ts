@@ -455,6 +455,7 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
           cfg.sandbox.backend,
           backend.name,
           availability.available,
+          cfg.sandbox.requireBackend,
         );
         // On trouble, tell the operator exactly how to satisfy the system
         // prerequisite (bwrap is a distro package, like git/gh — not an npm dep).
@@ -478,10 +479,18 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
               `bash not OS-confined); ${installHint} for full isolation`,
           );
         } else {
+          // #344: under auto this refusal exists only because
+          // sandbox.requireBackend demanded it — name the lever, since the
+          // opt-out is that knob, not disabling the sandbox wholesale.
+          const demanded = cfg.sandbox.backend === "auto" ? " (sandbox.requireBackend is on)" : "";
+          const optOut =
+            cfg.sandbox.backend === "auto"
+              ? "sandbox.requireBackend=false"
+              : "sandbox.enabled=false";
           report(
             "fail",
             "sandbox",
-            `${backend.name} unavailable${why} — tickets fail closed. ${installHint}, or set sandbox.enabled=false`,
+            `${backend.name} unavailable${why} — tickets fail closed${demanded}. ${installHint}, or set ${optOut}`,
           );
         }
       }
