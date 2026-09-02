@@ -31,6 +31,8 @@ import { ProviderGate, type GateStatus } from "../src/providerGate.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
 import { makeSpendLedger } from "../src/spendLedger.js";
 import type { SplitQueueFinding } from "../src/splitQueue.js";
+import type { ChatManager } from "../src/chat/chatManager.js";
+import { makeChatRoutes } from "../src/chat/chatRoutes.js";
 import {
   StopFlag,
   sleepInterruptible,
@@ -174,8 +176,15 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
  * live-reload seam, and most tests exercise the no-holder fallback path (see
  * "mainLoop reads the holder each iteration" for the holder-set case).
  */
-type StubMainLoopDeps = Required<Omit<MainLoopDeps, "configHolder">> &
-  Pick<MainLoopDeps, "configHolder">;
+// chatManager/chatSessionDeps/makeChatRoutesFn stay genuinely optional here
+// too (alongside configHolder): most tests never set them, letting mainLoop
+// build a real ChatManager over each test's own gate/spend fakes and fall
+// back to the real makeChatRoutes — see the two "wires chat routes..."/
+// "drains chat BEFORE closing" cases below for the ones that override them.
+type StubMainLoopDeps = Required<
+  Omit<MainLoopDeps, "configHolder" | "chatManager" | "chatSessionDeps" | "makeChatRoutesFn">
+> &
+  Pick<MainLoopDeps, "configHolder" | "chatManager" | "chatSessionDeps" | "makeChatRoutesFn">;
 
 function makeDeps(overrides: Partial<MainLoopDeps> = {}): {
   deps: StubMainLoopDeps;
@@ -1830,6 +1839,61 @@ describe("mainLoop — observability", () => {
     await expect(mainLoop(cfg, stop, {}, deps)).rejects.toBe(boom);
     expect(startHealthServerFn).toHaveBeenCalledTimes(1);
     expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires chat routes + chatStatus into the health server (spec 2026-09-01 §2.4)", async () => {
+    const cfg = makeConfig({ healthEnabled: true });
+    const stop = new StopFlag();
+    const handle = makeFakeHealthHandle();
+    const startHealthServerFn = vi.fn(async (_opts: HealthServerOpts) => handle);
+    const makeChatRoutesFn = vi.fn(makeChatRoutes);
+    const { deps } = makeDeps({
+      startHealthServerFn,
+      makeChatRoutesFn,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+    await mainLoop(cfg, stop, {}, deps);
+    const arg = startHealthServerFn.mock.calls[0]![0]!;
+    expect(typeof arg.chat?.handle).toBe("function");
+    expect(arg.chatStatus!()).toMatchObject({ enabled: true, sessions: [], turns: 0 });
+    // R12: the routes are built with the configured health host on the Host allowlist.
+    expect(makeChatRoutesFn).toHaveBeenCalledWith(expect.anything(), {
+      allowedHost: cfg.healthHost,
+    });
+  });
+
+  it("drains chat BEFORE closing the health server on shutdown", async () => {
+    const cfg = makeConfig({ healthEnabled: true });
+    const stop = new StopFlag();
+    const handle = makeFakeHealthHandle();
+    const drain = vi.fn(async () => {});
+    const chatManager = {
+      drain,
+      health: () => ({
+        enabled: true,
+        sessions: [],
+        turns: 0,
+        costUsd: 0,
+        tokensIn: 0,
+        tokensOut: 0,
+      }),
+      enabled: () => true,
+    } as unknown as ChatManager;
+    const { deps } = makeDeps({
+      startHealthServerFn: vi.fn(async () => handle),
+      chatManager,
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+    await mainLoop(cfg, stop, {}, deps);
+    expect(drain).toHaveBeenCalledTimes(1);
+    const closeMock = handle.close as ReturnType<typeof vi.fn>;
+    expect(drain.mock.invocationCallOrder[0]!).toBeLessThan(closeMock.mock.invocationCallOrder[0]!);
   });
 
   it("mainLoop reads the holder each iteration (live reload reaches next runOnce)", async () => {

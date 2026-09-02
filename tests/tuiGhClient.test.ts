@@ -543,6 +543,7 @@ describe("health", () => {
       lastTaskAt: "2026-07-06T09:55:00Z",
       totalTokensOut: 45000,
       bridgeErrors: 1,
+      chats: null,
     });
     const fetchBad = (async () => {
       throw new Error("ECONNREFUSED");
@@ -562,7 +563,25 @@ describe("health", () => {
       lastTaskAt: null,
       totalTokensOut: null,
       bridgeErrors: null,
+      chats: null,
     });
+  });
+
+  it("health() passes /health.chats through (spec 2026-09-01 §4)", async () => {
+    const chats = {
+      enabled: true,
+      sessions: [],
+      turns: 2,
+      costUsd: 0.5,
+      tokensIn: 10,
+      tokensOut: 20,
+    };
+    const fetchChats = (async () => ({
+      ok: true,
+      json: async () => ({ ready: true, metrics: {}, chats }),
+    })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn: fetchChats });
+    expect((await c.health()).chats).toEqual(chats);
   });
 });
 

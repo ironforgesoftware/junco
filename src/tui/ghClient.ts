@@ -25,6 +25,7 @@ import { listPending, readPending, discardPending, type PendingAssess } from "..
 import { fileFindings, type FileResult } from "../assessFiling.js";
 import { listDrafts, removeDraft, type PendingComment } from "../commentReview.js";
 import { postDraftCore, analyzeIssueCore } from "../analyzeCmd.js";
+import type { ChatHealth } from "../chat/chatManager.js";
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -120,6 +121,8 @@ export interface HealthInfo {
   lastTaskAt: string | null;
   totalTokensOut: number | null;
   bridgeErrors: number | null;
+  /** /health.chats — null when the daemon is down or predates chat. */
+  chats?: ChatHealth | null;
 }
 
 export interface DashboardClient {
@@ -700,6 +703,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
         lastTaskAt: null,
         totalTokensOut: null,
         bridgeErrors: null,
+        chats: null,
       };
       if (!cfg.healthEnabled) return down;
       try {
@@ -718,6 +722,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
             totalTokensOut?: number;
             bridgeErrors?: number;
           };
+          chats?: ChatHealth | null;
         };
         return {
           up: true,
@@ -731,6 +736,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
           lastTaskAt: j.metrics?.lastTaskAt ?? null,
           totalTokensOut: j.metrics?.totalTokensOut ?? null,
           bridgeErrors: j.metrics?.bridgeErrors ?? null,
+          chats: j.chats ?? null,
         };
       } catch {
         return down;
