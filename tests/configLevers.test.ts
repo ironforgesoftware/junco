@@ -4,13 +4,37 @@ import { LEVERS, getAtPath, setAtPath, leverAtPath, coerceLever } from "../src/c
 import { ConfigSchema, assembleConfig, type ConfigParsed } from "../src/config.js";
 import type { Config } from "../src/types.js";
 
+// Strip the wrapper nodes zod 4 puts between a declaration and its leaf type,
+// reporting the innermost schema plus the default captured on the way down.
+// The wrappers: `.optional()` → ZodOptional, `.default(v)` → ZodDefault,
+// `.prefault(v)` → ZodPrefault, `.transform(fn)` → ZodPipe (`in` = the source
+// schema, `out` = the transform). Unwrapping ZodPipe through `in` is what keeps
+// `z.string().default(x).transform(fn)` (observability.healthHost) reporting
+// the PRE-transform default. `.refine()` is not a wrapper in zod 4 — it hangs a
+// check off the schema it is called on — so there is nothing to unwrap for it.
+// A leaf never wrapped in ZodDefault/ZodPrefault (e.g. vaultRoot, optional with
+// no default) reports `undefined`, matching a schema field with no default.
+function unwrap(schema: z.ZodTypeAny): { schema: z.ZodTypeAny; default: unknown } {
+  let s = schema;
+  let def: unknown;
+  for (;;) {
+    if (s instanceof z.ZodPipe) {
+      s = s._def.in as z.ZodTypeAny;
+    } else if (s instanceof z.ZodDefault || s instanceof z.ZodPrefault) {
+      def = s._def.defaultValue;
+      s = s._def.innerType as z.ZodTypeAny;
+    } else if (s instanceof z.ZodOptional) {
+      s = s._def.innerType as z.ZodTypeAny;
+    } else {
+      return { schema: s, default: def };
+    }
+  }
+}
+
 // Walk a zod object schema to dotted leaf paths, capturing default + kind.
 // Verbatim per the task brief — this is the bijection oracle LEVERS must match.
 function schemaLeaves(schema: z.ZodTypeAny, prefix = ""): { path: string; def: z.ZodTypeAny }[] {
-  let s = schema;
-  while (s instanceof z.ZodDefault || s instanceof z.ZodOptional || s instanceof z.ZodEffects) {
-    s = s instanceof z.ZodEffects ? s._def.schema : s._def.innerType;
-  }
+  const s = unwrap(schema).schema;
   if (s instanceof z.ZodObject) {
     return Object.entries(s.shape).flatMap(([k, v]) =>
       schemaLeaves(v as z.ZodTypeAny, prefix ? `${prefix}.${k}` : k),
@@ -19,28 +43,13 @@ function schemaLeaves(schema: z.ZodTypeAny, prefix = ""): { path: string; def: z
   return [{ path: prefix, def: schema }];
 }
 
-// Extended walker: same traversal, but also records the default captured
-// while unwrapping (a ZodDefault node's `defaultValue()`), and unwraps
-// ZodEffects before ZodDefault so `z.string().default(x).transform(fn)`
-// (e.g. observability.healthHost) still yields the pre-transform default.
-// A leaf never wrapped in ZodDefault (e.g. vaultRoot, which is optional with
-// no default) reports `undefined` — matching a schema field with no default.
+// Extended walker: same traversal, but also records the default captured while
+// unwrapping.
 function schemaLeavesWithDefault(
   schema: z.ZodTypeAny,
   prefix = "",
 ): { path: string; default: unknown }[] {
-  let s: z.ZodTypeAny = schema;
-  let def: unknown;
-  while (s instanceof z.ZodDefault || s instanceof z.ZodOptional || s instanceof z.ZodEffects) {
-    if (s instanceof z.ZodEffects) {
-      s = s._def.schema;
-    } else if (s instanceof z.ZodDefault) {
-      def = s._def.defaultValue();
-      s = s._def.innerType;
-    } else {
-      s = s._def.innerType;
-    }
-  }
+  const { schema: s, default: def } = unwrap(schema);
   if (s instanceof z.ZodObject) {
     return Object.entries(s.shape).flatMap(([k, v]) =>
       schemaLeavesWithDefault(v as z.ZodTypeAny, prefix ? `${prefix}.${k}` : k),
@@ -89,10 +98,7 @@ describe("LEVERS ↔ schema bijection", () => {
     const leafDefs = new Map(schemaLeaves(ConfigSchema).map((l) => [l.path, l.def]));
     for (const lever of LEVERS) {
       if (lever.type !== "enum") continue;
-      let s: z.ZodTypeAny = leafDefs.get(lever.path)!;
-      while (s instanceof z.ZodDefault || s instanceof z.ZodOptional || s instanceof z.ZodEffects) {
-        s = s instanceof z.ZodEffects ? s._def.schema : s._def.innerType;
-      }
+      const s = unwrap(leafDefs.get(lever.path)!).schema;
       expect(s).toBeInstanceOf(z.ZodEnum);
       if (s instanceof z.ZodEnum) {
         expect(lever.enumValues).toEqual(s.options);
@@ -104,10 +110,7 @@ describe("LEVERS ↔ schema bijection", () => {
     const leafDefs = new Map(schemaLeaves(ConfigSchema).map((l) => [l.path, l.def]));
     for (const lever of LEVERS) {
       if (lever.type !== "number") continue;
-      let s: z.ZodTypeAny = leafDefs.get(lever.path)!;
-      while (s instanceof z.ZodDefault || s instanceof z.ZodOptional || s instanceof z.ZodEffects) {
-        s = s instanceof z.ZodEffects ? s._def.schema : s._def.innerType;
-      }
+      const s = unwrap(leafDefs.get(lever.path)!).schema;
       expect(s).toBeInstanceOf(z.ZodNumber);
       if (s instanceof z.ZodNumber) {
         if (lever.min !== undefined) expect(s.minValue).toBe(lever.min);
@@ -159,23 +162,13 @@ function flatConfigKeys(cfg: Config): Map<string, string> {
  * "/" on purpose: a slash in `model.id` would flip `catalogEligible`, adding a
  * coupling the probe caused rather than one the assembly has. */
 function probeValue(def: z.ZodTypeAny, current: unknown): unknown {
-  let s: z.ZodTypeAny = def;
-  while (s instanceof z.ZodDefault || s instanceof z.ZodOptional || s instanceof z.ZodEffects) {
-    s = s instanceof z.ZodEffects ? s._def.schema : s._def.innerType;
-  }
+  const s = unwrap(def).schema;
   if (s instanceof z.ZodBoolean) return !current;
   if (s instanceof z.ZodNumber) return typeof current === "number" ? current + 1 : 1;
   if (s instanceof z.ZodEnum) return (s.options as string[]).find((o) => o !== current);
   if (s instanceof z.ZodRecord) return { probe: "probe" };
   if (s instanceof z.ZodArray) {
-    let el = s.element as z.ZodTypeAny;
-    while (
-      el instanceof z.ZodDefault ||
-      el instanceof z.ZodOptional ||
-      el instanceof z.ZodEffects
-    ) {
-      el = el instanceof z.ZodEffects ? el._def.schema : el._def.innerType;
-    }
+    const el = unwrap(s.element as z.ZodTypeAny).schema;
     if (el instanceof z.ZodObject) {
       return [Object.fromEntries(Object.keys(el.shape).map((k) => [k, "probe"]))];
     }
