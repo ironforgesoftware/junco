@@ -290,6 +290,20 @@ With no `baseUrl` and no `apiKey`, the model resolves from the embedded catalog 
 }
 ```
 
+## Pre-push secret scan
+
+`pr.secretScan` (default `true`) scans the added lines of the diff junco is about to push — `<base>..HEAD`, i.e. exactly what leaves the host — for a short list of high-confidence secret shapes: PEM private-key headers, GitHub tokens (`ghp_`/`gho_`/`github_pat_`…), AWS access-key IDs, Anthropic and Stripe live keys, Slack and npm tokens, and credentials embedded in a URL (`://user:password@host`, the shape a copied `.netrc`, `.npmrc`, or git remote takes). It exists because `sandbox.network: deny` governs the **agent's** tool calls and is never consulted when junco itself commits the worktree and pushes it under its own credential — so the push is an egress channel no sandbox rule sees.
+
+On a hit the push is refused: the ticket fails, the worktree is **preserved** for inspection, and the failure note names `path:line` and the rule that matched — **never the matched content**, which is not logged, stored, or copied into the ticket record. The rule set is deliberately narrow (fixed prefix + token-length body), so a match is almost never a false positive; it is a choke-point net, not a full secret scanner. Turn it off globally for a repo that legitimately vendors credential-shaped test fixtures. Live-reload lever.
+
+```json
+{
+  "pr": {
+    "secretScan": false
+  }
+}
+```
+
 ## Plan sets
 
 `planSets` gates the plan-set compiler — one fenced `junco-plan` document compiled into a dependency-ordered set of tickets and pull requests (see [Tickets § Plan sets](tickets.md#plan-sets-the-junco-plan-fence)). Off by default. With it off, `junco submit --plan` and the GitHub bridge's `junco-plan` door refuse; the dependency machinery every plan set runs on (`depends_on:` claim gating, the merge sweep, failure cascade) stays on regardless, so hand-authored `depends_on:` sets never need this section.

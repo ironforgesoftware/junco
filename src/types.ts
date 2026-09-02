@@ -201,6 +201,10 @@ export interface Config {
   allowedRepoRoots: string[];
   draftByDefault: boolean;
   defaultLabels: string[];
+  // #337 (`pr.secretScan`): scan the added lines of the diff about to be pushed
+  // for high-confidence secret shapes, and fail the ticket on a hit. The push
+  // is an egress channel `sandbox.network: deny` never sees.
+  secretScanEnabled: boolean;
   verifyEnabled: boolean;
   verifyCommandTimeout: number;
   verifyBlockOnFail: boolean;

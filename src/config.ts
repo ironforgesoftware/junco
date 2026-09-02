@@ -424,6 +424,10 @@ export const ConfigSchema = z.object({
     .object({
       draftByDefault: z.boolean().default(true),
       defaultLabels: z.array(z.string()).default([]),
+      // #337: scan the diff junco is about to push for high-confidence secret
+      // shapes. The sandbox's network rule governs the AGENT's tool calls, not
+      // junco's own push — this is the choke point that sees it. On by default.
+      secretScan: z.boolean().default(true),
     })
     .default({}),
   verify: z
@@ -743,6 +747,7 @@ export function assembleConfig(
     allowedRepoRoots: d.git.allowedRepoRoots.map(expandHome),
     draftByDefault: d.pr.draftByDefault,
     defaultLabels: d.pr.defaultLabels,
+    secretScanEnabled: d.pr.secretScan,
     verifyEnabled: d.verify.enabled,
     verifyCommandTimeout: d.verify.commandTimeout,
     verifyBlockOnFail: d.verify.blockOnFail,

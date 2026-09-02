@@ -44,6 +44,7 @@ import {
   type VerifyDeps,
 } from "./verify.js";
 import { runCriticPass, buildCorrectivePrompt, type CriticResult } from "./critic.js";
+import { scanPendingPush, formatSecretFindings, type SecretScanDeps } from "./secretScan.js";
 import { buildPromptWithRepoContext } from "./prPrompt.js";
 import {
   runAgent,
@@ -452,6 +453,8 @@ export interface PrFlowDeps {
     cwd: string,
     overrides: SessionOverrides,
   ) => Promise<ResolvedSandbox | null>;
+  /** Pre-push secret-scan seams (#337); tests inject the diff provider. */
+  secretScan?: SecretScanDeps;
   /** Terminal dirs override (tests). Defaults to queuePaths(cfg). */
   dirs?: TerminalDirs;
   /** Operator force-stop signal — soft-aborts the worker + corrective sessions
@@ -1227,6 +1230,25 @@ export async function runPrFlow(
         finalResult,
         phaseError,
       );
+    }
+
+    // Phase 10b: pre-push secret scan (#337). The push leaves the host under
+    // junco's own credential, so `sandbox.network: deny` never sees it — this
+    // is the choke point that does. Findings name path:line only; the matched
+    // text is never logged, stored, or written to the ticket record.
+    if (cfg.secretScanEnabled) {
+      const findings = await scanPendingPush(cfg, wtPath, sinceRef, deps.secretScan);
+      if (findings.length > 0) {
+        const phaseError = `secret scan blocked push: ${formatSecretFindings(findings)}`;
+        log.warn(`${phaseError} — preserving worktree, skipping push/PR`);
+        prOutcome.worktreePreserved = true;
+        return flowResult(
+          finalizePr(claimedPath, finalResult, prOutcome, { dirs, phaseError }),
+          prOutcome,
+          finalResult,
+          phaseError,
+        );
+      }
     }
 
     // Phase 11: push (to ctx.pushRemote — the ticket's fork in fork-PR mode).

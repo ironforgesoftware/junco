@@ -104,6 +104,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     allowedRepoRoots: [],
     draftByDefault: true,
     defaultLabels: [],
+    secretScanEnabled: true,
     verifyCommandTimeout: 60,
     verifyBlockOnFail: false,
     verifySandboxed: true,

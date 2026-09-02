@@ -147,9 +147,15 @@ function ctxFor(cfg: Config, task: Ticket) {
  * Python fake_omp_pr.sh — a real commit so countNewCommits > 0.
  */
 function commitFactory(
-  opts: { commit?: boolean; stopReason?: string; file?: string; costUsd?: number } = {},
+  opts: {
+    commit?: boolean;
+    stopReason?: string;
+    file?: string;
+    content?: string;
+    costUsd?: number;
+  } = {},
 ): (cfg: Config, cwd: string) => () => Promise<AgentSessionLike> {
-  const { commit = true, stopReason = "stop", file = "feature.txt", costUsd } = opts;
+  const { commit = true, stopReason = "stop", file = "feature.txt", content, costUsd } = opts;
   return (_cfg, cwd) => async () => {
     let listener: ((e: any) => void) | null = null;
     return {
@@ -159,7 +165,7 @@ function commitFactory(
       },
       async prompt() {
         if (commit) {
-          writeFileSync(join(cwd, file), `work ${Date.now()}\n`, "utf8");
+          writeFileSync(join(cwd, file), content ?? `work ${Date.now()}\n`, "utf8");
           run(["git", "-C", cwd, "add", "-A"]);
           run(["git", "-C", cwd, "commit", "-m", `feat: ${file}`]);
         }
@@ -558,6 +564,101 @@ true
     // The block ran directly and passed → the gate let the PR through.
     expect(phaseError).toBeNull();
     expect(dst.startsWith(h.done)).toBe(true);
+  });
+
+  // --- pre-push secret scan (#337) ---------------------------------------
+  // Assembled at runtime so this file's own bytes carry no scannable shape
+  // (junco pushes this repo — see tests/secretScan.test.ts).
+  const FAKE_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
+
+  it("secret scan: an added line with a secret shape → failed/, no push, worktree preserved", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "leak.md",
+      `---\nid: leak\nrepo: ${h.work}\n---\n# Feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({
+        commit: true,
+        file: "deploy.env",
+        content: `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}\n`,
+      }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(phaseError).toMatch(/^secret scan blocked push/);
+    expect(phaseError).toContain("deploy.env:1 (aws-access-key-id)");
+    expect(dst.startsWith(h.failed)).toBe(true);
+    const text = readFileSync(dst, "utf8");
+    expect(text).toContain("status: failed");
+    // The note names the location and NEVER the matched content.
+    expect(text).not.toContain(FAKE_AWS_KEY);
+    // Nothing reached the remote, and the worktree is kept for inspection.
+    const remoteBranches = run([
+      "git",
+      "-C",
+      h.work,
+      "ls-remote",
+      "--heads",
+      "origin",
+      "junco/leak",
+    ]);
+    expect(remoteBranches.trim()).toBe("");
+    expect(text).toContain("**Worktree preserved:**");
+  });
+
+  it("secret scan: pr.secretScan=false pushes the same diff untouched", async () => {
+    const cfg = makeConfig(h, { secretScanEnabled: false });
+    const { task, path } = makeTicket(
+      h,
+      "optout.md",
+      `---\nid: optout\nrepo: ${h.work}\n---\n# Feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({
+        commit: true,
+        file: "sample.env",
+        content: `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}\n`,
+      }),
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(phaseError).toBeNull();
+    expect(dst.startsWith(h.done)).toBe(true);
+    expect(readFileSync(dst, "utf8")).toContain("pushed: true");
+  });
+
+  it("secret scan: reads the diff of sinceRef..HEAD through the injected provider", async () => {
+    const cfg = makeConfig(h);
+    const { task, path } = makeTicket(
+      h,
+      "provider.md",
+      `---\nid: provider\nrepo: ${h.work}\n---\n# Feature\n\nMake a change.\n`,
+    );
+    const ctx = ctxFor(cfg, task);
+    const calls: Array<{ wtPath: string; sinceRef: string }> = [];
+
+    const { dst, phaseError } = await runPrFlow(cfg, task, path, ctx, {
+      sessionFactoryFor: commitFactory({ commit: true }),
+      secretScan: {
+        diffProvider: async (_cfg, wtPath, sinceRef) => {
+          calls.push({ wtPath, sinceRef });
+          return `--- a/x\n+++ b/secrets/id_rsa\n@@ -0,0 +1 @@\n+${"-----BEGIN OPENSSH PRIVATE" + " KEY-----"}\n`;
+        },
+      },
+      dirs: { done: h.done, failed: h.failed },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sinceRef).toBe("origin/main");
+    expect(calls[0].wtPath).toContain("provider");
+    expect(phaseError).toContain("secrets/id_rsa:1 (pem-private-key)");
+    expect(dst.startsWith(h.failed)).toBe(true);
   });
 
   it("critic corrective: MISSING then a corrective turn sets criticRetriesUsed and still pushes", async () => {
