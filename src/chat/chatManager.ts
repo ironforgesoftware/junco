@@ -69,6 +69,9 @@ export interface ChatManagerDeps {
 
 export class ChatManager {
   private readonly sessions = new Map<string, ChatSession>();
+  /** Slug → the in-flight build, so a concurrent first-touch of the same key
+   *  joins it instead of racing a second ChatSession onto the same dir. */
+  private readonly pending = new Map<string, Promise<ChatResult<ChatSession>>>();
   private turns = 0;
   private costUsd = 0;
   private tokensIn = 0;
@@ -80,11 +83,32 @@ export class ChatManager {
     return this.deps.cfg().chat.enabled;
   }
 
+  /**
+   * Atomic per slug ACROSS the cwd resolution. Every verb funnels through
+   * here, so two concurrent first-touches of the same key are ordinary (a
+   * dashboard SSE `subscribe` racing the first `prompt`): without the
+   * in-flight cache both would clear the `sessions` miss, both would build a
+   * ChatSession on the same dir, both would write a junco_meta header, and
+   * status()/health() would track only the map winner while the orphan kept
+   * writing to the same transcript. `enabled()` stays first and outside the
+   * cache so a disabled config is never memoized.
+   */
   async get(key: string): Promise<ChatResult<ChatSession>> {
     if (!this.enabled()) return { ok: false, error: "chat_disabled" };
     const slug = chatSlug(key);
     const existing = this.sessions.get(slug);
     if (existing) return { ok: true, value: existing };
+    const inFlight = this.pending.get(slug);
+    if (inFlight) return inFlight;
+    // Cleared on settle (failure included) so a transient resolution error —
+    // a checkout that is not mounted yet — is retried on the next call rather
+    // than replayed forever.
+    const p = this.create(key, slug).finally(() => this.pending.delete(slug));
+    this.pending.set(slug, p);
+    return p;
+  }
+
+  private async create(key: string, slug: string): Promise<ChatResult<ChatSession>> {
     const cfg = this.deps.cfg();
     const cwd = await (this.deps.resolveCwd ?? resolveChatCwd)(cfg, key);
     if (!cwd.ok) return { ok: false, error: cwd.error };

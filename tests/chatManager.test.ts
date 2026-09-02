@@ -156,6 +156,53 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     expect(gate.failures).toEqual([]);
   });
 
+  it("concurrent get() for an unseen key resolves the cwd once and shares one session", async () => {
+    const { cfg, root } = setup();
+    let calls = 0;
+    const m = new ChatManager({
+      cfg: () => cfg,
+      gate: fakeGate(),
+      spend: fakeSpend(),
+      resolveCwd: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 5));
+        return { ok: true, cwd: root, kind: "watched", nwo: "acme/api" };
+      },
+      session: { makeSessionManager: fakeSm, sessionFactoryFor: () => fakeChatSession([]) },
+    });
+    const [a, b] = await Promise.all([m.get("acme/api"), m.get("acme/api")]);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.value).toBe(b.value);
+    expect(calls).toBe(1);
+    expect(m.health().sessions).toHaveLength(1);
+  });
+
+  it("a failed concurrent get() is not cached: both callers see it and the next get retries", async () => {
+    const { cfg } = setup();
+    let calls = 0;
+    const m = new ChatManager({
+      cfg: () => cfg,
+      gate: fakeGate(),
+      spend: fakeSpend(),
+      resolveCwd: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 5));
+        return { ok: false, error: "unknown_key" };
+      },
+    });
+    const [a, b] = await Promise.all([m.get("acme/api"), m.get("acme/api")]);
+    expect(a).toEqual({ ok: false, error: "unknown_key" });
+    expect(b).toEqual({ ok: false, error: "unknown_key" });
+    expect(calls).toBe(1);
+    expect(m.health().sessions).toHaveLength(0);
+    // pending was cleared, so a later call resolves again rather than
+    // replaying a stale rejection forever.
+    expect(await m.get("acme/api")).toEqual({ ok: false, error: "unknown_key" });
+    expect(calls).toBe(2);
+  });
+
   it("chat.enabled=false → chat_disabled; unknown key → unknown_key", async () => {
     const { cfg } = setup();
     const off = new ChatManager({
