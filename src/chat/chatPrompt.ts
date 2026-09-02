@@ -69,6 +69,28 @@ export function loadSkillSections(
   return parts.join("\n\n");
 }
 
+/**
+ * "Ticket sets"'s own "Compiler-backed alternative" paragraph teaches the
+ * `junco-plan` fence unconditionally (SKILL.md serves `junco submit --plan`
+ * too, regardless of THIS daemon's planSets.enabled) — strip the literal
+ * example fence when plan sets are off so a disabled daemon's chat prompt
+ * never shows the model a fence it must not emit. Fails loud, like
+ * loadSkillSections' own heading guard, rather than silently no-op-ing: if
+ * SKILL.md's wording ever moves the fence out from under this regex, a
+ * plan-sets-disabled prompt would otherwise teach the fence anyway with no
+ * signal that the guard stopped working.
+ */
+function withoutPlanSetExample(skillSections: string): string {
+  const stripped = skillSections.replace(/```junco-plan\n[\s\S]*?\n```\n?/, "");
+  if (stripped === skillSections) {
+    throw new Error(
+      'chat prompt: expected a ```junco-plan fence in the "Ticket sets" section of ' +
+        "skills/junco-dispatch/SKILL.md (heading drift?)",
+    );
+  }
+  return stripped;
+}
+
 export function buildChatPrompt(
   opts: { cwd: string; nwo: string | null; planSetsEnabled: boolean },
   deps: { readFileFn?: (p: string) => string } = {},
@@ -122,16 +144,9 @@ you at, copy its body verbatim — do not rewrite it.${
   ];
   if (example) parts.push(`--- WORKED EXAMPLES (shape anchors) ---\n\n${example}`);
   const skillSections = loadSkillSections(CHAT_SKILL_SECTIONS, deps);
-  // "Ticket sets"'s own "Compiler-backed alternative" paragraph teaches the
-  // `junco-plan` fence unconditionally (SKILL.md serves `junco submit --plan`
-  // too, regardless of THIS daemon's planSets.enabled) — strip the literal
-  // example fence when plan sets are off so a disabled daemon's chat prompt
-  // never shows the model a fence it must not emit.
   parts.push(
     `--- AUTHORING RULES (from the junco-dispatch skill) ---\n\n${
-      opts.planSetsEnabled
-        ? skillSections
-        : skillSections.replace(/```junco-plan\n[\s\S]*?\n```\n?/, "")
+      opts.planSetsEnabled ? skillSections : withoutPlanSetExample(skillSections)
     }`,
   );
   parts.push(fenceContract);

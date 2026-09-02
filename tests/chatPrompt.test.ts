@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildChatPrompt, CHAT_SKILL_SECTIONS, loadSkillSections } from "../src/chat/chatPrompt.js";
 import { FRONTMATTER_ALLOWLIST } from "../src/chat/fenceExtract.js";
+import { PACKAGE_ROOT } from "../src/packageRoot.js";
+
+const SKILL_PATH = join(PACKAGE_ROOT, "skills", "junco-dispatch", "SKILL.md");
 
 describe("chat prompt (spec 2026-09-01 §6.5)", () => {
   it("every lifted SKILL.md heading exists in the packaged skill (drift guard)", () => {
@@ -32,6 +37,19 @@ describe("chat prompt (spec 2026-09-01 §6.5)", () => {
     const on = buildChatPrompt({ cwd: "/repo", nwo: null, planSetsEnabled: true });
     expect(on).toContain("```junco-plan");
     expect(on).toContain("/repo");
+  });
+  it("fails loud, rather than silently no-op-ing, if the Ticket sets section's junco-plan example drifts out from under the strip (plan sets off)", () => {
+    const real = readFileSync(SKILL_PATH, "utf8");
+    // Sanity: the fixture this test mutates actually has what we're about to
+    // break — otherwise the assertion below would pass for the wrong reason.
+    expect(real).toContain("```junco-plan\n");
+    const drifted = real.replace("```junco-plan\n", "```junco-plan-renamed\n");
+    expect(() =>
+      buildChatPrompt(
+        { cwd: "/repo", nwo: "acme/api", planSetsEnabled: false },
+        { readFileFn: () => drifted },
+      ),
+    ).toThrow(/junco-plan/);
   });
   it("planner prompt pieces are reused, not duplicated", async () => {
     const { planSetRuleText, loadExample } = await import("../src/planPrompt.js");
