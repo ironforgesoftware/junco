@@ -87,17 +87,29 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
     expect(km({ kind: "view", view: "detail" })).toEqual({
       b: "browser",
       q: "close",
+      "?": "help",
       c: "chat",
       t: "transcript",
     });
-    expect(km({ kind: "view", view: "prDetail" })).toEqual({ b: "browser", q: "close", c: "chat" });
-    expect(km({ kind: "view", view: "prs" })).toEqual({ b: "browser", q: "close", c: "chat" });
+    expect(km({ kind: "view", view: "prDetail" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
+    expect(km({ kind: "view", view: "prs" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
     expect(km({ kind: "view", view: "review" })).toEqual({
       a: "all",
       n: "none",
       f: "file",
       D: "discard",
       q: "close",
+      "?": "help",
       s: "submit",
       e: "edit",
       r: "route",
@@ -107,9 +119,14 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       t: "thinking",
       f: "follow",
       q: "close",
+      "?": "help",
       c: "chat",
     });
-    expect(km({ kind: "view", view: "cmdOutput" })).toEqual({ r: "reRun", q: "close" });
+    expect(km({ kind: "view", view: "cmdOutput" })).toEqual({
+      r: "reRun",
+      q: "close",
+      "?": "help",
+    });
     expect(km({ kind: "view", view: "chat" })).not.toHaveProperty("c");
   });
   it("chat view (composer blurred) and chatCompose (focused)", () => {
@@ -121,6 +138,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       t: "thinking",
       f: "follow",
       q: "close",
+      "?": "help",
     });
     expect(km({ kind: "structuralOnly", view: "chatCompose" })).toEqual({});
     const chips = buildContextBindings(
@@ -139,6 +157,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       e: "edit",
       r: "route",
       q: "close",
+      "?": "help",
       c: "chat",
     });
   });
@@ -146,20 +165,40 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
     expect(km({ kind: "view", view: "detail" })).toEqual({
       b: "browser",
       q: "close",
+      "?": "help",
       c: "chat",
       t: "transcript",
     });
-    expect(km({ kind: "view", view: "prDetail" })).toEqual({ b: "browser", q: "close", c: "chat" });
+    expect(km({ kind: "view", view: "prDetail" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
     // repoDetail is not one of D7's "repo in context" overlays — no pill there.
-    expect(km({ kind: "view", view: "repoDetail" })).toEqual({ b: "browser", q: "close" });
-    expect(km({ kind: "view", view: "prs" })).toEqual({ b: "browser", q: "close", c: "chat" });
-    expect(km({ kind: "view", view: "cmdOutput" })).toEqual({ r: "reRun", q: "close" });
+    expect(km({ kind: "view", view: "repoDetail" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+    });
+    expect(km({ kind: "view", view: "prs" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
+    expect(km({ kind: "view", view: "cmdOutput" })).toEqual({
+      r: "reRun",
+      q: "close",
+      "?": "help",
+    });
     expect(km({ kind: "view", view: "review" })).toEqual({
       a: "all",
       n: "none",
       f: "file",
       D: "discard",
       q: "close",
+      "?": "help",
       s: "submit",
       e: "edit",
       r: "route",
@@ -169,6 +208,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       t: "thinking",
       f: "follow",
       q: "close",
+      "?": "help",
       c: "chat",
     });
   });
@@ -178,6 +218,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       l: "level",
       t: "ticket",
       q: "close",
+      "?": "help",
     });
   });
 });

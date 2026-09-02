@@ -9,6 +9,7 @@
  * only changes what is drawn.
  */
 import type { BindingContext, Chip, ContextBindings, MainBody } from "./viewActions.js";
+import type { DerivedMnemonic } from "./mnemonics.js";
 import type { LayoutMode } from "./layout.js";
 
 export type FooterChipKind = "pill" | "mnemonic" | "structural" | "separator";
@@ -54,31 +55,25 @@ const SEP: FooterChip = {
 };
 /** Main-view globals that go on the RIGHT of │ (spec §3.1 "go somewhere"). */
 const GO_IDS: ReadonlySet<string> = new Set(["queue", "review", "prs"]);
-/** Pinned-right ids, in order; `close` is the overlays' q. */
+/** Pinned-right ids, in order; `close` is the overlays' q. Read off
+ * `bindings.all` (hidden included — Ruling R5, spec 2026-09-02 §3.2): every
+ * overlay's `VIEW_OPTIONS`/`LOG_OVERLAY_OPTIONS` table carries a hidden
+ * reserved `help` (`?`) alongside `close` (`q`) now, so `main` naturally
+ * yields [help, quit] (no `close` entry there) and overlays naturally yield
+ * [help, close] (no `quit` entry there) from the SAME filter — no
+ * synthesis needed. `?` has no dispatch handler in overlays yet (Tasks 3+4
+ * carry it), so the pinned chip renders but is inert there for now. */
 const PINNED_IDS = ["help", "quit", "close"];
-/** `view` overlays never carry a rendered `help`/`close` mnemonic in
- * `bindings.chips` — `help` has no MnemonicOption there at all, and `close`
- * (spec §4's "q close in overlays") derives `hidden: true` (viewActions.ts's
- * `CLOSE`), so `buildContextBindings` filters it out of `chips` before this
- * model ever sees it. Spec §3.2's "? help and q close … pinned to the right
- * edge" is universal for every `view` overlay, so it is synthesized here
- * rather than read off bindings (id/key/label never vary by view). */
-const OVERLAY_HELP: FooterChip = {
-  kind: "mnemonic",
-  id: "help",
-  key: "?",
-  label: "help",
-  charIndex: null,
-  guarded: false,
-};
-const OVERLAY_CLOSE: FooterChip = {
-  kind: "mnemonic",
-  id: "close",
-  key: "q",
-  label: "close",
-  charIndex: null,
-  guarded: false,
-};
+function fromMnemonic(d: DerivedMnemonic): FooterChip {
+  return {
+    kind: "mnemonic",
+    id: d.id,
+    key: d.key,
+    label: d.label,
+    charIndex: d.charIndex,
+    guarded: d.guarded,
+  };
+}
 
 const GLYPHS: Record<string, string> = {
   enter: "⏎",
@@ -165,12 +160,12 @@ export function buildFooterRows({
   const label = target.length > TARGET_WIDTH ? `${target.slice(0, TARGET_WIDTH - 1)}…` : target;
   const structural = bindings.chips.filter((c) => c.kind === "structural").map(fromChip);
   const mnemonics = bindings.chips.flatMap((c) => (c.kind === "mnemonic" ? [fromChip(c)] : []));
-  const pinned =
-    context.kind === "main"
-      ? PINNED_IDS.flatMap((id) => mnemonics.filter((m) => m.id === id))
-      : context.kind === "view"
-        ? [OVERLAY_HELP, OVERLAY_CLOSE]
-        : []; // logOverlay's close is its own structural "esc" chip; no pin.
+  // bindings.all is [] for structuralOnly contexts, so this is naturally []
+  // there too — no per-context-kind branching needed (see the PINNED_IDS
+  // docstring above).
+  const pinned = PINNED_IDS.flatMap((id) =>
+    bindings.all.filter((d) => d.id === id).map(fromMnemonic),
+  );
   const verbs = mnemonics.filter((m) => !PINNED_IDS.includes(m.id));
 
   if (context.kind === "structuralOnly" && context.view === "chatCompose") {
@@ -259,11 +254,14 @@ export function footerSegments(chip: FooterChip): Segment[] {
         return [seg(` ${keyGlyph(chip.key)} ${chip.label} `, { pill: true })];
       const i = chip.charIndex;
       const ch = chip.guarded ? chip.label[i]!.toUpperCase() : chip.label[i]!;
+      // Every pill segment carries a literal padding space (leading on the
+      // prefix, trailing on the suffix), so none can ever be empty — unlike
+      // the mnemonic branch below, there is nothing here to filter out.
       return [
         seg(` ${chip.label.slice(0, i)}`, { pill: true }),
         seg(ch, { pill: true, underline: true }),
         seg(`${chip.label.slice(i + 1)} `, { pill: true }),
-      ].filter((x) => x.text !== "");
+      ];
     }
     case "mnemonic": {
       if (chip.charIndex === null)

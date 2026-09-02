@@ -247,6 +247,10 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       "structural:[/]:scroll",
       "structural:esc:back",
     ]);
+    // Verified: useViewActions' "chat" case returns chatHandlers directly,
+    // and useChatInput.ts's chatHandlers already includes `close` (Task-19
+    // chat plan) — real dispatch exists, not just a table entry.
+    expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:close:close"]);
   });
   it("palette / filtering / config / help: structural chips on navigate, actions carries only the label", () => {
     const r = rows({ kind: "structuralOnly", view: "palette" }, { target: "palette" });
@@ -273,6 +277,12 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       "structural:G:bottom",
       "structural:esc:close",
     ]);
+    // Ruling R5: LOG_OVERLAY_OPTIONS now carries a hidden reserved `help`
+    // alongside `close`, so the same bindings.all-derived pinned formula
+    // naturally yields [help, close] here too — `esc` above is still the
+    // clickable close (its own structural chip); this is the "? help"
+    // reminder pinned right, same as every other overlay.
+    expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:close:close"]);
   });
 });
 
@@ -312,6 +322,41 @@ describe("keyGlyph and footerSegments (spec §3.4)", () => {
     });
     expect(segs[0]).toMatchObject({ text: "U", accent: true, underline: true });
   });
+  it("a mnemonic with a mid-label lit letter splits both prefix and suffix", () => {
+    // qu[e]ue: charIndex 2 is neither first nor last, so both the `i > 0`
+    // prefix branch and the `i + 1 < label.length` suffix branch fire.
+    expect(
+      footerSegments({
+        kind: "mnemonic",
+        id: "queue",
+        key: "e",
+        label: "queue",
+        charIndex: 2,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: "qu", accent: false, underline: false, keycap: false, pill: false, dim: false },
+      { text: "e", accent: true, underline: true, keycap: false, pill: false, dim: false },
+      { text: "ue", accent: false, underline: false, keycap: false, pill: false, dim: false },
+    ]);
+  });
+  it("a mnemonic with the lit letter LAST has a prefix but no suffix segment", () => {
+    // cha[t]: charIndex 3 is the last letter of "chat", so `i + 1 <
+    // label.length` (4 < 4) is false — no trailing plain segment.
+    expect(
+      footerSegments({
+        kind: "mnemonic",
+        id: "chat",
+        key: "t",
+        label: "chat",
+        charIndex: 3,
+        guarded: false,
+      }),
+    ).toEqual([
+      { text: "cha", accent: false, underline: false, keycap: false, pill: false, dim: false },
+      { text: "t", accent: true, underline: true, keycap: false, pill: false, dim: false },
+    ]);
+  });
   it("a mnemonic with charIndex null renders the key then the label plain", () => {
     expect(
       footerSegments({
@@ -341,6 +386,22 @@ describe("keyGlyph and footerSegments (spec §3.4)", () => {
       { text: " ", accent: false, underline: false, keycap: false, pill: true, dim: false },
       { text: "c", accent: false, underline: true, keycap: false, pill: true, dim: false },
       { text: "hat ", accent: false, underline: false, keycap: false, pill: true, dim: false },
+    ]);
+  });
+  it("a guarded pill uppercases the lit letter in place", () => {
+    expect(
+      footerSegments({
+        kind: "pill",
+        id: "discard",
+        key: "D",
+        label: "discard",
+        charIndex: 0,
+        guarded: true,
+      }),
+    ).toEqual([
+      { text: " ", accent: false, underline: false, keycap: false, pill: true, dim: false },
+      { text: "D", accent: false, underline: true, keycap: false, pill: true, dim: false },
+      { text: "iscard ", accent: false, underline: false, keycap: false, pill: true, dim: false },
     ]);
   });
   it("a pill with a mid-label lit letter yields the split prefix/suffix segments", () => {

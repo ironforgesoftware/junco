@@ -139,9 +139,18 @@ const BODY_VERBS: Record<MainBody, MnemonicOption[]> = {
 
 // ── overlay contexts ───────────────────────────────────────────────────────
 
-/** Every overlay carries a hidden reserved q → close (esc stays structural). */
-const OVERLAY_RESERVED: ReadonlyMap<string, string> = new Map([["close", "q"]]);
+/** Every overlay carries a hidden reserved q → close (esc stays structural)
+ * and, per Ruling R5 (spec 2026-09-02 §3.2 — `?` is help everywhere except
+ * the help modal itself), a hidden reserved `?` → help. Dispatch for `?` in
+ * overlays is NOT wired here — Tasks 3+4 carry it — so the key is inert for
+ * now; this table entry only makes the footer's pinned "? help" chip real
+ * instead of a footerModel.ts-side fabrication. */
+const OVERLAY_RESERVED: ReadonlyMap<string, string> = new Map([
+  ["close", "q"],
+  ["help", "?"],
+]);
 const CLOSE: MnemonicOption = { id: "close", label: "close", hidden: true };
+const HELP: MnemonicOption = { id: "help", label: "help", hidden: true };
 
 const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
   // Spec 2026-09-02 D7: every overlay with a repo in context gets the chat
@@ -152,17 +161,19 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     { id: "chat", label: "chat" },
     { id: "transcript", label: "transcript" },
     CLOSE,
+    HELP,
   ],
   // Not one of D7's "repo in context" overlays — no chat pill here.
-  repoDetail: [{ id: "browser", label: "browser" }, CLOSE],
-  prs: [{ id: "browser", label: "browser" }, { id: "chat", label: "chat" }, CLOSE],
-  prDetail: [{ id: "browser", label: "browser" }, { id: "chat", label: "chat" }, CLOSE],
+  repoDetail: [{ id: "browser", label: "browser" }, CLOSE, HELP],
+  prs: [{ id: "browser", label: "browser" }, { id: "chat", label: "chat" }, CLOSE, HELP],
+  prDetail: [{ id: "browser", label: "browser" }, { id: "chat", label: "chat" }, CLOSE, HELP],
   review: [
     { id: "all", label: "all" },
     { id: "none", label: "none" },
     { id: "file", label: "file" },
     { id: "discard", label: "discard", guarded: true },
     CLOSE,
+    HELP,
     // Chat-draft verbs (spec 2026-09-01 §8.6), APPENDED so the four above keep
     // the keys their pinned test asserts; these derive s / e / r. `discard`
     // (D) already exists and serves the chat draft too.
@@ -173,11 +184,12 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     // disturbs the keys above.
     { id: "chat", label: "chat" },
   ],
-  cmdOutput: [{ id: "reRun", label: "re-run" }, CLOSE],
+  cmdOutput: [{ id: "reRun", label: "re-run" }, CLOSE, HELP],
   transcript: [
     { id: "thinking", label: "thinking" },
     { id: "follow", label: "follow" },
     CLOSE,
+    HELP,
     // The ticket's checkout repo (spec 2026-09-02 D7) — last, same reasoning.
     { id: "chat", label: "chat" },
   ],
@@ -193,6 +205,7 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     { id: "thinking", label: "thinking" },
     { id: "follow", label: "follow" },
     CLOSE,
+    HELP,
   ],
 };
 
@@ -201,6 +214,7 @@ const LOG_OVERLAY_OPTIONS: MnemonicOption[] = [
   { id: "level", label: "level" },
   { id: "ticket", label: "ticket" },
   CLOSE,
+  HELP,
 ];
 const LOG_OVERLAY_EXCLUDED: ReadonlySet<string> = new Set(["G"]);
 
