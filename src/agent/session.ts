@@ -776,9 +776,14 @@ export function makePiSessionFactory(
       sdkRegistryOps(ModelRuntime, credentials),
       (msg, meta) => log.warn(msg, meta),
     );
+    // modelSetup's registry seam is deliberately SDK-free, so both handles come
+    // back as `unknown` and are re-widened here — the one place that may name
+    // SDK runtime values — to hand straight to createAgentSession.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- opaque SDK handle from the SDK-free registry seam
     const model = resolvedModel.model as any;
     // The SAME runtime resolution ran on — an inline provider registered
     // during the cascade lives on this object, so the session must use it.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- opaque SDK handle from the SDK-free registry seam
     const modelRuntime = resolvedModel.registry.backing as any;
     if (!modelRuntime) {
       throw new Error(
