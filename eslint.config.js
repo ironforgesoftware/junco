@@ -40,12 +40,13 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // targets to useViewActions (openChat/setView/setPane/prDetail/selectedPr)
   // plus the one `chatTarget` line the footer pill and the overlays' own `c`
   // share, −2 from Ruling R7 collapsing the rail-switch effect's condition onto
-  // a `prevRailKey` ref. +6 for Ruling R8 (Task 6 batch, 1,888 → 1,894): the
-  // `chatTarget` call gains `repoDetailTarget` in its options object, which
-  // pushes the call over the printWidth and wraps it onto 8 lines (+7),
-  // less 1 for dropping `resetPalette` from the now-dead `commands` handler's
+  // a `prevRailKey` ref. Net 0 for Ruling R8 (Task 6 batch, stays at 1,888):
+  // the `chatTarget` call gains `repoDetailTarget` in its options object,
+  // hoisted to a named `chatArgs` local (+1) rather than inlined — an inline
+  // 6-field object would have wrapped the call over the printWidth — less 1
+  // for dropping `resetPalette` from the now-dead `commands` handler's
   // useMainActions call.
-  { file: "src/tui/App.tsx", max: 1894 },
+  { file: "src/tui/App.tsx", max: 1888 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

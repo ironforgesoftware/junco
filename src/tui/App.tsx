@@ -1358,14 +1358,8 @@ export function App(props: AppProps): React.JSX.Element {
   // the pill below and the live key agree by construction. `main` is the rail's
   // own reading (the selected row's key), which this helper deliberately does
   // not know.
-  const chatTarget = chatTargetFor(view, {
-    detail,
-    prDetail,
-    selectedPr,
-    transcript,
-    reviewState,
-    repoDetailTarget,
-  });
+  const chatArgs = { detail, prDetail, selectedPr, transcript, reviewState, repoDetailTarget };
+  const chatTarget = chatTargetFor(view, chatArgs);
 
   // ── Derived-mnemonic bindings + the two footer rows (mnemonic spec §2/§4,
   // footer spec 2026-09-02 §6): ONE context table drives the footer, the help
