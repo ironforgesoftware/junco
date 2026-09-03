@@ -223,9 +223,10 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
   const TICKET_46 = githubTicketId("acme/api", 46);
 
   /** chatClient + one issue (#46) and one PR (#12), both on acme/api — the
-   *  rail's OWN first row, so the §8.1 re-subscribe effect (the rail's key wins
-   *  while the chat view is open) never swaps the session out from under the
-   *  prefill. */
+   *  rail's OWN first row, which is also where the prefill cases expect the
+   *  session to be (nothing re-subscribes an open chat any more: the
+   *  chat-scroll brief removed the pane doors and the rail-switch effect with
+   *  them, so a chat stays on the repo it was opened for). */
   function verbClient() {
     const c = chatClient();
     return {
@@ -330,10 +331,13 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
     await until(() => frame(r).includes("chat · acme/api"));
   });
 
-  // ── Ruling R7: the rail switches the session on a MOVE, not on a mismatch ──
-  // `c` from an overlay legitimately opens a chat for a repo the rail is not
-  // parked on; the old effect re-opened the rail's own session on the next
-  // render and threw the prefilled composer away.
+  // ── Ruling R7, now absolute: the rail never switches an open chat's session ──
+  // R7 narrowed the old effect from "any mismatch" to "a rail MOVE"; the
+  // chat-scroll brief deleted the effect outright with the pane doors. `c` from
+  // an overlay opens a chat for a repo the rail is not parked on, and it stays
+  // there — the old behaviour re-opened the rail's own session on the very next
+  // render and threw the prefilled composer away. These two cases are what
+  // stops that regression coming back.
 
   /** chatClient + a per-repo PR stub (only beta/two has one, so the PRs view's
    *  single row is the NON-rail repo and needs no cursor move), a subscribe log,

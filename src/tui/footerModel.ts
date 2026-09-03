@@ -240,9 +240,9 @@ export function buildFooterRows({
     actions = [...pill, ...rest];
   }
   const navRaw = context.kind === "main" ? navigateChips(context, mode) : structural;
-  // Chrome.tsx's Footer computes ONE labelWidth from both rows' labels; this
-  // row's label is always the literal "navigate" past this point (the two
-  // structuralOnly branches above, where it can differ, already returned).
+  // Chrome.tsx's Footer computes ONE labelWidth from both rows' labels, and
+  // every navigate row's label is the literal "navigate" — the structuralOnly
+  // branch above uses it too, so this is the width there as well.
   const labelWidth = Math.max(label.length, "navigate".length);
   const navigate = fitNavigate(navRaw, pinned, labelWidth, columns);
   return {

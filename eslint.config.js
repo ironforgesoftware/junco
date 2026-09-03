@@ -59,12 +59,16 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // paints), then −11 for the pane doors — −3 hook inputs (moveRail,
   // moveRailTo, railCount), −1 for the `chatKey` local, and −7 for Ruling R7's
   // rail-switch effect (the `prevRailKey` ref plus its six effect lines): with
-  // no door there is no in-view rail move to re-subscribe to. Then +10 for the
-  // clickable scrollbar (1,881 → 1,891): `scrollTo` on the useScroll
-  // destructure and the useChatInput call (+1), `onScrollTo` passed to
-  // ChatView and TranscriptView (+2), and the transcript's own follow-pausing
-  // `transcriptScrollTo` useCallback (+7) — a memoized view may only be handed
-  // a STABLE callback, so an inline arrow at either call site is not an option.
+  // no door there is no in-view rail move to re-subscribe to. That floor was
+  // 1,881 — and the clickable scrollbar then spent all 10 lines of it back, so
+  // the pin ends exactly where it started rather than lower: `scrollTo` on the
+  // useScroll destructure and the useChatInput call (+1), `onScrollTo` passed
+  // to ChatView and TranscriptView (+2), and the transcript's own
+  // follow-pausing `transcriptScrollTo` useCallback (+7). That last one is the
+  // whole trade: a memoized view may only be handed a STABLE callback (perf
+  // #259, pinned by tests/renderPerf.test.tsx), so the inline arrow that would
+  // have cost 1 line is not an option. Lowering this further is the render
+  // body's extraction (#387), not shaving these.
   { file: "src/tui/App.tsx", max: 1891 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
