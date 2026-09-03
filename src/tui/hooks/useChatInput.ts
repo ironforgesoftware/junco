@@ -3,15 +3,18 @@ import type { MutableRefObject } from "react";
 import type { Key } from "ink";
 import type { DashboardClient } from "../ghClient.js";
 import type { ToastKind } from "../theme.js";
-import type { Pane, View } from "../App.js";
+import type { View } from "../App.js";
 import type { ChatApi } from "./useChat.js";
 import type { ChatDraftActions } from "./useChatDrafts.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
 
 export interface ChatInputDeps {
-  /** Nav spine, read-only (App owns it) — the cascade is inert off the view. */
+  /** Nav spine, read-only (App owns it) — the cascade is inert off the view.
+   * The PANE is deliberately not an input: the chat view is full-screen and
+   * owns its keys by view alone, so the pane the operator came from stays
+   * untouched for `esc` to return them to (QA 2026-09-03 — every door used
+   * to force pane 2 and `close` left it there). */
   view: View;
-  pane: Pane;
   chatApi: ChatApi;
   chatDraftActions: ChatDraftActions;
   /** For /pr and /issue — prContext/issueContext only. */
@@ -21,7 +24,6 @@ export interface ChatInputDeps {
   /** The watched nwo behind the selected row; /pr and /issue need it. */
   currentNwo: string | undefined;
   setView: (v: View) => void;
-  setPane: (p: Pane) => void;
   scrollBy: (delta: number) => void;
   scrollTo: (offset: number) => void;
   toEnd: () => void;
@@ -68,7 +70,6 @@ function issueNumber(arg: string | undefined): number | null {
  */
 export function useChatInput({
   view,
-  pane,
   chatApi,
   chatDraftActions,
   client,
@@ -76,7 +77,6 @@ export function useChatInput({
   showToast,
   currentNwo,
   setView,
-  setPane,
   scrollBy,
   scrollTo,
   toEnd,
@@ -234,14 +234,12 @@ export function useChatInput({
       }
       scrollBy(-rows);
     };
-    // `pane === 2` is half the condition on purpose: ChatView hands the
-    // Composer `focused && composerFocused`, so its useGuardedInput is live
-    // only while the CHAT pane holds the focus. Reading `composerFocused`
-    // alone here would claim the keys for a hook that isn't listening —
-    // every key swallowed, nothing typed, only esc out. Every door into the
-    // chat takes pane 2 with it (useMainActions/useViewActions both
-    // `setPane(2)`), so this is defence in depth rather than a live state.
-    if (chat.composerFocused && pane === 2) {
+    // `composerFocused` alone is the condition: App mounts ChatView only
+    // while it is the view and hands the Composer `focused` unconditionally,
+    // so its useGuardedInput is live exactly when this flag is set. (The pane
+    // used to be the other half, back when the rail doors could move it
+    // under an open chat; the chat-scroll brief removed those doors.)
+    if (chat.composerFocused) {
       // PgUp/PgDn are not text — the Composer ignores them (its typing branch
       // needs a non-empty `input`, and ink reports both as ""), so they stay
       // the transcript's page keys while the composer holds the focus: read
@@ -262,14 +260,7 @@ export function useChatInput({
     // the nav spine" no longer holds here: the view is full-screen, the rail
     // is not painted, and a chat is opened fresh by `c`.
     if (key.escape) return took(close);
-    // `i` composes — which means the CHAT pane, not just the composer flag:
-    // setting the flag without taking the pane back would leave the Composer's
-    // hook inactive (see the pane check above).
-    if (input === "i")
-      return took(() => {
-        focusComposer(true);
-        setPane(2);
-      });
+    if (input === "i") return took(() => focusComposer(true));
     // `tab` walks the CARDS (this brief supersedes spec §8.3's pane door):
     // ↑/↓ scroll now, so the anchor cursor needs a key of its own. Ink reports
     // shift+tab as `tab` with the shift modifier set. With no anchors

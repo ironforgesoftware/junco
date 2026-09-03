@@ -76,9 +76,12 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // ack that commits the painted start is App's for the ticket transcript —
   // `ackReveal` on the useTranscript destructure (+1), the stable
   // `transcriptReveal` useCallback (+7, the memoized-view rule again), and
-  // `onReveal` on both views (+2). Lowering this further is the render body's
+  // `onReveal` on both views (+2). −3 for the chat's pane decoupling (same
+  // day, 1,904 → 1,901): the full-screen chat view owns its keys by view, so
+  // `pane`/`setPane` leave the useChatInput call and `setPane` leaves the
+  // useViewActions call. Lowering this further is the render body's
   // extraction (#387), not shaving these.
-  { file: "src/tui/App.tsx", max: 1904 },
+  { file: "src/tui/App.tsx", max: 1901 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

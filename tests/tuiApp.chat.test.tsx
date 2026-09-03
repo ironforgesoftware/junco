@@ -179,6 +179,26 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     await until(() => r.lastFrame()!.includes("esc blur/abort"));
   });
 
+  // QA 2026-09-03: every door forced pane 2 (the Composer's hook was gated on
+  // it) and `close` restored only the view, so a chat opened from the rail
+  // dropped you on the issue list.
+  it("closing a chat opened from the rail returns to the rail, not the issue list", async () => {
+    const c = chatClient();
+    const r = renderApp({ client: c.client });
+    await until(() => r.lastFrame()!.includes(LOADED));
+    const railFooter = (): boolean => /→ {2}issues/.test(r.lastFrame() ?? ""); // pane 1's navigate row
+    expect(railFooter()).toBe(true);
+    r.stdin.write("c");
+    await until(() => r.lastFrame()!.includes("chat · acme/api"));
+    r.stdin.write("quit"); // typed prose still reaches the composer with no pane switch
+    await until(() => r.lastFrame()!.includes("quit"));
+    r.stdin.write("\x1b"); // blur
+    await until(() => r.lastFrame()!.includes("i compose"));
+    r.stdin.write("\x1b"); // leave
+    await until(() => !r.lastFrame()!.includes("chat · acme/api"));
+    expect(railFooter()).toBe(true);
+  });
+
   // The live bug (QA 2026-09-03): with a card near the top and a long answer
   // below it, one ↑ from the tail jumped to the card and ↓ then did nothing —
   // bodyWindow re-nudged the window onto the cursor's anchor on every render.

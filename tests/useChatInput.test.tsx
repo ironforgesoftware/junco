@@ -17,7 +17,7 @@ import {
 import type { ChatApi, ChatState } from "../src/tui/hooks/useChat.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
-import type { Pane, View } from "../src/tui/App.js";
+import type { View } from "../src/tui/App.js";
 import { okv, stubClient } from "./helpers/localFixtures.js";
 import { until } from "./helpers/until.js";
 
@@ -90,7 +90,6 @@ function mount(
   o: {
     chat?: ChatState | null;
     view?: View;
-    pane?: Pane;
     currentNwo?: string;
     draft?: PendingDraft | null;
     prContextFails?: boolean;
@@ -127,7 +126,6 @@ function mount(
   };
   const deps: ChatInputDeps = {
     view: o.view ?? "chat",
-    pane: o.pane ?? 2,
     chatApi,
     chatDraftActions: {
       submit: async (d) => void calls.push(`submit:${d.id}`),
@@ -140,7 +138,6 @@ function mount(
     showToast: (kind, text) => void calls.push(`toast:${kind}:${text}`),
     currentNwo: o.currentNwo,
     setView: (v) => void calls.push(`view:${v}`),
-    setPane: (p) => void calls.push(`pane:${p}`),
     scrollBy: (d) => void calls.push(`scroll:${d}`),
     scrollTo: (o) => void calls.push(`scrollTo:${o}`),
     toEnd: rec("toEnd"),
@@ -182,15 +179,15 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     expect(t.calls).toEqual([]);
   });
 
-  it("the composer only owns the keys while the CHAT pane holds the focus", () => {
-    // Defence in depth: ChatView hands the Composer `focused &&
-    // composerFocused`, so with pane 1 focused its useGuardedInput is inactive
-    // — reading `composerFocused` alone here would claim every key for a hook
-    // that isn't listening. The cascade must read that state as blurred.
-    const h = mount({ chat: chatState({ composerFocused: true }), pane: 1 });
+  it("the composer owns the keys whenever it is focused — the pane is not consulted", () => {
+    // The chat view is full-screen: ChatView is mounted only while it is the
+    // view, and its Composer is live whenever `composerFocused`. The pane the
+    // operator came from is not part of the condition (it used to be, which
+    // is why every door forced pane 2 and `esc` left you on the issue list).
+    const h = mount({ chat: chatState({ composerFocused: true }) });
     expect(h.api.handleChatKey("j", K())).toBe(true);
     h.api.handleChatKey("i", K());
-    expect(h.calls).toEqual(["scroll:1", "focus:true", "pane:2"]);
+    expect(h.calls).toEqual([]); // swallowed for the Composer's own hook; no pane change
   });
 
   it("blurred: ↑/↓ (and j/k, [/]) scroll the transcript a row at a time", () => {
@@ -210,10 +207,7 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     api.handleChatKey("", K({ end: true }));
     api.handleChatKey("", K({ home: true }));
     expect(h.calls).toEqual([
-      // `i` takes the pane back with the focus (the Composer's hook is gated
-      // on both), which is why this reads as two calls.
       "focus:true",
-      "pane:2",
       "scroll:1",
       "scroll:-1",
       "scroll:1",

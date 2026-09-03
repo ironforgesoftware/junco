@@ -1323,7 +1323,6 @@ export function App(props: AppProps): React.JSX.Element {
   // is opened fresh by `c` and stays on the repo it was opened for. ──
   const { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo, onReveal } = useChatInput({
     view,
-    pane,
     chatApi,
     chatDraftActions,
     client,
@@ -1331,7 +1330,6 @@ export function App(props: AppProps): React.JSX.Element {
     showToast,
     currentNwo,
     setView,
-    setPane,
     scrollBy,
     scrollTo,
     toEnd,
@@ -1486,7 +1484,6 @@ export function App(props: AppProps): React.JSX.Element {
     openIssueTranscript,
     openChat,
     setView,
-    setPane,
   });
   const mainActions = useMainActions({
     client,
@@ -2501,7 +2498,7 @@ export function App(props: AppProps): React.JSX.Element {
             scroll={scroll}
             height={listHeight}
             width={size.columns}
-            focused={pane === 2}
+            focused
             onScrollMax={onScrollMax}
             onRowPress={chatRowPress}
             onScrollTo={onScrollTo}
