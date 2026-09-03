@@ -11,7 +11,14 @@ import {
 
 const rows = (
   context: BindingContext,
-  over: { target?: string; chatReachable?: boolean; mode?: "wide" | "medium" } = {},
+  over: {
+    target?: string;
+    chatReachable?: boolean;
+    mode?: "wide" | "medium";
+    /** Default 200: wide enough that Ruling R10's fitting never engages
+     * unless a test deliberately narrows it. */
+    columns?: number;
+  } = {},
 ) =>
   buildFooterRows({
     context,
@@ -19,6 +26,7 @@ const rows = (
     target: over.target ?? "acme/api",
     chatReachable: over.chatReachable ?? true,
     mode: over.mode ?? "wide",
+    columns: over.columns ?? 200,
   });
 const texts = (chips: FooterChip[]): string[] =>
   chips.map((c) => (c.kind === "separator" ? "│" : `${c.kind}:${c.id}:${c.label}`));
@@ -114,15 +122,60 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "structural:,:config",
     ]);
   });
-  it("medium width drops g/G, : and , from navigate and nothing from actions", () => {
-    const r = rows({ kind: "main", body: "issues", pane: 2 }, { mode: "medium" });
+  it("medium width (100 cols) drops , and : from navigate and nothing from actions", () => {
+    // Ruling R10: NAV_DROP_MEDIUM/mode-gated dropping is gone — `columns`
+    // drives it now. `mode: "medium"` here is only for the `← repos` label
+    // (spec: `←/→ panes` in wide, `← repos` otherwise). At 100 columns the
+    // fit needs only the first two NAV_DROP_ORDER entries ("," then ":") to
+    // get under budget — "g/G" stays, unlike the old fixed mode-gated drop
+    // (always all three) this test pinned before R10. Verified by computing
+    // `rows(...)` at columns 60..200 in 1-column steps and reading off the
+    // exact threshold where each entry drops (fix round 2 report).
+    const r = rows({ kind: "main", body: "issues", pane: 2 }, { mode: "medium", columns: 100 });
     expect(texts(r.navigate.chips)).toEqual([
       "structural:↑/↓:move",
       "structural:←:repos",
       "structural:enter:preview",
       "structural:/:filter",
+      "structural:g/G:first/last",
     ]);
     expect(r.actions.chips[0]!.kind).toBe("pill");
+  });
+  it("Ruling R10: 112 columns (wide, issues pane 2) drops exactly ,", () => {
+    const r = rows({ kind: "main", body: "issues", pane: 2 }, { columns: 112 });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←/→:panes",
+      "structural:enter:preview",
+      "structural:/:filter",
+      "structural:g/G:first/last",
+      "structural:::palette",
+    ]);
+  });
+  it("Ruling R10: 200 columns (wide, issues pane 2) drops nothing", () => {
+    const r = rows({ kind: "main", body: "issues", pane: 2 }, { columns: 200 });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←/→:panes",
+      "structural:enter:preview",
+      "structural:/:filter",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+  });
+  it("Ruling R10: a row that cannot fit even after all four drops overflows untouched (review overlay, 60 cols)", () => {
+    // review's own structural vocabulary (↑/↓ move, ⏎ open/file, space
+    // toggle, esc back) shares no key with NAV_DROP_ORDER, so all four
+    // attempted drops are no-ops — the row is left exactly as derived, and
+    // Chrome.tsx's overflow="hidden" clips it visually (never wraps).
+    const r = rows({ kind: "view", view: "review" }, { columns: 60 });
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:enter:open/file",
+      "structural:space:toggle",
+      "structural:esc:back",
+    ]);
   });
   it("the target label is truncated to TARGET_WIDTH", () => {
     const r = rows({ kind: "main", body: "issues", pane: 1 }, { target: "x".repeat(40) });
@@ -197,6 +250,7 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       target: "logs",
       chatReachable: false,
       mode: "wide",
+      columns: 200,
     });
     expect(texts(r.actions.chips)).toEqual(["mnemonic:flush:flush"]);
   });
@@ -472,5 +526,6 @@ const _typeCheck: FooterInput = {
   target: "logs",
   chatReachable: false,
   mode: "wide",
+  columns: 200,
 };
 void _typeCheck;

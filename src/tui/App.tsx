@@ -1386,6 +1386,7 @@ export function App(props: AppProps): React.JSX.Element {
     filtering,
     composerFocused,
     mode: layout.mode,
+    columns: size.columns,
     target: crumbs[crumbs.length - 1] ?? "",
     chatReachable: view === "main" ? currentRepoKey !== null : chatTarget !== null,
     helpContext: helpCtx.current,

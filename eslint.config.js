@@ -45,8 +45,11 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // hoisted to a named `chatArgs` local (+1) rather than inlined — an inline
   // 6-field object would have wrapped the call over the printWidth — less 1
   // for dropping `resetPalette` from the now-dead `commands` handler's
-  // useMainActions call.
-  { file: "src/tui/App.tsx", max: 1888 },
+  // useMainActions call. +1 for Ruling R10 (Task 2 fix round 2, stays a
+  // single line): `useFooterBindings` gains `columns: size.columns` so
+  // `buildFooterRows` can fit the navigate row to the terminal width instead
+  // of a fixed medium/wide breakpoint (1,888 → 1,889).
+  { file: "src/tui/App.tsx", max: 1889 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

@@ -26,6 +26,7 @@ const base: FooterBindingsInput = {
   filtering: false,
   composerFocused: false,
   mode: "wide",
+  columns: 120,
   target: "acme/api",
   chatReachable: true,
   helpContext: null,
@@ -46,6 +47,28 @@ describe("useFooterBindings", () => {
     // The navigate row is the main body's structural vocabulary, ? help and
     // q quit pinned right (footerModel's PINNED_IDS off `bindings.all`).
     expect(r.footer.navigate.pinned.map((c) => c.id)).toEqual(["help", "quit"]);
+  });
+  it("Ruling R10: columns flows through to buildFooterRows and narrows the navigate row", () => {
+    const wideR = run(base); // columns: 120 (base) — nothing dropped at pane 1
+    expect(wideR.footer.navigate.chips.map((c) => c.key)).toEqual([
+      "↑/↓",
+      "→",
+      "enter",
+      "g/G",
+      ":",
+      ",",
+    ]);
+    const narrowR = run({ ...base, columns: 100 });
+    // Verified against buildFooterRows directly (fix round 2 report): pane
+    // 1's row is shorter than pane 2's (no / filter, no ←/→ panes), so at
+    // 100 columns it needs only the first NAV_DROP_ORDER entry (",") gone.
+    expect(narrowR.footer.navigate.chips.map((c) => c.key)).toEqual([
+      "↑/↓",
+      "→",
+      "enter",
+      "g/G",
+      ":",
+    ]);
   });
   it("the chat view splits on composer focus; a focused composer derives an empty keymap", () => {
     expect(run({ ...base, view: "chat", composerFocused: true }).bindings.keymap.size).toBe(0);

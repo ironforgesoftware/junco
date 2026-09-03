@@ -9,7 +9,7 @@ import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { until, fireUntil, wait } from "./helpers/until.js";
 import { renderWide, cleanupWide } from "./helpers/renderWide.js";
 import { buildContextBindings, type BindingContext } from "../src/tui/viewActions.js";
-import { buildFooterRows } from "../src/tui/footerModel.js";
+import { buildFooterRows, rowWidth } from "../src/tui/footerModel.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
 
@@ -477,19 +477,20 @@ describe("Footer (two rows, spec 2026-09-02 §3)", () => {
 describe("Footer with the REAL derived rows (wide, pinned chips past col 100)", () => {
   afterEach(cleanupWide);
 
-  const rowsFor = (context: BindingContext, target: string) =>
+  const rowsFor = (context: BindingContext, target: string, columns: number) =>
     buildFooterRows({
       context,
       bindings: buildContextBindings(context, "wide"),
       target,
       chatReachable: true,
       mode: "wide",
+      columns,
     });
 
   const navigateLine = (context: BindingContext, target: string, columns: number): string => {
     const r = renderWide(
       <Box width={columns} flexDirection="column">
-        <Footer rows={rowsFor(context, target)} toast={null} />
+        <Footer rows={rowsFor(context, target, columns)} toast={null} />
       </Box>,
       columns,
     );
@@ -522,12 +523,81 @@ describe("Footer with the REAL derived rows (wide, pinned chips past col 100)", 
     }
   });
 
-  it("clips from the right when the row genuinely does not fit", () => {
-    // The wide vocabulary needs 117 columns; at 108 the row overflows, so the
-    // LAST pinned chip is clipped away rather than wrapped onto a third line.
+  // Pre-Ruling-R10 this pinned the BUG: at 108 columns the row used to
+  // overflow and the renderer clipped `quit` away outright. R10 fixes it by
+  // dropping just enough of NAV_DROP_ORDER (here, only ",") that the pinned
+  // chips never get clipped — this test now pins the FIX.
+  it("Ruling R10: 108 columns no longer clips quit — the row drops just enough (,) to fit", () => {
     const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 108);
-    expect(nav.length).toBeLessThanOrEqual(108);
     expect(nav).toContain("? help");
+    expect(nav).toContain("quit");
+    // Only the lowest-priority entry needed to go; g G and : both survive.
+    expect(nav).toContain("g G");
+    expect(nav).toContain("palette");
+    expect(nav).not.toContain("config"); // "," (config) is the one dropped
+  });
+
+  it("clips from the right when the row genuinely does not fit (60 columns)", () => {
+    // Even after all four NAV_DROP_ORDER entries, the remaining chips (move /
+    // panes / preview / filter) plus the pinned run still don't fit 60 —
+    // Chrome.tsx's overflow="hidden" clips it, never wraps to a third line.
+    const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 60);
+    expect(nav.length).toBeLessThanOrEqual(60);
     expect(nav).not.toContain("quit");
+  });
+});
+
+// rowWidth (footerModel.ts, Ruling R10) estimates a row's rendered width
+// PURELY so buildFooterRows can decide what to drop before Chrome.tsx ever
+// renders it — so the estimate must match the real renderer exactly, not
+// just be internally consistent. Pinned against one real context's navigate
+// row: undropped (columns wide enough that Ruling R10's fitting drops
+// nothing), so `rowWidth` measures the SAME chips this test then renders.
+describe("rowWidth pinned against the real renderer (Ruling R10)", () => {
+  afterEach(cleanupWide);
+
+  const context: BindingContext = { kind: "main", body: "issues", pane: 2 };
+  const undropped = buildFooterRows({
+    context,
+    bindings: buildContextBindings(context, "wide"),
+    target: "acme/api",
+    chatReachable: true,
+    mode: "wide",
+    columns: 300, // wide enough that Ruling R10's fitting drops nothing
+  });
+  const labelWidth = Math.max(undropped.actions.label.length, undropped.navigate.label.length);
+  const width = rowWidth(undropped.navigate, labelWidth);
+
+  const renderAt = (columns: number): string => {
+    const r = renderWide(
+      <Box width={columns} flexDirection="column">
+        <Footer rows={undropped} toast={null} />
+      </Box>,
+      columns,
+    );
+    return (r.lastFrame() ?? "").split("\n")[1] ?? "";
+  };
+
+  // ink-testing-library's frame trims EACH line's trailing whitespace before
+  // handing it back, so the rendered STRING's length always reads 3 short of
+  // `rowWidth`: the last pinned chip's own `marginRight={2}` plus the row's
+  // `paddingRight` (from `paddingX={1}`) are real, occupied columns — Yoga
+  // reserves them so the row overflows exactly at `rowWidth` — but they are
+  // blank, so the trimmed string never shows them. `TRAILING_BLANK` names
+  // that gap once instead of asserting a bare "3" here and never explaining
+  // it: it is not a fudge factor, it is `rowWidth`'s own last-chip marginRight
+  // (2) plus the row's paddingRight (1), the exact two terms this file's own
+  // header comment says the estimate counts.
+  const TRAILING_BLANK = 2 + 1;
+
+  it("rowWidth is exactly the column count where the row's last character stops fitting", () => {
+    // At rowWidth (and TRAILING_BLANK short of it) every character up to and
+    // including pinned's last ("quit"'s "t") is present.
+    expect(renderAt(width)).toMatch(/quit$/);
+    expect(renderAt(width - TRAILING_BLANK)).toMatch(/quit$/);
+    // One column narrower still, "quit" itself starts losing characters —
+    // proof this is the real clipping boundary, not more trimmed padding.
+    expect(renderAt(width - TRAILING_BLANK - 1)).not.toMatch(/quit$/);
+    expect(renderAt(width - TRAILING_BLANK - 1)).toContain("qui");
   });
 });

@@ -7,6 +7,12 @@
  * asserted here, never from ANSI-stripped frames. Dispatch keys are the
  * Chip.key STRINGS (chipActions maps structural chips by key); `keyGlyph`
  * only changes what is drawn.
+ *
+ * Ruling R10 (fix round 2): spec §3.2's "below 110 columns, drop g G / : / ,"
+ * is superseded — the navigate row fits ITSELF to `columns` (`rowWidth` +
+ * `NAV_DROP_ORDER`), because the row can overflow the terminal above 110
+ * columns too (its content depends on the context, not just the breakpoint).
+ * `mode` stays in `FooterInput` only for the `←/→ panes` vs `← repos` label.
  */
 import type { BindingContext, Chip, ContextBindings, MainBody } from "./viewActions.js";
 import type { DerivedMnemonic } from "./mnemonics.js";
@@ -40,11 +46,15 @@ export interface FooterInput {
   /** A repo is in context → the chat pill renders; else it is absent. */
   chatReachable: boolean;
   mode: LayoutMode;
+  /** Terminal width — the navigate row fits itself to this (Ruling R10). */
+  columns: number;
 }
 
 export const TARGET_WIDTH = 16;
-/** Navigate chips dropped below WIDE_COLS (they stay in the keymap + help). */
-export const NAV_DROP_MEDIUM: ReadonlySet<string> = new Set(["g/G", ":", ","]);
+/** Navigate chips dropped, in this order, one at a time, until the row fits
+ * `columns` (Ruling R10) — they stay in the keymap + help regardless. Keyed
+ * on dispatch key, not id: every chip here is structural. */
+export const NAV_DROP_ORDER: readonly string[] = [",", ":", "g/G", "[/]"];
 const SEP: FooterChip = {
   kind: "separator",
   id: "|",
@@ -136,13 +146,11 @@ function navigateChips(
 ): FooterChip[] {
   const { body, pane } = context;
   const common = [s("g/G", "first/last"), s(":", "palette"), s(",", "config")];
-  const out =
-    pane === 1
-      ? [s("↑/↓", "move"), s("→", "issues"), s("enter", "detail"), ...common]
-      : pane === 3
-        ? [s("↑/↓", "move"), s("enter", "detail"), s("←", "issues"), ...common]
-        : [...mainBodyNav(body, mode), ...common];
-  return mode === "medium" ? out.filter((c) => !NAV_DROP_MEDIUM.has(c.key)) : out;
+  return pane === 1
+    ? [s("↑/↓", "move"), s("→", "issues"), s("enter", "detail"), ...common]
+    : pane === 3
+      ? [s("↑/↓", "move"), s("enter", "detail"), s("←", "issues"), ...common]
+      : [...mainBodyNav(body, mode), ...common];
 }
 function mainBodyNav(body: MainBody, mode: LayoutMode): FooterChip[] {
   switch (body) {
@@ -173,6 +181,7 @@ export function buildFooterRows({
   target,
   chatReachable,
   mode,
+  columns,
 }: FooterInput): FooterRows {
   const label = target.length > TARGET_WIDTH ? `${target.slice(0, TARGET_WIDTH - 1)}…` : target;
   const structural = bindings.chips.filter((c) => c.kind === "structural").map(fromChip);
@@ -235,11 +244,34 @@ export function buildFooterRows({
   } else {
     actions = [...pill, ...rest];
   }
-  const navigate = context.kind === "main" ? navigateChips(context, mode) : structural;
+  const navRaw = context.kind === "main" ? navigateChips(context, mode) : structural;
+  // Chrome.tsx's Footer computes ONE labelWidth from both rows' labels; this
+  // row's label is always the literal "navigate" past this point (the two
+  // structuralOnly branches above, where it can differ, already returned).
+  const labelWidth = Math.max(label.length, "navigate".length);
+  const navigate = fitNavigate(navRaw, pinned, labelWidth, columns);
   return {
     actions: { label, chips: actions, pinned: [] },
     navigate: { label: "navigate", chips: navigate, pinned },
   };
+}
+
+/** Ruling R10: drops `NAV_DROP_ORDER` keys one at a time — a no-op for a key
+ * absent from `chips` (an overlay's own vocabulary rarely has one) — until
+ * the row fits `columns`, or the list is exhausted (the renderer clips the
+ * rest from the right; it never wraps). */
+function fitNavigate(
+  chips: FooterChip[],
+  pinned: FooterChip[],
+  labelWidth: number,
+  columns: number,
+): FooterChip[] {
+  let out = chips;
+  for (const key of NAV_DROP_ORDER) {
+    if (rowWidth({ label: "navigate", chips: out, pinned }, labelWidth) <= columns) break;
+    out = out.filter((c) => c.key !== key);
+  }
+  return out;
 }
 
 export interface Segment {
@@ -292,4 +324,22 @@ export function footerSegments(chip: FooterChip): Segment[] {
       ];
     }
   }
+}
+
+/** Estimates one footer row's rendered width exactly as Chrome.tsx's
+ * `FooterLine`/`ChipRun` lay it out (Ruling R10): `paddingX={1}` (both
+ * sides), the label slot (`labelWidth`, `marginRight={2}`), then each run's
+ * chips — `footerSegments` text length summed (keycap/pill padding spaces
+ * are already part of those strings) plus `marginRight={2}` PER chip,
+ * pinned included since it renders as a second `ChipRun`. The `flexGrow`
+ * spacer between the two runs contributes nothing: with no content of its
+ * own it shrinks to 0 whenever the row is tight, which is exactly the case
+ * this function exists to detect. A test pins this against a `renderWide`
+ * frame's real line length so the estimate cannot drift from the renderer. */
+export function rowWidth(row: FooterRow, labelWidth: number): number {
+  const runWidth = (chips: FooterChip[]): number => chips.reduce((n, c) => n + chipWidth(c) + 2, 0);
+  return 2 + (labelWidth + 2) + runWidth(row.chips) + runWidth(row.pinned);
+}
+function chipWidth(chip: FooterChip): number {
+  return footerSegments(chip).reduce((n, seg2) => n + seg2.text.length, 0);
 }

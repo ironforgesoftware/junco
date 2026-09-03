@@ -26,6 +26,8 @@ export interface FooterBindingsInput {
   filtering: boolean;
   composerFocused: boolean;
   mode: LayoutMode;
+  /** Terminal width — the navigate row fits itself to this (Ruling R10). */
+  columns: number;
   /** Row-1 target (App's crumbs' last element). */
   target: string;
   /** A repo is in context → the chat pill renders. */
@@ -57,6 +59,7 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     filtering,
     composerFocused,
     mode,
+    columns,
     target,
     chatReachable,
     helpContext,
@@ -108,8 +111,9 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     [helpContext, body, pane, mode],
   );
   const footer = useMemo(
-    () => buildFooterRows({ context: bindingContext, bindings, target, chatReachable, mode }),
-    [bindingContext, bindings, target, chatReachable, mode],
+    () =>
+      buildFooterRows({ context: bindingContext, bindings, target, chatReachable, mode, columns }),
+    [bindingContext, bindings, target, chatReachable, mode, columns],
   );
   return { bindingContext, bindings, helpBindings, footer };
 }
