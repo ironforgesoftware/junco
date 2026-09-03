@@ -237,8 +237,9 @@ export function useMainActions({
               ? { composer: `/pr ${pr.number}` }
               : undefined,
         );
+        // The pane stays put: the chat view is full-screen and owns its keys
+        // by view, and `esc` returns the operator to the pane they left.
         setView("chat");
-        setPane(2);
       },
       // `t` on an ISSUE row (#330): the transcript of the ticket the bridge
       // built for it. The ISSUES BODY derives this verb — the keymap carries
@@ -255,7 +256,6 @@ export function useMainActions({
       openChat,
       openIssueTranscript,
       setView,
-      setPane,
       githubSetRefreshing,
       githubRefreshAll,
       selectedRow,

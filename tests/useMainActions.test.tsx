@@ -190,12 +190,14 @@ describe("useMainActions — the main view's action table", () => {
   // Spec 2026-09-02 §5: `c` is pane-aware the way `o` (browser) is — the rail
   // opens the bare session, the issue list and pane 3 prefill the thread the
   // cursor is on. Nothing is SENT: the operator still owns the send key.
-  it("chat opens the selected row's session and focuses the chat pane, or toasts on a system row", () => {
+  it("chat opens the selected row's session and leaves the pane alone, or toasts on a system row", () => {
     const { api, spies, unmount } = mount({ pane: 1 });
     api["chat"]?.();
     expect(spies.openChat).toHaveBeenCalledWith("acme/widgets", undefined);
     expect(spies.setView).toHaveBeenCalledWith("chat");
-    expect(spies.setPane).toHaveBeenCalledWith(2);
+    // The chat view is full-screen and owns its keys by view, not pane; the
+    // pane stays where the operator left it, so `esc` returns them there.
+    expect(spies.setPane).not.toHaveBeenCalled();
     unmount();
     const sys = mount({ currentRepoKey: null });
     sys.api["chat"]?.();

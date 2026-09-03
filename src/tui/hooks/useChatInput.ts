@@ -3,15 +3,19 @@ import type { MutableRefObject } from "react";
 import type { Key } from "ink";
 import type { DashboardClient } from "../ghClient.js";
 import type { ToastKind } from "../theme.js";
-import type { Pane, View } from "../App.js";
+import type { View } from "../App.js";
 import type { ChatApi } from "./useChat.js";
 import type { ChatDraftActions } from "./useChatDrafts.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
+import { useFollowLatch } from "../useFollowLatch.js";
 
 export interface ChatInputDeps {
-  /** Nav spine, read-only (App owns it) — the cascade is inert off the view. */
+  /** Nav spine, read-only (App owns it) — the cascade is inert off the view.
+   * The PANE is deliberately not an input: the chat view is full-screen and
+   * owns its keys by view alone, so the pane the operator came from stays
+   * untouched for `esc` to return them to (QA 2026-09-03 — every door used
+   * to force pane 2 and `close` left it there). */
   view: View;
-  pane: Pane;
   chatApi: ChatApi;
   chatDraftActions: ChatDraftActions;
   /** For /pr and /issue — prContext/issueContext only. */
@@ -21,7 +25,6 @@ export interface ChatInputDeps {
   /** The watched nwo behind the selected row; /pr and /issue need it. */
   currentNwo: string | undefined;
   setView: (v: View) => void;
-  setPane: (p: Pane) => void;
   scrollBy: (delta: number) => void;
   scrollTo: (offset: number) => void;
   toEnd: () => void;
@@ -42,6 +45,14 @@ export interface ChatInputApi {
    * (ChatView is memoized) and follow-pausing — a jump under `follow` would
    * otherwise snap straight back to the tail. */
   onScrollTo(offset: number): void;
+  /** ChatView's reveal ack: the window painted a cursor move's nudge at
+   * `start` — commit it as the scroll offset and clear the owed reveal, so the
+   * next render paints the same window from `scroll` alone. Stable. */
+  onReveal(start: number): void;
+  /** The chat's follow latch (useFollowLatch) for App's wheel handler — the
+   * wheel pauses through the SAME latch the keys use, so a burst of notches
+   * pauses once and then scrolls. Stable. */
+  pauseFollow(): boolean;
 }
 
 /** A slash command's issue/PR number: digits and nothing else, so `/pr 7abc`
@@ -64,7 +75,6 @@ function issueNumber(arg: string | undefined): number | null {
  */
 export function useChatInput({
   view,
-  pane,
   chatApi,
   chatDraftActions,
   client,
@@ -72,7 +82,6 @@ export function useChatInput({
   showToast,
   currentNwo,
   setView,
-  setPane,
   scrollBy,
   scrollTo,
   toEnd,
@@ -84,6 +93,7 @@ export function useChatInput({
   const {
     chat,
     abort,
+    ackReveal,
     clearError,
     closeChat,
     focusComposer,
@@ -95,7 +105,17 @@ export function useChatInput({
     toggleExpanded,
     toggleThinking,
   } = chatApi;
-  const follow = chat?.follow ?? false;
+  // Pausing lands at the tail first (the transcript view's and the log
+  // overlay's shared recipe): without the jump the paused window would fall
+  // back to a stale offset — usually 0, i.e. a jump to the top. Latched, so a
+  // held `k` replayed inside one closure pauses once and then steps.
+  const latch = useFollowLatch(chat?.follow ?? false, {
+    pause: () => {
+      toEnd();
+      setFollow(false);
+    },
+    resume: () => setFollow(true),
+  });
 
   // Ruling R32: useChat records the last POST failure on `error`, and this
   // hook owns the toast, so this is where it becomes visible — a failed
@@ -130,14 +150,12 @@ export function useChatInput({
       discard: onDraft(chatDraftActions.discard),
       thinking: toggleThinking,
       follow: () => {
-        // Pausing lands at the tail first (the transcript view's and the log
-        // overlay's shared recipe, and `[` below): without it the window would
-        // fall back to a stale offset — usually 0, i.e. a jump to the top.
-        if (follow) toEnd();
-        setFollow(!follow);
+        // Through the latch, so a replayed "ff" toggles twice (off, on) rather
+        // than reading the same stale `follow` on both passes.
+        if (!latch.pause()) latch.resume();
       },
     };
-  }, [close, selectedDraft, showToast, chatDraftActions, toggleThinking, setFollow, follow, toEnd]);
+  }, [close, selectedDraft, showToast, chatDraftActions, toggleThinking, latch]);
 
   const onComposerSubmit = useCallback(
     (raw: string): void => {
@@ -197,6 +215,15 @@ export function useChatInput({
     },
     [setFollow, scrollTo],
   );
+  // No `setFollow(false)` here: the cursor move that owed the reveal already
+  // paused follow, and the ack must not re-touch state it did not change.
+  const onReveal = useCallback(
+    (start: number): void => {
+      scrollTo(start);
+      ackReveal();
+    },
+    [scrollTo, ackReveal],
+  );
 
   /** Run one recipe and claim the key — the `return void f()` idiom of App's
    * own cascade, adapted to a handler that reports whether it consumed. */
@@ -210,24 +237,17 @@ export function useChatInput({
     // One screen, minus a row of overlap so the line you were reading is
     // still on screen after the jump (`less`'s own page rule).
     const pageRows = Math.max(1, visibleRows - 1);
-    /** Scrolling up pauses follow, landing at the tail first — the log
-     * overlay's and the transcript view's shared recipe. Without the jump the
-     * paused window would fall back to a stale offset, usually 0. */
+    /** Scrolling up pauses follow (through the latch — see useFollowLatch). */
     const scrollUp = (rows: number): void => {
-      if (chat.follow) {
-        toEnd();
-        setFollow(false);
-      }
+      latch.pause();
       scrollBy(-rows);
     };
-    // `pane === 2` is half the condition on purpose: ChatView hands the
-    // Composer `focused && composerFocused`, so its useGuardedInput is live
-    // only while the CHAT pane holds the focus. Reading `composerFocused`
-    // alone here would claim the keys for a hook that isn't listening —
-    // every key swallowed, nothing typed, only esc out. Every door into the
-    // chat takes pane 2 with it (useMainActions/useViewActions both
-    // `setPane(2)`), so this is defence in depth rather than a live state.
-    if (chat.composerFocused && pane === 2) {
+    // `composerFocused` alone is the condition: App mounts ChatView only
+    // while it is the view and hands the Composer `focused` unconditionally,
+    // so its useGuardedInput is live exactly when this flag is set. (The pane
+    // used to be the other half, back when the rail doors could move it
+    // under an open chat; the chat-scroll brief removed those doors.)
+    if (chat.composerFocused) {
       // PgUp/PgDn are not text — the Composer ignores them (its typing branch
       // needs a non-empty `input`, and ink reports both as ""), so they stay
       // the transcript's page keys while the composer holds the focus: read
@@ -248,14 +268,7 @@ export function useChatInput({
     // the nav spine" no longer holds here: the view is full-screen, the rail
     // is not painted, and a chat is opened fresh by `c`.
     if (key.escape) return took(close);
-    // `i` composes — which means the CHAT pane, not just the composer flag:
-    // setting the flag without taking the pane back would leave the Composer's
-    // hook inactive (see the pane check above).
-    if (input === "i")
-      return took(() => {
-        focusComposer(true);
-        setPane(2);
-      });
+    if (input === "i") return took(() => focusComposer(true));
     // `tab` walks the CARDS (this brief supersedes spec §8.3's pane door):
     // ↑/↓ scroll now, so the anchor cursor needs a key of its own. Ink reports
     // shift+tab as `tab` with the shift modifier set. With no anchors
@@ -278,7 +291,7 @@ export function useChatInput({
     if (input === "k" || key.upArrow || input === "[") return took(() => scrollUp(1));
     if (key.pageDown) return took(() => scrollBy(pageRows));
     if (key.pageUp) return took(() => scrollUp(pageRows));
-    if (input === "G" || key.end) return took(() => setFollow(true));
+    if (input === "G" || key.end) return took(latch.resume);
     if (input === "g" || key.home)
       return took(() => {
         setFollow(false);
@@ -290,5 +303,12 @@ export function useChatInput({
     return true;
   };
 
-  return { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo };
+  return {
+    handleChatKey,
+    chatHandlers,
+    onComposerSubmit,
+    onScrollTo,
+    onReveal,
+    pauseFollow: latch.pause,
+  };
 }

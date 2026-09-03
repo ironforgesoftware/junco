@@ -43,6 +43,7 @@ afterEach(cleanup);
 const press = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
 const move = (x: number, y: number): string => `\u001b[<35;${x + 1};${y + 1}M`;
 const wheelDown = (x: number, y: number): string => `\u001b[<65;${x + 1};${y + 1}M`;
+const wheelUp = (x: number, y: number): string => `\u001b[<64;${x + 1};${y + 1}M`;
 // b=32 is left-button motion (a drag); the lowercase `m` terminator is release.
 const drag = (x: number, y: number): string => `\u001b[<32;${x + 1};${y + 1}M`;
 const release = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}m`;
@@ -163,6 +164,20 @@ describe("scrollbar: click and drag", () => {
     await fireUntil(r.stdin, drag(BAR_X, CHAT_TRACK_BOTTOM), () =>
       (r.lastFrame() ?? "").includes("you: L20"),
     );
+  });
+
+  // MouseProvider dispatches every event in a chunk synchronously, so a fast
+  // two-notch wheel-up from the tail runs the pause recipe twice against the
+  // same render: without the latch each notch landed at the tail again and
+  // the burst netted one row.
+  it("chat: a two-notch wheel-up in one chunk pauses once and scrolls two rows", async () => {
+    const r = await openChatWithTurns();
+    const range = (): RegExpExecArray | null => /(\d+)–(\d+)\/(\d+)/.exec(r.lastFrame() ?? "");
+    await until(() => range() !== null);
+    const total = range()![3]!;
+    expect(range()![2]).toBe(total); // at the tail
+    r.stdin.write(wheelUp(40, 8) + wheelUp(40, 8));
+    await until(() => range()?.[2] === String(Number(total) - 2));
   });
 
   it("chat: a drag that never pressed the bar scrolls nothing", async () => {

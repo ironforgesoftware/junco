@@ -490,9 +490,24 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     c.push(40, chatDraft());
     await until(() => (api.chat!.summary ? anchorIds(api.chat!.summary).length === 2 : false));
 
+    // A move OUT OF FOLLOW steps from the last anchor, not the stale cursor
+    // (useTranscript's rule): shift+tab from the tail lands on the card
+    // nearest it — here anchor 0 of 2, one back from the last.
+    expect(api.chat!.reveal).toBe(false);
+    api.moveCursor(-1);
+    await until(() => api.chat!.follow === false);
+    expect(api.chat!.cursor).toBe(0);
+    // A move that lands owes the window a reveal (the view nudges onto the
+    // anchor once, then acks); the n === 0 no-op above owed nothing.
+    expect(api.chat!.reveal).toBe(true);
+    api.ackReveal();
+    await until(() => api.chat!.reveal === false);
     // moveCursor's clamp branch: jump past the end, clamp to the last anchor.
     api.moveCursor(5);
     await until(() => api.chat!.cursor === 1);
+    expect(api.chat!.reveal).toBe(true);
+    api.ackReveal();
+    await until(() => api.chat!.reveal === false);
     // toggleExpanded's draft-anchor early return: no-op on a draft anchor.
     api.toggleExpanded();
     expect(api.chat!.expanded.size).toBe(0);

@@ -69,6 +69,7 @@ import { ClickableBox } from "./ClickableBox.js";
 import { Button } from "./components/primitives/Button.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
+import { useFollowLatch } from "./useFollowLatch.js";
 import type { LogReaderDeps } from "../logReader.js";
 import { useToast } from "./hooks/useToast.js";
 import { useConfirm } from "./hooks/useConfirm.js";
@@ -400,6 +401,7 @@ export function App(props: AppProps): React.JSX.Element {
     setFollow: setTranscriptFollow,
     moveCursor: moveTranscriptCursor,
     setCursor: setTranscriptCursor,
+    ackReveal: ackTranscriptReveal,
     toggleExpanded: toggleTranscriptExpanded,
   } = useTranscript({ client, aliveRef, pollMs: transcriptPollMs });
   const [filter, setFilter] = useState("");
@@ -411,7 +413,7 @@ export function App(props: AppProps): React.JSX.Element {
   const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
   // useConfirm sits above useAddRepoForm because the add-repo flow feeds its
   // bot-grant confirm gate through the same modal (askConfirm is stable).
-  const { confirm, askConfirm, clearConfirm } = useConfirm();
+  const { confirm, askConfirm, settle: settleConfirm } = useConfirm();
   const { addRepoError, addRepoBusy, handleAddRepo, setAddRepoError } = useAddRepoForm({
     client,
     clonesDir,
@@ -594,6 +596,23 @@ export function App(props: AppProps): React.JSX.Element {
     sysSection,
   ]);
   const { scroll, scrollBy, scrollTo, onScrollMax, toEnd } = useScroll(scrollKey);
+  // The two follow-pause latches App owns (useFollowLatch; the chat's lives
+  // in useChatInput): key and wheel pause through the same latch, landing at
+  // the tail first, and a replayed run or a wheel burst pauses once.
+  const transcriptLatch = useFollowLatch(transcript?.follow ?? false, {
+    pause: () => {
+      toEnd();
+      setTranscriptFollow(false);
+    },
+    resume: () => setTranscriptFollow(true),
+  });
+  const logLatch = useFollowLatch(logFollow, {
+    pause: () => {
+      setLogFollow(false);
+      toEnd();
+    },
+    resume: () => setLogFollow(true),
+  });
 
   // No render-time fs call: an empty/absent file both show the placeholder until
   // the first line arrives (a running daemon fills within one poll).
@@ -651,10 +670,15 @@ export function App(props: AppProps): React.JSX.Element {
       : 0;
   const localTarget = localRows[localCursorSafe];
 
+  // Steps from the PENDING cursor (like moveRail): a held key's run replays
+  // inside one closure, where `localCursorSafe` is the same for every press.
   const moveSectionCursor = (delta: number): void => {
     if (sysSection === null || localRows.length === 0) return;
-    const next = Math.max(0, Math.min(localCursorSafe + delta, localRows.length - 1));
-    setSectionCursor((m) => ({ ...m, [sysSection]: next }));
+    const last = localRows.length - 1;
+    setSectionCursor((m) => {
+      const from = Math.max(0, Math.min(m[sysSection], last));
+      return { ...m, [sysSection]: Math.max(0, Math.min(from + delta, last)) };
+    });
   };
 
   // `enter` on a queue row — ONE implementation shared by the key branch
@@ -1315,22 +1339,21 @@ export function App(props: AppProps): React.JSX.Element {
   // (2026-09-02) removed the pane doors, and with no door there is no in-view
   // rail move: the rail-switch effect of Ruling R7 went with them, so a chat
   // is opened fresh by `c` and stays on the repo it was opened for. ──
-  const { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo } = useChatInput({
-    view,
-    pane,
-    chatApi,
-    chatDraftActions,
-    client,
-    aliveRef,
-    showToast,
-    currentNwo,
-    setView,
-    setPane,
-    scrollBy,
-    scrollTo,
-    toEnd,
-    visibleRows: chatVisibleRows(layout.bodyRows),
-  });
+  const { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo, onReveal, pauseFollow } =
+    useChatInput({
+      view,
+      chatApi,
+      chatDraftActions,
+      client,
+      aliveRef,
+      showToast,
+      currentNwo,
+      setView,
+      scrollBy,
+      scrollTo,
+      toEnd,
+      visibleRows: chatVisibleRows(layout.bodyRows),
+    });
   const composerFocused = chatState?.composerFocused === true;
   // Anchor-row click: the mouse form of ↑/↓ (a delta off the live cursor).
   const chatCursor = chatState?.cursor ?? 0;
@@ -1480,7 +1503,6 @@ export function App(props: AppProps): React.JSX.Element {
     openIssueTranscript,
     openChat,
     setView,
-    setPane,
   });
   const mainActions = useMainActions({
     client,
@@ -1675,6 +1697,9 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (input && !key.ctrl && !key.meta) {
+        // Functional on purpose: this sits under App's own useGuardedInput,
+        // which cannot opt out of the held-key replay, so "aa" arrives as two
+        // calls in one closure and must append through the pending value.
         setLogFilters((f) => ({ ...f, search: f.search + input }));
         return;
       }
@@ -1689,17 +1714,12 @@ export function App(props: AppProps): React.JSX.Element {
       setLogSearchMode(true);
       return;
     }
-    if (input === "G" || key.end) {
-      setLogFollow(true);
-      return;
-    }
+    if (input === "G" || key.end) return void logLatch.resume();
     if (input === "[" || key.upArrow) {
       // Scrolling up pauses follow, landing at the tail first so the step-up
-      // is relative to the bottom rather than a stale offset.
-      if (logFollow) {
-        setLogFollow(false);
-        toEnd();
-      }
+      // is relative to the bottom rather than a stale offset (latched — a
+      // held `[` replays inside one closure).
+      logLatch.pause();
       scrollBy(-1);
       return;
     }
@@ -1765,22 +1785,14 @@ export function App(props: AppProps): React.JSX.Element {
     // Toast is dismissed by the next keystroke, before it is acted on.
     if (confirm) {
       dismissToast();
-      if (key.escape || input === "n") {
-        const onCancel = confirm.onCancel;
-        clearConfirm();
-        onCancel?.();
-        return;
-      }
+      // `settleConfirm` answers at most once per opening — a held `y` reaches
+      // this closure as a replayed run with `confirm` still open on every pass.
+      if (key.escape || input === "n") return void settleConfirm("cancel");
       // Enter confirms only a NON-danger confirm. A danger confirm demands the
       // literal `y`: the unwatch modal opens from an async continuation (after
       // its `--plan` spawn resolves), so a stray Enter typed during that window
       // must never land on a destructive confirm the operator hasn't read.
-      if ((key.return && !confirm.danger) || input === "y") {
-        const fn = confirm.onConfirm;
-        clearConfirm();
-        fn();
-        return;
-      }
+      if ((key.return && !confirm.danger) || input === "y") return void settleConfirm("confirm");
       return;
     }
 
@@ -1904,14 +1916,11 @@ export function App(props: AppProps): React.JSX.Element {
       if (key.return || input === " ") return void toggleTranscriptExpanded();
       if (input === "]") return void scrollBy(1);
       if (input === "[") {
-        if (transcript?.follow) {
-          toEnd();
-          setTranscriptFollow(false);
-        }
+        transcriptLatch.pause();
         return void scrollBy(-1);
       }
       if (input === "G" || key.end) {
-        if (transcript?.summary?.live) setTranscriptFollow(true);
+        if (transcript?.summary?.live) transcriptLatch.resume();
         return;
       }
       if (input === "g") {
@@ -1920,7 +1929,9 @@ export function App(props: AppProps): React.JSX.Element {
         // re-pinned to the tail — g looked inert on exactly the transcript a
         // reader most wants to stop scrolling.
         setTranscriptFollow(false);
-        setTranscriptCursor(0);
+        // No reveal: the window is going to ROW 0, not to the first tool call,
+        // which may sit below the fold behind a long preamble.
+        setTranscriptCursor(0, { reveal: false });
         return void scrollBy(-1_000_000); // clamps to 0
       }
       return;
@@ -2051,7 +2062,7 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (input && !key.ctrl && !key.meta) {
-        setFilter((f) => f + input);
+        setFilter((f) => f + input); // functional: see the log search above
         return;
       }
       return;
@@ -2235,6 +2246,15 @@ export function App(props: AppProps): React.JSX.Element {
     },
     [setTranscriptFollow, scrollTo],
   );
+  // useChatInput's `onReveal`, for the ticket transcript: commit the nudged
+  // start, clear the owed reveal (follow is already paused by the move).
+  const transcriptReveal = useCallback(
+    (start: number): void => {
+      scrollTo(start);
+      ackTranscriptReveal();
+    },
+    [scrollTo, ackTranscriptReveal],
+  );
   // Transcript tool-row click: anchor the cursor there, then expand/collapse
   // it — the mouse form of `↑/↓` + `enter` in one press.
   const transcriptRowPress = useCallback(
@@ -2343,21 +2363,13 @@ export function App(props: AppProps): React.JSX.Element {
             keyHint="y"
             label="confirm"
             tone={confirm.danger ? "danger" : "primary"}
-            onPress={() => {
-              const fn = confirm.onConfirm;
-              clearConfirm();
-              fn();
-            }}
+            onPress={() => settleConfirm("confirm")}
           />
           <Button
             keyHint="esc"
             label="cancel"
             tone="neutral"
-            onPress={() => {
-              const onCancel = confirm.onCancel;
-              clearConfirm();
-              onCancel?.();
-            }}
+            onPress={() => settleConfirm("cancel")}
           />
         </Box>
       </Box>
@@ -2432,12 +2444,9 @@ export function App(props: AppProps): React.JSX.Element {
           daemonUp={localCheap ? localCheap.daemon.up : undefined}
           onScrollMax={onScrollMax}
           onWheel={(d) => {
-            // Wheel-up pauses follow (landing at the tail first), mirroring the
-            // `[` key recipe; wheel-down just scrolls.
-            if (logFollow && d < 0) {
-              setLogFollow(false);
-              toEnd();
-            }
+            // Wheel-up pauses follow through the `[` key's latch; wheel-down
+            // just scrolls.
+            if (d < 0) logLatch.pause();
             scrollBy(d);
           }}
         />
@@ -2445,11 +2454,8 @@ export function App(props: AppProps): React.JSX.Element {
         <ClickableBox
           flexGrow={1}
           onWheel={(d) => {
-            // Wheel-up pauses follow (landing at the tail first), the `[` recipe.
-            if (d < 0 && transcript.follow) {
-              toEnd();
-              setTranscriptFollow(false);
-            }
+            // Wheel-up pauses follow through the `[` key's latch.
+            if (d < 0) transcriptLatch.pause();
             scrollBy(d);
           }}
         >
@@ -2462,6 +2468,7 @@ export function App(props: AppProps): React.JSX.Element {
             onScrollMax={onScrollMax}
             onRowPress={transcriptRowPress}
             onScrollTo={transcriptScrollTo}
+            onReveal={transcriptReveal}
           />
         </ClickableBox>
       ) : view === "chat" && chatState ? (
@@ -2471,10 +2478,7 @@ export function App(props: AppProps): React.JSX.Element {
         <ClickableBox
           flexGrow={1}
           onWheel={(d) => {
-            if (d < 0 && chatState.follow) {
-              toEnd();
-              chatApi.setFollow(false);
-            }
+            if (d < 0) pauseFollow(); // the chat's own latch (useChatInput)
             scrollBy(d);
           }}
         >
@@ -2485,10 +2489,11 @@ export function App(props: AppProps): React.JSX.Element {
             scroll={scroll}
             height={listHeight}
             width={size.columns}
-            focused={pane === 2}
+            focused
             onScrollMax={onScrollMax}
             onRowPress={chatRowPress}
             onScrollTo={onScrollTo}
+            onReveal={onReveal}
             onComposerChange={chatApi.setComposer}
             onComposerSubmit={onComposerSubmit}
           />

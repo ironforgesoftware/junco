@@ -67,9 +67,27 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // follow-pausing `transcriptScrollTo` useCallback (+7). That last one is the
   // whole trade: a memoized view may only be handed a STABLE callback (perf
   // #259, pinned by tests/renderPerf.test.tsx), so the inline arrow that would
-  // have cost 1 line is not an option. Lowering this further is the render
+  // have cost 1 line is not an option. +3 for the held-key run fix (2026-09-03,
+  // 1,891 → 1,894): `moveSectionCursor` steps from the PENDING cursor inside a
+  // functional `setSectionCursor` (a `last` local plus the two-line resolver)
+  // so a burst that useGuardedInput replays inside one closure composes. +10
+  // for the cursor reveal (same day, 1,894 → 1,904): a cursor move now OWES
+  // the window one nudge instead of the body re-nudging every render, and the
+  // ack that commits the painted start is App's for the ticket transcript —
+  // `ackReveal` on the useTranscript destructure (+1), the stable
+  // `transcriptReveal` useCallback (+7, the memoized-view rule again), and
+  // `onReveal` on both views (+2). −3 for the chat's pane decoupling (same
+  // day, 1,904 → 1,901): the full-screen chat view owns its keys by view, so
+  // `pane`/`setPane` leave the useChatInput call and `setPane` leaves the
+  // useViewActions call. −21 for that branch's review waves (1,901 → 1,880):
+  // the confirm modal's answer latches in `useConfirm.settle` (a replayed "yy"
+  // must confirm once), so the key branch and both buttons collapse to one
+  // call each (−18); and the follow-pause recipe moved into useFollowLatch —
+  // two hook calls in App (+14) against the six by-value pauses they replace
+  // (the transcript's `[`, `G` and wheel, the log overlay's `[`, `G` and
+  // wheel, and the chat wheel, −17). Lowering this further is the render
   // body's extraction (#387), not shaving these.
-  { file: "src/tui/App.tsx", max: 1891 },
+  { file: "src/tui/App.tsx", max: 1880 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

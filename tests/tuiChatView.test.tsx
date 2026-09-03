@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { ChatView, chatHeaderStatus } from "../src/tui/components/ChatView.js";
-import { TranscriptBody } from "../src/tui/components/TranscriptBody.js";
+import { TranscriptBody, bodyWindow } from "../src/tui/components/TranscriptBody.js";
 import type { ChatState } from "../src/tui/hooks/useChat.js";
 import type { TranscriptRow } from "../src/transcriptRender.js";
 import { maxScroll } from "../src/tui/window.js";
@@ -35,6 +35,7 @@ const base = (over: Partial<ChatState> = {}): ChatState => ({
   composerFocused: true,
   cursor: 0,
   follow: true,
+  reveal: false,
   showThinking: false,
   expanded: new Set(),
   lastOffset: null,
@@ -320,6 +321,7 @@ describe("TranscriptBody", () => {
         anchors={["c1"]}
         cursor={0}
         follow={false}
+        reveal={false}
         scroll={0}
         visible={2}
         focused
@@ -328,5 +330,43 @@ describe("TranscriptBody", () => {
       />,
     );
     expect(onScrollMax).toHaveBeenCalledWith(maxScroll(rows.length, 2));
+  });
+
+  // The window used to nudge itself onto the cursor's anchor on EVERY render,
+  // which was right while ↑/↓ moved the cursor and wrong once they scrolled
+  // rows: any scroll that took the anchor off screen snapped straight back
+  // to it (PgUp from the tail landed on the first card; ↓ then did nothing).
+  const FORTY: TranscriptRow[] = Array.from({ length: 40 }, (_, i) =>
+    i === 3 ? { text: "card", anchor: "d1" } : { text: `row ${i}` },
+  );
+  const base = { rows: FORTY, anchors: ["d1"], cursor: 0, follow: false, visible: 10 };
+
+  it("bodyWindow nudges onto the cursor's anchor only while a reveal is owed", () => {
+    expect(bodyWindow({ ...base, scroll: 20, reveal: false }).start).toBe(20);
+    expect(bodyWindow({ ...base, scroll: 20, reveal: true }).start).toBe(3);
+    // Following ignores the reveal: the tail is the tail.
+    expect(bodyWindow({ ...base, scroll: 20, reveal: true, follow: true }).start).toBe(30);
+    // An anchor already in view needs no nudge either way.
+    expect(bodyWindow({ ...base, scroll: 2, reveal: true }).start).toBe(2);
+  });
+
+  it("TranscriptBody hands the revealed start to onReveal once, after painting it", async () => {
+    const onReveal = vi.fn();
+    const r = render(
+      <TranscriptBody {...base} scroll={20} reveal={true} focused onReveal={onReveal} />,
+    );
+    await until(() => onReveal.mock.calls.length === 1);
+    expect(onReveal).toHaveBeenCalledWith(3);
+    expect(r.lastFrame()).toContain("card"); // the nudged window, not row 20
+    // The parent commits the start and clears the flag. That render paints the
+    // SAME window from `scroll` alone — by design there is nothing to see —
+    // so what proves the flag is off is the next scroll: the card's row
+    // leaves the window instead of being snapped back onto, and no second
+    // ack ever fired.
+    r.rerender(<TranscriptBody {...base} scroll={3} reveal={false} focused onReveal={onReveal} />);
+    r.rerender(<TranscriptBody {...base} scroll={25} reveal={false} focused onReveal={onReveal} />);
+    await until(() => r.lastFrame()!.includes("row 25"));
+    expect(r.lastFrame()).not.toContain("card");
+    expect(onReveal).toHaveBeenCalledTimes(1);
   });
 });

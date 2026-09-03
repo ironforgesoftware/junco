@@ -18,6 +18,7 @@ const state = (over: Partial<TranscriptState> = {}): TranscriptState => ({
   showThinking: false,
   follow: false,
   cursor: 0,
+  reveal: false,
   expanded: new Set(),
   ...over,
 });
@@ -97,10 +98,18 @@ describe("TranscriptView", () => {
     expect(f).not.toContain("▸ read f1 ");
   });
 
-  it("cursor past the fold nudges the window so its row is visible", () => {
-    const f = frame(state({ summary: BIG, cursor: 29 }), { height: 12 });
+  it("a cursor move past the fold nudges the window onto its row while the reveal is owed", () => {
+    const f = frame(state({ summary: BIG, cursor: 29, reveal: true }), { height: 12 });
     expect(f).toContain("▸ read f30");
     expect(f).not.toContain("▸ read f1 ");
+  });
+
+  it("with the reveal acked the window is the scroll offset, wherever the cursor is", () => {
+    // `[`/`]` scroll rows: once the move's reveal is acked, scrolling the
+    // cursor's row off screen must not snap the window back onto it.
+    const f = frame(state({ summary: BIG, cursor: 29, reveal: false }), { height: 12 });
+    expect(f).toContain("▸ read f1 ");
+    expect(f).not.toContain("▸ read f30");
   });
 
   it("live: footer offers f follow and the header reads ◐ live", () => {

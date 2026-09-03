@@ -6,7 +6,7 @@
  * `toolCallIds`, a chat transcript's is `anchorIds` (Task 13's draft
  * anchors), but the windowing and paint logic below don't care which.
  */
-import React from "react";
+import React, { useEffect } from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { bumpRender } from "../renderCount.js";
@@ -47,25 +47,45 @@ export interface TranscriptBodyProps {
   scroll: number;
   visible: number;
   focused: boolean;
+  /** The window owes the cursor's anchor a visit: set by the owning hook's
+   * cursor actions (useChat/useTranscript `moveCursor`/`setCursor`), cleared
+   * by the parent's `onReveal` ack once the nudged start is committed as the
+   * scroll offset. While it is false the window is `scroll` alone, however
+   * far the anchor has been scrolled off screen. */
+  reveal: boolean;
   onScrollMax?: (max: number) => void;
   onRowPress?: (anchorIdx: number) => void;
   /** Scrollbar click/drag: an absolute first-row offset. Must be a STABLE
    * callback — a fresh arrow every render would defeat this component's memo. */
   onScrollTo?: (offset: number) => void;
+  /** Called once per owed reveal with the start the nudge painted — the
+   * parent stores it as the scroll offset and clears `reveal`, so the next
+   * render paints the same window from `scroll` alone. Stable, like
+   * `onScrollTo`. Without it a reveal stays owed and the window keeps
+   * nudging (the pre-2026-09-03 behaviour), which is fine for a caller that
+   * never scrolls by rows. */
+  onReveal?: (start: number) => void;
 }
 
 /** Window math mirrors QueueView: base at `scroll` (or the tail while
- * `follow`), then nudge so the cursor's anchor row stays visible. Returns the
- * window so the caller's footer can print `start–end/total`. */
+ * `follow`), nudged onto the cursor's anchor row while a `reveal` is owed.
+ * The nudge used to apply on every render, which was right while ↑/↓ moved
+ * the cursor between anchors and wrong once they scrolled rows (the chat, and
+ * the transcript's `[`/`]`): any scroll that took the anchor off screen was
+ * snapped straight back to it. Returns the window so the caller's footer can
+ * print `start–end/total`. */
 export function bodyWindow(
-  p: Pick<TranscriptBodyProps, "rows" | "anchors" | "cursor" | "follow" | "scroll" | "visible">,
+  p: Pick<
+    TranscriptBodyProps,
+    "rows" | "anchors" | "cursor" | "follow" | "scroll" | "visible" | "reveal"
+  >,
 ): { start: number; end: number; anchorId: string | undefined } {
   const anchorId = p.anchors[p.cursor];
   const anchorRow = anchorId === undefined ? -1 : p.rows.findIndex((r) => r.anchor === anchorId);
   let start = p.follow
     ? maxScroll(p.rows.length, p.visible)
     : clampScroll(p.scroll, p.rows.length, p.visible);
-  if (!p.follow && anchorRow >= 0) {
+  if (p.reveal && !p.follow && anchorRow >= 0) {
     if (anchorRow < start) start = anchorRow;
     else if (anchorRow >= start + p.visible) start = anchorRow - p.visible + 1;
   }
@@ -81,6 +101,12 @@ export const TranscriptBody = React.memo(function TranscriptBody(
   bumpRender("TranscriptBody");
   const { start, end, anchorId } = bodyWindow(p);
   p.onScrollMax?.(maxScroll(p.rows.length, p.visible));
+  // Ack AFTER the nudged frame is committed, so the parent's scroll offset
+  // catches up with what was painted and no frame shows the un-nudged window.
+  const { reveal, onReveal } = p;
+  useEffect(() => {
+    if (reveal) onReveal?.(start);
+  }, [reveal, onReveal, start]);
   return (
     <Box flexGrow={1}>
       <Box flexDirection="column" flexGrow={1} minWidth={0}>

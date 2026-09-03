@@ -122,7 +122,9 @@ export function Composer({
         edit(valueRef.current + input);
       }
     },
-    { isActive: active },
+    // `text`: typed chunks append whole (the ref makes either shape correct,
+    // but a text field states its contract — see useGuardedInput).
+    { isActive: active, text: true },
   );
   usePaste((text) => edit(valueRef.current + text.replace(/\r\n?/g, "\n")), { isActive: active });
 

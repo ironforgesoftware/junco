@@ -24,6 +24,9 @@ export interface TranscriptState {
   follow: boolean;
   /** Index into `toolCallIds(summary)`; clamped on every read. */
   cursor: number;
+  /** A cursor move owes the window a nudge onto the anchor — TranscriptBody
+   * paints it once and acks through `ackReveal` (see useChat's twin). */
+  reveal: boolean;
   expanded: ReadonlySet<string>;
 }
 
@@ -35,7 +38,11 @@ export interface TranscriptApi {
   setFollow: (on: boolean) => void;
   /** Move the tool-call cursor; clamps; pauses follow. */
   moveCursor: (delta: number) => void;
-  setCursor: (idx: number) => void;
+  /** `reveal: false` places the cursor without owing the window a nudge —
+   * `g`, which parks the cursor on the first tool call but shows row 0. */
+  setCursor: (idx: number, opts?: { reveal?: boolean }) => void;
+  /** The view painted the reveal a cursor move owed (TranscriptBody onReveal). */
+  ackReveal: () => void;
   /** Expand/collapse the cursor's tool result. */
   toggleExpanded: () => void;
 }
@@ -139,6 +146,7 @@ export function useTranscript({
         showThinking: false,
         follow: opts.expectLive,
         cursor: 0,
+        reveal: false,
         expanded: new Set(),
       });
       void readOnce(id, null);
@@ -192,12 +200,12 @@ export function useTranscript({
   // between: on a tool-less transcript the arrows are the only way to stop the
   // tail short of `[`, and a no-op that left follow on re-pinned the view.
   const setCursor = useCallback(
-    (idx: number): void =>
+    (idx: number, opts?: { reveal?: boolean }): void =>
       setTranscript((s) => {
         if (s === null || s.summary === null) return s;
         const n = toolCallIds(s.summary).length;
         const cursor = n === 0 ? s.cursor : Math.max(0, Math.min(idx, n - 1));
-        return { ...s, cursor, follow: false };
+        return { ...s, cursor, follow: false, reveal: n > 0 && opts?.reveal !== false };
       }),
     [],
   );
@@ -211,8 +219,14 @@ export function useTranscript({
         // moved, and stepping from it jumped to the top of the transcript.
         const from = s.follow ? n - 1 : s.cursor;
         const cursor = n === 0 ? s.cursor : Math.max(0, Math.min(from + delta, n - 1));
-        return { ...s, cursor, follow: false };
+        // A tool-less transcript has nothing to reveal; the pause alone is
+        // the point of the press there.
+        return { ...s, cursor, follow: false, reveal: n > 0 };
       }),
+    [],
+  );
+  const ackReveal = useCallback(
+    (): void => setTranscript((s) => (s === null || !s.reveal ? s : { ...s, reveal: false })),
     [],
   );
   const toggleExpanded = useCallback(
@@ -237,6 +251,7 @@ export function useTranscript({
     setFollow,
     moveCursor,
     setCursor,
+    ackReveal,
     toggleExpanded,
   };
 }

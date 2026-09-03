@@ -448,11 +448,19 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
   // memo'd components' `onWheel`/`onRowPress` props instead of wrapping them in
   // a fresh arrow every render — the identity is only as stable as its deps,
   // which is exactly what lets it stay flat across an unrelated App re-render.
+  // Resolves the step from the PENDING anchor, not the render's index: a held
+  // key's run reaches useGuardedInput as one chunk and replays inside ONE
+  // closure, so steps taken from `issueIdxSafe` would all land on the same
+  // row. The render's index stays the fallback for an anchor that is gone.
   const moveIssue = useCallback(
     (delta: number): void => {
       if (!currentNwo || filteredIssues.length === 0) return;
-      const next = Math.max(0, Math.min(issueIdxSafe + delta, filteredIssues.length - 1));
-      setSelectedNum((m) => ({ ...m, [currentNwo]: filteredIssues[next].number }));
+      setSelectedNum((m) => {
+        const at = filteredIssues.findIndex((i) => i.number === m[currentNwo]);
+        const from = at >= 0 ? at : issueIdxSafe;
+        const next = Math.max(0, Math.min(from + delta, filteredIssues.length - 1));
+        return { ...m, [currentNwo]: filteredIssues[next].number };
+      });
     },
     [currentNwo, filteredIssues, issueIdxSafe],
   );
@@ -470,8 +478,13 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
   const movePr = useCallback(
     (delta: number): void => {
       if (prs.length === 0) return;
-      const next = Math.max(0, Math.min(prIdxSafe + delta, prs.length - 1));
-      setPrSel({ nwo: prs[next].nwo, number: prs[next].number });
+      setPrSel((sel) => {
+        // Pending anchor first (see moveIssue), the render's index as fallback.
+        const at = sel ? prs.findIndex((p) => p.nwo === sel.nwo && p.number === sel.number) : -1;
+        const from = at >= 0 ? at : prIdxSafe;
+        const next = Math.max(0, Math.min(from + delta, prs.length - 1));
+        return { nwo: prs[next].nwo, number: prs[next].number };
+      });
     },
     [prs, prIdxSafe],
   );
@@ -489,8 +502,12 @@ export function useGithubData(opts: UseGithubDataOpts): UseGithubDataResult {
   const movePane3 = useCallback(
     (delta: number): void => {
       if (repoPrs.length === 0) return;
-      const next = Math.max(0, Math.min(pane3IdxSafe + delta, repoPrs.length - 1));
-      setPane3SelNum(repoPrs[next].number);
+      setPane3SelNum((num) => {
+        // Pending anchor first (see moveIssue), the render's index as fallback.
+        const at = num === null ? -1 : repoPrs.findIndex((p) => p.number === num);
+        const from = at >= 0 ? at : pane3IdxSafe;
+        return repoPrs[Math.max(0, Math.min(from + delta, repoPrs.length - 1))].number;
+      });
     },
     [repoPrs, pane3IdxSafe],
   );

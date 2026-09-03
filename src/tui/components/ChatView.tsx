@@ -81,11 +81,18 @@ export interface ChatViewProps {
   scroll: number;
   height: number;
   width: number;
+  /** Whether this view holds the keys. App mounts it full-screen and always
+   * passes `true` (the chat is the only surface while it is the view — the
+   * pane the operator came from is not consulted). The prop stays so the view
+   * can paint itself blurred (border, selection, composer) should it ever
+   * share the screen. */
   focused: boolean;
   onScrollMax?: (max: number) => void;
   onRowPress?: (anchorIdx: number) => void;
   /** Scrollbar click/drag (stable callback — this component is memoized). */
   onScrollTo?: (offset: number) => void;
+  /** A cursor move's reveal, painted: commit the start and ack (stable). */
+  onReveal?: (start: number) => void;
   onComposerChange: (v: string) => void;
   onComposerSubmit: (v: string) => void;
 }
@@ -132,6 +139,7 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
     anchors,
     cursor: state.cursor,
     follow: state.follow,
+    reveal: state.reveal,
     scroll: p.scroll,
     visible,
   });
@@ -161,12 +169,14 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
         anchors={anchors}
         cursor={state.cursor}
         follow={state.follow}
+        reveal={state.reveal}
         scroll={p.scroll}
         visible={visible}
         focused={p.focused && !state.composerFocused}
         onScrollMax={p.onScrollMax}
         onRowPress={p.onRowPress}
         onScrollTo={p.onScrollTo}
+        onReveal={p.onReveal}
       />
       <Text dimColor wrap="truncate">
         {state.composerFocused

@@ -195,7 +195,6 @@ function mount(
     openHelp: spies.openHelp,
     openChat: spies.openChat,
     setView: spies.setView,
-    setPane: spies.setPane,
     chatDraftActions: {
       submit: spies.chatSubmit,
       edit: spies.chatEdit,
@@ -701,7 +700,7 @@ describe("the overlay chat handler (spec 2026-09-02 §5)", () => {
     detail.api["chat"]!();
     expect(detail.spies.openChat).toHaveBeenCalledWith("acme/api", { composer: "/issue 46" });
     expect(detail.spies.setView).toHaveBeenCalledWith("chat");
-    expect(detail.spies.setPane).toHaveBeenCalledWith(2);
+    expect(detail.spies.setPane).not.toHaveBeenCalled(); // the pane is not the chat's to change
     detail.unmount();
 
     const bare = mount({
@@ -734,7 +733,7 @@ describe("the overlay chat handler (spec 2026-09-02 §5)", () => {
     api["chat"]!();
     expect(spies.openChat).toHaveBeenCalledWith("acme/widgets", undefined);
     expect(spies.setView).toHaveBeenCalledWith("chat");
-    expect(spies.setPane).toHaveBeenCalledWith(2);
+    expect(spies.setPane).not.toHaveBeenCalled();
     unmount();
   });
 });

@@ -61,10 +61,9 @@ export interface ViewActionsInput {
    * chat to the overlay's OWN repo, with the thread prefilled where one is in
    * view — `chatTargetFor` below decides both. */
   openChat: ChatApi["openChat"];
-  /** The chat verb navigates as well as opens: full-screen chat view, focus on
-   * the composer's pane (App owns the nav spine, so it hands these in). */
+  /** The chat verb navigates as well as opens: full-screen chat view (App owns
+   * the nav spine, so it hands this in; the pane is left where it was). */
   setView: (v: View) => void;
-  setPane: (p: 1 | 2 | 3) => void;
   /** The open PR-detail overlay's frozen PR, and the PRs view's selection —
    * read-only, the same way `detail` is: they name the chat verb's target.
    * (`null` is App's own "nothing selected"; `undefined` is what an index past
@@ -173,7 +172,6 @@ export function useViewActions({
   openHelp,
   openChat,
   setView,
-  setPane,
   prDetail,
   selectedPr,
 }: ViewActionsInput): Record<string, () => void> {
@@ -338,8 +336,7 @@ export function useViewActions({
       // nothing under an overlay).
       if (t === null) return void showToast("info", "select a repo first (esc)");
       openChat(t.key, t.composer === undefined ? undefined : { composer: t.composer });
-      setView("chat");
-      setPane(2);
+      setView("chat"); // the pane stays put — see useMainActions' chat door
     };
     switch (view) {
       case "detail":
@@ -434,7 +431,6 @@ export function useViewActions({
     openHelp,
     openChat,
     setView,
-    setPane,
     prDetail,
     selectedPr,
   ]);
