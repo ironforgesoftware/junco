@@ -23,6 +23,7 @@ export interface ChatInputDeps {
   setView: (v: View) => void;
   setPane: (p: Pane) => void;
   scrollBy: (delta: number) => void;
+  scrollTo: (offset: number) => void;
   toEnd: () => void;
   /** Body rows the transcript window shows — `ChatView`'s own
    * `chatVisibleRows(height)`, so PgUp/PgDn move exactly one screen. */
@@ -37,6 +38,10 @@ export interface ChatInputApi {
   chatHandlers: Record<string, () => void>;
   /** ChatView's composer submit: the slash router, or a plain prompt. */
   onComposerSubmit(raw: string): void;
+  /** ChatView's scrollbar click/drag: jump to an absolute row offset. Stable
+   * (ChatView is memoized) and follow-pausing — a jump under `follow` would
+   * otherwise snap straight back to the tail. */
+  onScrollTo(offset: number): void;
 }
 
 /** A slash command's issue/PR number: digits and nothing else, so `/pr 7abc`
@@ -69,6 +74,7 @@ export function useChatInput({
   setView,
   setPane,
   scrollBy,
+  scrollTo,
   toEnd,
   visibleRows,
 }: ChatInputDeps): ChatInputApi {
@@ -184,6 +190,14 @@ export function useChatInput({
     [send, abort, fresh, showToast, client, currentNwo, aliveRef],
   );
 
+  const onScrollTo = useCallback(
+    (offset: number): void => {
+      setFollow(false);
+      scrollTo(offset);
+    },
+    [setFollow, scrollTo],
+  );
+
   /** Run one recipe and claim the key — the `return void f()` idiom of App's
    * own cascade, adapted to a handler that reports whether it consumed. */
   const took = (fn: () => void): true => {
@@ -267,5 +281,5 @@ export function useChatInput({
     return true;
   };
 
-  return { handleChatKey, chatHandlers, onComposerSubmit };
+  return { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo };
 }

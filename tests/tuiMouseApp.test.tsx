@@ -8,12 +8,32 @@ import React, { useContext } from "react";
 import { describe, it, afterEach, expect } from "vitest";
 import { render, cleanup } from "ink-testing-library";
 import { until, fireUntil, tick } from "./helpers/until.js";
-import { renderApp, makeAppProps, okv, stubClient, ESC } from "./helpers/localFixtures.js";
+import {
+  renderApp,
+  makeAppProps,
+  okv,
+  stubClient,
+  tap,
+  ESC,
+  TO_QUEUE_ROW,
+  WIDE_COLS_TEST,
+} from "./helpers/localFixtures.js";
 import type { LogReaderDeps } from "../src/logReader.js";
 import { App } from "../src/tui/App.js";
 import { MouseContext, MouseProvider } from "../src/tui/MouseProvider.js";
 import type { MouseStore } from "../src/tui/mouseRegions.js";
 import type { PendingAssess } from "../src/assessReview.js";
+import type { DashboardClient } from "../src/tui/ghClient.js";
+import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
+import { summarizeTranscript } from "../src/transcriptSummary.js";
+import {
+  chatPrompt,
+  chatTurnEnd,
+  chatTurnStart,
+  runEnd,
+  runStart,
+  turnEndFull,
+} from "./helpers/transcriptFixtures.js";
 
 afterEach(cleanup);
 
@@ -23,6 +43,9 @@ afterEach(cleanup);
 const press = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
 const move = (x: number, y: number): string => `\u001b[<35;${x + 1};${y + 1}M`;
 const wheelDown = (x: number, y: number): string => `\u001b[<65;${x + 1};${y + 1}M`;
+// b=32 is left-button motion (a drag); the lowercase `m` terminator is release.
+const drag = (x: number, y: number): string => `\u001b[<32;${x + 1};${y + 1}M`;
+const release = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}m`;
 
 /** Exposes the provider's hit-region store. Hover is a background color —
  * invisible in a colorless frame (chalk emits no ANSI off a TTY, so frames
@@ -75,6 +98,111 @@ describe("mouse row/wheel on the issues surface", () => {
       const lines = (r.lastFrame() ?? "").split("\n");
       const onFirstRepo = lines.some((l) => l.includes("▌") && l.includes("acme/api"));
       return !onFirstRepo && lines.some((l) => l.includes("▌"));
+    });
+  });
+});
+
+// The scrollbar is a mouse target on both transcript surfaces (chat + ticket
+// transcript): press a track row to jump there, hold and drag to keep
+// scrolling. Geometry, at the fixture's 120×30: the view is full-screen, so
+// its content spans x 2..117 after the border + paddingX — the 1-column bar is
+// the LAST content column, x=117. Vertically, row 0 is the header, the view's
+// top border is row 1, its own header row 2, and the body (hence the track)
+// starts at row 3.
+const BAR_X = WIDE_COLS_TEST - 3;
+const TRACK_TOP = 3;
+/** Chat: height 27 − borders 2 − header 1 − footer 1 − composer 6 = 17 rows. */
+const CHAT_TRACK_BOTTOM = TRACK_TOP + 17 - 1;
+
+/** A chat client whose subscribe handler is kept so a test can feed records. */
+function chatClient(): { client: DashboardClient; push: (offset: number, line: string) => void } {
+  let h: ChatSubscribeHandlers | null = null;
+  return {
+    client: {
+      ...stubClient,
+      chat: {
+        ...stubClient.chat,
+        subscribe: (_k, _s, on) => ((h = on), on.status("live"), () => {}),
+      },
+    },
+    push: (o, l) => h!.record(o, l),
+  };
+}
+
+/** `n` chat turns, each one prompt row (`you: L07`) plus its run header. */
+function pushTurns(push: (offset: number, line: string) => void, n: number): void {
+  let offset = 10;
+  for (let i = 1; i <= n; i++) {
+    push(offset++, chatPrompt({ text: `L${String(i).padStart(2, "0")}` }));
+    push(offset++, chatTurnStart());
+    push(offset++, chatTurnEnd());
+  }
+}
+
+/** The open chat view, already scrolled to the tail by `follow`. */
+async function openChatWithTurns(): Promise<ReturnType<typeof renderApp>> {
+  const c = chatClient();
+  const r = renderApp({ client: c.client });
+  await until(() => (r.lastFrame() ?? "").includes("repos"));
+  await fireUntil(r.stdin, "c", () => (r.lastFrame() ?? "").includes("chat · acme/api"));
+  pushTurns(c.push, 20); // ~60 rows in a 17-row window
+  await until(() => (r.lastFrame() ?? "").includes("you: L20"));
+  return r;
+}
+
+describe("scrollbar: click and drag", () => {
+  it("chat: a press on the track jumps the window (pausing follow); a drag keeps scrolling", async () => {
+    const r = await openChatWithTurns();
+    // Top of the track = offset 0. It only sticks because the jump pauses
+    // follow: still following, the window would snap back to the tail.
+    await fireUntil(r.stdin, press(BAR_X, TRACK_TOP), () =>
+      (r.lastFrame() ?? "").includes("you: L01"),
+    );
+    // Still holding, drag to the bottom of the track: the window follows the
+    // pointer down to the end of the transcript.
+    await fireUntil(r.stdin, drag(BAR_X, CHAT_TRACK_BOTTOM), () =>
+      (r.lastFrame() ?? "").includes("you: L20"),
+    );
+  });
+
+  it("chat: a drag that never pressed the bar scrolls nothing", async () => {
+    const r = await openChatWithTurns();
+    await fireUntil(r.stdin, press(BAR_X, TRACK_TOP), () =>
+      (r.lastFrame() ?? "").includes("you: L01"),
+    );
+    r.stdin.write(release(BAR_X, TRACK_TOP));
+    // Motion with the button held but no press of our own: no capture, so the
+    // window must not move. Negative assertion ⇒ a bounded window to misbehave.
+    r.stdin.write(drag(BAR_X, CHAT_TRACK_BOTTOM));
+    await new Promise((res) => setTimeout(res, 60));
+    expect(r.lastFrame() ?? "").toContain("you: L01");
+  });
+
+  it("transcript: a press on the track jumps the window", async () => {
+    const summary = summarizeTranscript(
+      Array.from({ length: 20 }, (_, i) => [
+        runStart({ flow: "assess", modelId: "m" }),
+        turnEndFull({ text: `T${String(i + 1).padStart(2, "0")}` }),
+        runEnd({ stopReason: "stop", durationMs: 1000 }),
+      ]).flat(),
+    );
+    const client: DashboardClient = {
+      ...stubClient,
+      readTranscript: async () => okv({ kind: "read" as const, size: 1, summary }),
+    };
+    const r = renderApp({ client });
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
+    await tap(r, TO_QUEUE_ROW); // rail → the queue system row
+    await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos"));
+    await fireUntil(r.stdin, "l", () => (r.lastFrame() ?? "").includes("retry"));
+    await fireUntil(r.stdin, "\r", () => (r.lastFrame() ?? "").includes("transcript ▸"));
+    // A queue row's transcript opens live-and-following, i.e. at the tail.
+    await until(() => (r.lastFrame() ?? "").includes("T20"));
+    // The track's top row is offset 0 — and it sticks, so the jump paused
+    // follow here too (the transcript's own wheel-up recipe).
+    await fireUntil(r.stdin, press(BAR_X, TRACK_TOP), () => {
+      const f = r.lastFrame() ?? "";
+      return f.includes("T01") && !f.includes("T20");
     });
   });
 });

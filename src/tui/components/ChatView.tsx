@@ -84,6 +84,8 @@ export interface ChatViewProps {
   focused: boolean;
   onScrollMax?: (max: number) => void;
   onRowPress?: (anchorIdx: number) => void;
+  /** Scrollbar click/drag (stable callback — this component is memoized). */
+  onScrollTo?: (offset: number) => void;
   onComposerChange: (v: string) => void;
   onComposerSubmit: (v: string) => void;
 }
@@ -164,6 +166,7 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
         focused={p.focused && !state.composerFocused}
         onScrollMax={p.onScrollMax}
         onRowPress={p.onRowPress}
+        onScrollTo={p.onScrollTo}
       />
       <Text dimColor wrap="truncate">
         {state.composerFocused

@@ -31,11 +31,21 @@ export interface Rect {
 export interface RegionHandlers {
   onPress?: () => void;
   onWheel?: (dir: 1 | -1) => void;
+  /** A press, with the cell's position INSIDE the region (clamped to it) —
+   * the scrollbar's "jump to this row". Runs alongside `onPress`, and arms the
+   * drag capture: every drag until the button comes up is this region's. */
+  onPressAt?: (localX: number, localY: number) => void;
+  /** A held-button move, in the captured region's own coordinates (clamped),
+   * even when the pointer has wandered off it. */
+  onDrag?: (localX: number, localY: number) => void;
 }
 
 export interface ResolvedRegion {
   id: number;
   handlers: RegionHandlers;
+  /** Absolute rect at resolve time — the frame of reference for the local
+   * coordinates `onPressAt`/`onDrag` receive. */
+  rect: Rect;
 }
 
 /** Absolute terminal-cell rect, or null for detached/unmounted nodes (a
@@ -75,6 +85,9 @@ export interface MouseStore {
     handlers: RegionHandlers,
   ): () => void;
   resolve(x: number, y: number, opts?: { needsWheel?: boolean }): ResolvedRegion | null;
+  /** The region with this id, if it is still registered AND still in the tree
+   * — how a captured drag finds its target after the pointer has left it. */
+  byId(id: number): ResolvedRegion | null;
   setHoveredFromPoint(x: number, y: number): void;
   hoveredId(): number | null;
   isHovered(id: number): boolean;
@@ -96,6 +109,7 @@ export function createMouseStore(): MouseStore {
     opts?: { needsWheel?: boolean },
   ): ResolvedRegion | null => {
     let best: Region | null = null;
+    let bestRect: Rect | null = null;
     let bestDepth = -1;
     for (const r of regions.values()) {
       if (opts?.needsWheel && !r.handlers.onWheel) continue;
@@ -111,10 +125,18 @@ export function createMouseStore(): MouseStore {
       // parents within one commit, and re-registrations replace in place.
       if (depth >= bestDepth) {
         best = r;
+        bestRect = rect;
         bestDepth = depth;
       }
     }
-    return best ? { id: best.id, handlers: best.handlers } : null;
+    return best && bestRect ? { id: best.id, handlers: best.handlers, rect: bestRect } : null;
+  };
+
+  const byId = (id: number): ResolvedRegion | null => {
+    const r = regions.get(id);
+    const node = r?.getNode();
+    const rect = node ? absoluteRect(node) : null;
+    return r && rect ? { id, handlers: r.handlers, rect } : null;
   };
 
   return {
@@ -129,6 +151,7 @@ export function createMouseStore(): MouseStore {
       };
     },
     resolve,
+    byId,
     setHoveredFromPoint(x, y) {
       const next = resolve(x, y)?.id ?? null;
       if (next === hovered) return;

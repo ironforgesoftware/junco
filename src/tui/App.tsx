@@ -593,7 +593,7 @@ export function App(props: AppProps): React.JSX.Element {
     body,
     sysSection,
   ]);
-  const { scroll, scrollBy, onScrollMax, toEnd } = useScroll(scrollKey);
+  const { scroll, scrollBy, scrollTo, onScrollMax, toEnd } = useScroll(scrollKey);
 
   // No render-time fs call: an empty/absent file both show the placeholder until
   // the first line arrives (a running daemon fills within one poll).
@@ -1315,7 +1315,7 @@ export function App(props: AppProps): React.JSX.Element {
   // (2026-09-02) removed the pane doors, and with no door there is no in-view
   // rail move: the rail-switch effect of Ruling R7 went with them, so a chat
   // is opened fresh by `c` and stays on the repo it was opened for. ──
-  const { handleChatKey, chatHandlers, onComposerSubmit } = useChatInput({
+  const { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo } = useChatInput({
     view,
     pane,
     chatApi,
@@ -1327,6 +1327,7 @@ export function App(props: AppProps): React.JSX.Element {
     setView,
     setPane,
     scrollBy,
+    scrollTo,
     toEnd,
     visibleRows: chatVisibleRows(layout.bodyRows),
   });
@@ -2225,6 +2226,15 @@ export function App(props: AppProps): React.JSX.Element {
     },
     [confirm, sysSection],
   );
+  // Transcript scrollbar click/drag: an absolute offset, follow paused (a
+  // live transcript pins the window to the tail, so a jump would not stick).
+  const transcriptScrollTo = useCallback(
+    (offset: number): void => {
+      setTranscriptFollow(false);
+      scrollTo(offset);
+    },
+    [setTranscriptFollow, scrollTo],
+  );
   // Transcript tool-row click: anchor the cursor there, then expand/collapse
   // it — the mouse form of `↑/↓` + `enter` in one press.
   const transcriptRowPress = useCallback(
@@ -2451,6 +2461,7 @@ export function App(props: AppProps): React.JSX.Element {
             focused
             onScrollMax={onScrollMax}
             onRowPress={transcriptRowPress}
+            onScrollTo={transcriptScrollTo}
           />
         </ClickableBox>
       ) : view === "chat" && chatState ? (
@@ -2477,6 +2488,7 @@ export function App(props: AppProps): React.JSX.Element {
             focused={pane === 2}
             onScrollMax={onScrollMax}
             onRowPress={chatRowPress}
+            onScrollTo={onScrollTo}
             onComposerChange={chatApi.setComposer}
             onComposerSubmit={onComposerSubmit}
           />

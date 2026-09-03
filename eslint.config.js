@@ -59,8 +59,13 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // paints), then −11 for the pane doors — −3 hook inputs (moveRail,
   // moveRailTo, railCount), −1 for the `chatKey` local, and −7 for Ruling R7's
   // rail-switch effect (the `prevRailKey` ref plus its six effect lines): with
-  // no door there is no in-view rail move to re-subscribe to.
-  { file: "src/tui/App.tsx", max: 1881 },
+  // no door there is no in-view rail move to re-subscribe to. Then +10 for the
+  // clickable scrollbar (1,881 → 1,891): `scrollTo` on the useScroll
+  // destructure and the useChatInput call (+1), `onScrollTo` passed to
+  // ChatView and TranscriptView (+2), and the transcript's own follow-pausing
+  // `transcriptScrollTo` useCallback (+7) — a memoized view may only be handed
+  // a STABLE callback, so an inline arrow at either call site is not an option.
+  { file: "src/tui/App.tsx", max: 1891 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

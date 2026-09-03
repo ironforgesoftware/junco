@@ -140,6 +140,7 @@ function mount(
     setView: (v) => void calls.push(`view:${v}`),
     setPane: (p) => void calls.push(`pane:${p}`),
     scrollBy: (d) => void calls.push(`scroll:${d}`),
+    scrollTo: (o) => void calls.push(`scrollTo:${o}`),
     toEnd: rec("toEnd"),
     // A 10-row body ⇒ a page is 9 rows (visibleRows - 1, one row of overlap).
     visibleRows: o.visibleRows ?? 10,
@@ -277,6 +278,14 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     const p = mount();
     expect(p.api.handleChatKey(":", K())).toBe(true);
     expect(p.calls).toEqual([]);
+  });
+
+  it("onScrollTo (the scrollbar's jump) pauses follow before moving the window", () => {
+    const h = mount({ chat: chatState({ follow: true }) });
+    h.api.onScrollTo(12);
+    // No `toEnd` here, unlike a step up: the offset IS the destination, so
+    // landing at the tail first would only paint a frame nobody asked for.
+    expect(h.calls).toEqual(["follow:false", "scrollTo:12"]);
   });
 
   it("the pane doors are gone: h/l and ←/→ are swallowed, and the rail never moves", () => {
