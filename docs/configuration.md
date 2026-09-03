@@ -328,12 +328,14 @@ On a hit the push is refused: the ticket fails, the worktree is **preserved** fo
 row) — a file-backed Pi session that lives in the **daemon**, not the dashboard process, so it
 survives both a dashboard quit and a daemon restart.
 
-| Key                       | Default | Reload  | Effect                                                                                                                                    |
-| ------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `chat.enabled`            | `true`  | live    | Serve `/chat/*` on the health server and accept new chat turns; existing session state on disk is untouched when off.                     |
-| `chat.modelId`            | unset   | restart | Model id override for chat turns (same resolution machinery as `model.id`); unset falls back to `github.plannerModelId`, then `model.id`. |
-| `chat.thinkingLevel`      | unset   | restart | Thinking level for chat turns; unset falls back to `model.thinkingLevel`.                                                                 |
-| `chat.turnTimeoutMinutes` | unset   | restart | Per-turn timeout for a chat prompt; unset falls back to `worker.defaultTimeoutMinutes` (30).                                              |
+| Key                          | Default | Reload  | Effect                                                                                                                                                                                                      |
+| ---------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chat.enabled`               | `true`  | live    | Serve `/chat/*` on the health server and accept new chat turns; existing session state on disk is untouched when off.                                                                                       |
+| `chat.modelId`               | unset   | restart | Model id override for chat turns (same resolution machinery as `model.id`); unset falls back to `github.plannerModelId`, then `model.id`.                                                                   |
+| `chat.thinkingLevel`         | unset   | restart | Thinking level for chat turns; unset falls back to `model.thinkingLevel`.                                                                                                                                   |
+| `chat.turnTimeoutMinutes`    | unset   | restart | Per-turn timeout for a chat prompt; unset falls back to `worker.defaultTimeoutMinutes` (30).                                                                                                                |
+| `chat.submitTool`            | `true`  | restart | Register the `junco_submit` tool on new chat sessions, so "submit it" in the chat proposes the parked draft for your `y`/`n` (see [Dashboard § chat](dashboard.md)). `false` keeps the model drafting only. |
+| `chat.confirmTimeoutMinutes` | `10`    | restart | How long a proposed submit waits for your decision before it expires and the draft stays parked.                                                                                                            |
 
 ```json
 {

@@ -110,6 +110,10 @@ export interface ChatConfig {
   modelId: string | null;
   thinkingLevel: string | null;
   turnTimeoutMinutes: number | null;
+  /** Register `junco_submit` on new chat sessions (spec 2026-09-03). */
+  submitTool: boolean;
+  /** How long a proposed submit waits for the operator's y/n before expiring. */
+  confirmTimeoutMinutes: number;
 }
 /** Runtime-resolved bot auth context (src/ghAuth.ts) — attached to Config by
  * entrypoints, never parsed from config.json. Carried by cfg into git()/gh()

@@ -249,6 +249,8 @@ export const ConfigSchema = z.object({
       modelId: z.string().min(1).optional(),
       thinkingLevel: z.string().min(1).optional(),
       turnTimeoutMinutes: z.number().min(1).optional(),
+      submitTool: z.boolean().default(true),
+      confirmTimeoutMinutes: z.number().min(1).default(10),
     })
     .prefault({}),
 });

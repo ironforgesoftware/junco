@@ -1254,12 +1254,21 @@ describe("chat section (spec 2026-09-01 §10)", () => {
       modelId: null,
       thinkingLevel: null,
       turnTimeoutMinutes: null,
+      submitTool: true,
+      confirmTimeoutMinutes: 10,
     });
   });
   it("explicit values parse through", () => {
     const cfg = loadConfig(
       writeJson({
-        chat: { enabled: false, modelId: "x/big", thinkingLevel: "high", turnTimeoutMinutes: 5 },
+        chat: {
+          enabled: false,
+          modelId: "x/big",
+          thinkingLevel: "high",
+          turnTimeoutMinutes: 5,
+          submitTool: false,
+          confirmTimeoutMinutes: 3,
+        },
       }),
     );
     expect(cfg.chat).toEqual({
@@ -1267,6 +1276,13 @@ describe("chat section (spec 2026-09-01 §10)", () => {
       modelId: "x/big",
       thinkingLevel: "high",
       turnTimeoutMinutes: 5,
+      submitTool: false,
+      confirmTimeoutMinutes: 3,
     });
+  });
+  it("chat.submitTool defaults on and chat.confirmTimeoutMinutes to 10", () => {
+    const parsed = ConfigSchema.parse({});
+    expect(parsed.chat.submitTool).toBe(true);
+    expect(parsed.chat.confirmTimeoutMinutes).toBe(10);
   });
 });
