@@ -6,6 +6,11 @@ import { toolCallIds, type TranscriptSummary } from "../../transcriptSummary.js"
 export interface TranscriptState {
   id: string;
   path: string | null;
+  /** The ticket's repo, captured at open — the issue's nwo, or the queue row's
+   * checkout path (QueueRow.repoPath). Null for a ticket with no repo (Q&A),
+   * which is what makes `c` here toast instead of chatting (spec 2026-09-02
+   * §5/D7). */
+  repoKey: string | null;
   /** Opened from a RUNNING row: a missing file means "not started yet", not an error. */
   expectLive: boolean;
   loading: boolean;
@@ -24,7 +29,7 @@ export interface TranscriptState {
 
 export interface TranscriptApi {
   transcript: TranscriptState | null;
-  openTranscript: (id: string, opts: { expectLive: boolean }) => void;
+  openTranscript: (id: string, opts: { expectLive: boolean; repoKey?: string | null }) => void;
   closeTranscript: () => void;
   toggleThinking: () => void;
   setFollow: (on: boolean) => void;
@@ -120,11 +125,12 @@ export function useTranscript({
   );
 
   const openTranscript = useCallback(
-    (id: string, opts: { expectLive: boolean }): void => {
+    (id: string, opts: { expectLive: boolean; repoKey?: string | null }): void => {
       pollRef.current = { id, expectLive: opts.expectLive, size: null, polling: opts.expectLive };
       setTranscript({
         id,
         path: null,
+        repoKey: opts.repoKey ?? null,
         expectLive: opts.expectLive,
         loading: true,
         error: null,

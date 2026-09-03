@@ -28,15 +28,18 @@ const maxLinesPerFunction = (max) => [
  * once the work named in its comment lands.
  */
 const GRANDFATHERED_FUNCTION_LINES = [
-  // `App` (1,884): #350 moved the action handlers out into src/tui/hooks/; what
+  // `App` (1,890): #350 moved the action handlers out into src/tui/hooks/; what
   // is left is the nav spine plus the render body, whose section-by-section
   // extraction is still open under the sweep tracker #387. −29 from the 1,913
   // the chat VIEW spine left it at: the footer/binding derivation (the
   // binding-context switch, the two buildContextBindings memos and the footer
   // rows) moved to hooks/useFooterBindings.ts (footer redesign 2026-09-02,
   // Task 4), less the one line of `openHelp`'s re-entrancy guard. The cascade,
-  // the verbs and the slash router live in hooks/useChatInput.ts.
-  { file: "src/tui/App.tsx", max: 1884 },
+  // the verbs and the slash router live in hooks/useChatInput.ts. +6 for the
+  // chat verb (Task 5, 1,884 → 1,890): five props naming the verb's targets to
+  // useViewActions (openChat/setView/setPane/prDetail/selectedPr) plus the one
+  // `chatTarget` line the footer pill and the overlays' own `c` share.
+  { file: "src/tui/App.tsx", max: 1890 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

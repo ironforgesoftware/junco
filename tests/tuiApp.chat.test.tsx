@@ -11,11 +11,22 @@
  * ink's own input-listener effect has certainly run before the first key.
  */
 import { describe, it, expect } from "vitest";
-import { renderApp, stubClient } from "./helpers/localFixtures.js";
+import {
+  CHEAP,
+  EMPTY_QUEUE,
+  okv,
+  renderApp,
+  stubClient,
+  tap,
+  TO_QUEUE_ROW,
+} from "./helpers/localFixtures.js";
+import { makeDashPr } from "./helpers/dashFixtures.js";
+import { githubTicketId } from "../src/githubInbox.js";
 import { until, fireUntil, tick } from "./helpers/until.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
+import type { DashIssue } from "../src/tui/state.js";
 import {
   chatDraft,
   chatPrompt,
@@ -230,5 +241,169 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     await until(() => r.lastFrame()!.includes("esc blur/abort"));
     r.stdin.write("z");
     await until(() => r.lastFrame()!.includes("z█")); // the cursor block only renders when active
+  });
+});
+
+/**
+ * The chat verb end to end (spec 2026-09-02 §5, D6/D7): `c` opens the chat for
+ * whatever repo the surface is about, with the issue/PR thread already TYPED in
+ * the composer — and nothing sent. Every keystroke is `until`-gated on the
+ * previous one's committed frame (CLAUDE.md's Ink discipline).
+ *
+ * Pane markers: the issue list's chip row is the only one carrying
+ * "investigate" (ISSUES_CHIP_ORDER's `analyze`), so it gates pane 2 — and its
+ * absence, after that, gates the step onto pane 3.
+ */
+describe("the chat verb (spec 2026-09-02 §5)", () => {
+  const ISSUE_46: DashIssue = {
+    number: 46,
+    title: "First issue",
+    labels: ["junco"],
+    updatedAt: "2026-07-06T10:00:00Z",
+    url: "https://github.com/acme/api/issues/46",
+    author: null,
+  };
+  const PR_12 = makeDashPr({ number: 12, nwo: "acme/api" });
+  const TICKET_46 = githubTicketId("acme/api", 46);
+
+  /** chatClient + one issue (#46) and one PR (#12), both on acme/api — the
+   *  rail's OWN first row, so the §8.1 re-subscribe effect (the rail's key wins
+   *  while the chat view is open) never swaps the session out from under the
+   *  prefill. */
+  function verbClient() {
+    const c = chatClient();
+    return {
+      ...c,
+      client: {
+        ...c.client,
+        listIssues: async () => okv({ issues: [ISSUE_46], staleAt: null }),
+        listPrs: async () => okv({ prs: [PR_12], staleAt: null }),
+      } as DashboardClient,
+    };
+  }
+
+  const frame = (r: ReturnType<typeof renderApp>): string => r.lastFrame() ?? "";
+  /** The ▌ cursor on the row carrying `text` — the body-focus settled signal. */
+  const selOn = (r: ReturnType<typeof renderApp>, text: string): boolean =>
+    frame(r)
+      .split("\n")
+      .some((l) => l.includes(text) && l.includes("▌"));
+
+  it("c on the issue list opens the repo chat with /issue N typed, and sends nothing", async () => {
+    const c = verbClient();
+    const r = renderApp({ client: c.client });
+    await until(() => frame(r).includes(LOADED));
+    r.stdin.write("l"); // pane 2 — the issue list
+    await until(() => frame(r).includes("investigate"));
+    r.stdin.write("c");
+    await until(() => frame(r).includes("chat · acme/api"));
+    await until(() => frame(r).includes("/issue 46"));
+    expect(c.calls.filter((x) => x.startsWith("prompt:"))).toEqual([]);
+  });
+
+  it("c on pane 3 prefills the selected PR's thread", async () => {
+    const c = verbClient();
+    const r = renderApp({ client: c.client });
+    await until(() => frame(r).includes(LOADED));
+    r.stdin.write("l");
+    await until(() => frame(r).includes("investigate"));
+    r.stdin.write("l"); // pane 3 — the PR list drops the issue verbs
+    await until(() => !frame(r).includes("investigate"));
+    r.stdin.write("c");
+    await until(() => frame(r).includes("chat · acme/api"));
+    await until(() => frame(r).includes("/pr 12"));
+  });
+
+  it("c inside the issue-detail overlay prefills the same thread (D7)", async () => {
+    const c = verbClient();
+    const r = renderApp({ client: c.client });
+    await until(() => frame(r).includes(LOADED));
+    r.stdin.write("l");
+    await until(() => frame(r).includes("investigate"));
+    r.stdin.write("\r"); // enter — the issue-detail overlay
+    await until(() => frame(r).includes("(no plan posted yet)"));
+    r.stdin.write("c");
+    await until(() => frame(r).includes("chat · acme/api"));
+    await until(() => frame(r).includes("/issue 46"));
+  });
+
+  it("c with no repo in context toasts and stays put", async () => {
+    const c = verbClient();
+    const r = renderApp({ client: c.client });
+    await until(() => frame(r).includes(LOADED));
+    await tap(r, TO_QUEUE_ROW); // rail → the queue system row
+    await until(() => frame(r).includes("sub-fix-typos"));
+    r.stdin.write("l"); // into the queue body
+    await until(() => selOn(r, "#1 exec"));
+    r.stdin.write("c");
+    await until(() => frame(r).includes("select a repo first"));
+    expect(frame(r)).not.toContain("chat · ");
+  });
+
+  // #330's key, re-verified from the surface the chat verb now shares: `t` is
+  // the issue list's transcript, `c` its chat — neither shadows the other. The
+  // transcript then carries the issue's repo, so `c` there chats about it (D7).
+  it("t on the issue list still opens the ticket transcript, whose own c chats about the repo", async () => {
+    const c = verbClient();
+    const r = renderApp({
+      client: c.client,
+      queueFn: async () => ({
+        ...EMPTY_QUEUE,
+        running: [
+          {
+            id: TICKET_46,
+            github: { nwo: "acme/api", issue: 46, kind: "pr" as const, external: false },
+            turns: 1,
+            lastTool: null,
+            outputTokens: null,
+            startedAt: "2026-07-07T10:00:00Z",
+            updatedAt: null,
+            stale: false,
+            repoPath: null,
+          },
+        ],
+      }),
+    });
+    await until(() => frame(r).includes(LOADED));
+    r.stdin.write("l");
+    await until(() => frame(r).includes("investigate"));
+    r.stdin.write("t");
+    await until(() => frame(r).includes("transcript ▸"));
+    expect(frame(r)).toContain(TICKET_46);
+    r.stdin.write("c");
+    await until(() => frame(r).includes("chat · acme/api"));
+  });
+
+  // The queue row's transcript carries the TICKET's checkout path
+  // (QueueRow.repoPath) — a Q&A ticket has none, and `c` there has nothing to
+  // chat about.
+  it("a queue-row transcript chats about the ticket's checkout, and toasts when it has none", async () => {
+    const withRepo = {
+      ...CHEAP,
+      queue: { ...CHEAP.queue, running: [{ ...CHEAP.queue.running[0]!, repoPath: "/c/api" }] },
+    };
+    const c = verbClient();
+    const r = renderApp({ client: c.client, localCheapFn: async () => withRepo });
+    await until(() => frame(r).includes(LOADED));
+    await tap(r, TO_QUEUE_ROW);
+    await until(() => frame(r).includes("sub-fix-typos"));
+    r.stdin.write("l");
+    await until(() => selOn(r, "#1 exec"));
+    r.stdin.write("\r"); // enter — the running row's transcript
+    await until(() => frame(r).includes("transcript ▸"));
+    r.stdin.write("c");
+    await until(() => frame(r).includes("chat · /c/api"));
+
+    const bare = verbClient();
+    const r2 = renderApp({ client: bare.client }); // CHEAP's running row: repoPath null
+    await until(() => frame(r2).includes(LOADED));
+    await tap(r2, TO_QUEUE_ROW);
+    await until(() => frame(r2).includes("sub-fix-typos"));
+    r2.stdin.write("l");
+    await until(() => selOn(r2, "#1 exec"));
+    r2.stdin.write("\r");
+    await until(() => frame(r2).includes("transcript ▸"));
+    r2.stdin.write("c");
+    await until(() => frame(r2).includes("select a repo first"));
   });
 });

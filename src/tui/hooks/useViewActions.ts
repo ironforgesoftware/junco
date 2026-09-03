@@ -4,10 +4,12 @@ import type { DashboardClient } from "../ghClient.js";
 import type { UnifiedRepo } from "../railModel.js";
 import type { ToastKind } from "../theme.js";
 import type { ReviewState } from "../components/ReviewView.js";
-import type { View, DetailState } from "../App.js";
+import type { View, DetailState, PrDetailState } from "../App.js";
+import type { DashPr } from "../prState.js";
 import type { CmdState } from "./useCmdOutput.js";
 import type { TranscriptState } from "./useTranscript.js";
 import type { ChatDraftActions } from "./useChatDrafts.js";
+import type { ChatApi } from "./useChat.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
 import type { DashIssue } from "../state.js";
 
@@ -55,6 +57,64 @@ export interface ViewActionsInput {
    * keymap carries the hidden reserved `?`, so every arm below must dispatch
    * it — otherwise the key and the pinned `? help` chip are inert there. */
   openHelp: () => void;
+  /** useChat's opener (spec 2026-09-02 §5): `c` from an overlay attaches the
+   * chat to the overlay's OWN repo, with the thread prefilled where one is in
+   * view — `chatTargetFor` below decides both. */
+  openChat: ChatApi["openChat"];
+  /** The chat verb navigates as well as opens: full-screen chat view, focus on
+   * the composer's pane (App owns the nav spine, so it hands these in). */
+  setView: (v: View) => void;
+  setPane: (p: 1 | 2 | 3) => void;
+  /** The open PR-detail overlay's frozen PR, and the PRs view's selection —
+   * read-only, the same way `detail` is: they name the chat verb's target.
+   * (`null` is App's own "nothing selected"; `undefined` is what an index past
+   * a shrunk list yields — both mean the same thing here.) */
+  prDetail: PrDetailState | null;
+  selectedPr: DashPr | null | undefined;
+}
+
+/** What `c` chats about from an overlay (spec 2026-09-02 §5, D6/D7): the
+ * overlay's repo, with the issue/PR thread prefilled where one is in view.
+ * Null → no repo in context → the caller toasts and the pill is absent. */
+export function chatTargetFor(
+  view: View,
+  s: {
+    detail: DetailState | null;
+    prDetail: PrDetailState | null;
+    selectedPr: DashPr | null | undefined;
+    transcript: TranscriptState | null;
+    reviewState: ReviewState;
+  },
+): { key: string; composer?: string } | null {
+  switch (view) {
+    case "detail":
+      return s.detail
+        ? { key: s.detail.nwo.toLowerCase(), composer: `/issue ${s.detail.issue.number}` }
+        : null;
+    case "prDetail":
+      return s.prDetail
+        ? { key: s.prDetail.pr.nwo.toLowerCase(), composer: `/pr ${s.prDetail.pr.number}` }
+        : null;
+    case "prs":
+      return s.selectedPr
+        ? { key: s.selectedPr.nwo.toLowerCase(), composer: `/pr ${s.selectedPr.number}` }
+        : null;
+    case "transcript":
+      return s.transcript?.repoKey ? { key: s.transcript.repoKey } : null;
+    case "review": {
+      // The combined list's cursor walks batches, then comment drafts, then
+      // chat drafts (useViewActions' own `selectedChatDraft` order) — each
+      // carries the repo it belongs to.
+      const { batches, drafts, chatDrafts, cursor } = s.reviewState;
+      if (cursor < batches.length) return { key: batches[cursor]!.nwo.toLowerCase() };
+      if (cursor < batches.length + drafts.length)
+        return { key: drafts[cursor - batches.length]!.nwo.toLowerCase() };
+      const d = chatDrafts[cursor - batches.length - drafts.length];
+      return d ? { key: d.key } : null;
+    }
+    default:
+      return null;
+  }
 }
 
 /** The chat draft `submit`/`edit`/`route`/`discard` act on: the open preview's
@@ -105,6 +165,11 @@ export function useViewActions({
   detail,
   openIssueTranscript,
   openHelp,
+  openChat,
+  setView,
+  setPane,
+  prDetail,
+  selectedPr,
 }: ViewActionsInput): Record<string, () => void> {
   const reviewActions = useMemo((): Record<string, () => void> => {
     // Chat-draft verb dispatch: a no-op unless a chat draft is actually
@@ -248,10 +313,22 @@ export function useViewActions({
   }, [close, client, aliveRef, showToast, reviewState, setReviewState, chatDraftActions]);
 
   return useMemo((): Record<string, () => void> => {
+    // Spec 2026-09-02 §5 (D6/D7): ONE chat verb for every overlay that has a
+    // repo in context — same predicate as Task 2's footer pill, so a rendered
+    // pill and a live `c` can never disagree. No target ⇒ toast, never a chat
+    // about whatever the rail happens to be parked on.
+    const chat = (): void => {
+      const t = chatTargetFor(view, { detail, prDetail, selectedPr, transcript, reviewState });
+      if (t === null) return void showToast("info", "select a repo first (←)");
+      openChat(t.key, t.composer === undefined ? undefined : { composer: t.composer });
+      setView("chat");
+      setPane(2);
+    };
     switch (view) {
       case "detail":
         return {
           browser: openDetailIssueInBrowser,
+          chat,
           close,
           help: openHelp,
           // Ruling R1: `transcript` now derives on `t` here (viewActions.ts's
@@ -264,7 +341,7 @@ export function useViewActions({
             openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null, "detail"),
         };
       case "prDetail":
-        return { browser: openPrDetailInBrowser, close, help: openHelp };
+        return { browser: openPrDetailInBrowser, chat, close, help: openHelp };
       case "repoDetail":
         return {
           close,
@@ -276,7 +353,7 @@ export function useViewActions({
           },
         };
       case "prs":
-        return { browser: openSelectedPr, close, help: openHelp };
+        return { browser: openSelectedPr, chat, close, help: openHelp };
       case "cmdOutput":
         return {
           close,
@@ -287,6 +364,7 @@ export function useViewActions({
         };
       case "transcript":
         return {
+          chat,
           close,
           help: openHelp,
           thinking: toggleTranscriptThinking,
@@ -302,7 +380,7 @@ export function useViewActions({
             : {}),
         };
       case "review":
-        return { ...reviewActions, help: openHelp };
+        return { ...reviewActions, chat, help: openHelp };
       case "chat":
         return { ...chatHandlers, help: openHelp };
       case "palette":
@@ -331,9 +409,15 @@ export function useViewActions({
     setTranscriptFollow,
     toEnd,
     reviewActions,
+    reviewState,
     chatHandlers,
     detail,
     openIssueTranscript,
     openHelp,
+    openChat,
+    setView,
+    setPane,
+    prDetail,
+    selectedPr,
   ]);
 }

@@ -190,18 +190,40 @@ describe("useMainActions — the main view's action table", () => {
     unmount();
   });
 
+  // Spec 2026-09-02 §5: `c` is pane-aware the way `o` (browser) is — the rail
+  // opens the bare session, the issue list and pane 3 prefill the thread the
+  // cursor is on. Nothing is SENT: the operator still owns the send key.
   it("chat opens the selected row's session and focuses the chat pane, or toasts on a system row", () => {
     const { api, spies, unmount } = mount({ pane: 1 });
     api["chat"]?.();
-    expect(spies.openChat).toHaveBeenCalledWith("acme/widgets");
+    expect(spies.openChat).toHaveBeenCalledWith("acme/widgets", undefined);
     expect(spies.setView).toHaveBeenCalledWith("chat");
     expect(spies.setPane).toHaveBeenCalledWith(2);
     unmount();
     const sys = mount({ currentRepoKey: null });
     sys.api["chat"]?.();
     expect(sys.spies.openChat).not.toHaveBeenCalled();
-    expect(sys.spies.showToast).toHaveBeenCalledWith("info", "no repo selected");
+    expect(sys.spies.showToast).toHaveBeenCalledWith("info", "select a repo first (←)");
     sys.unmount();
+  });
+
+  it("chat prefills /issue N on the issues body and /pr N on pane 3", () => {
+    const issues = mount({ pane: 2 });
+    issues.api["chat"]?.();
+    expect(issues.spies.openChat).toHaveBeenCalledWith("acme/widgets", { composer: "/issue 42" });
+    issues.unmount();
+
+    const prs = mount({ pane: 3, selectedPane3Pr: PR });
+    prs.api["chat"]?.();
+    expect(prs.spies.openChat).toHaveBeenCalledWith("acme/widgets", { composer: "/pr 9" });
+    prs.unmount();
+
+    // A system row's body (no issue, no PR) keeps the bare session even on
+    // pane 2 — the prefill follows the SELECTION, not the pane number.
+    const section = mount({ pane: 2, body: { kind: "section", section: "queue" } });
+    section.api["chat"]?.();
+    expect(section.spies.openChat).toHaveBeenCalledWith("acme/widgets", undefined);
+    section.unmount();
   });
 
   // The issue list's own `t` (#330) — chat moved to the MAIN_GLOBAL `c`

@@ -9,6 +9,7 @@ import type { LocalCheap } from "../localSnapshot.js";
 import type { ToastKind } from "../theme.js";
 import type { ReviewState } from "../components/ReviewView.js";
 import type { ConfirmState } from "./useConfirm.js";
+import type { ChatApi } from "./useChat.js";
 import type { Pane, View } from "../App.js";
 
 /**
@@ -37,8 +38,9 @@ export interface MainActionsInput {
   currentNwo: string | undefined;
   /** The selected row's chat session key (chatKey.ts); null on a system row. */
   currentRepoKey: string | null;
-  /** useChat's opener — `t` on a repo row starts/attaches its session. */
-  openChat: (key: string) => void;
+  /** useChat's opener — `c` on a row starts/attaches its session, prefilling
+   * the composer with the selected issue/PR's thread (spec 2026-09-02 §5). */
+  openChat: ChatApi["openChat"];
   /** `t` on an ISSUE row (#330) — the other half of the shared key. */
   openIssueTranscript: (
     nwo: string | null | undefined,
@@ -228,8 +230,20 @@ export function useMainActions({
       // withdrawn, `chat` claims its own `c` everywhere, and `transcript`
       // below is the issue list's own `t`.
       chat: () => {
-        if (currentRepoKey === null) return void showToast("info", "no repo selected");
-        openChat(currentRepoKey);
+        if (currentRepoKey === null) return void showToast("info", "select a repo first (←)");
+        // Pane-aware like `browser` above: the rail opens the bare session, the
+        // issue list and pane 3 hand the chat the thread the cursor is on —
+        // TYPED into the composer, never sent (spec 2026-09-02 §5).
+        const issue = pane === 2 && body?.kind === "issues" ? currentIssue : undefined;
+        const pr = pane === 3 ? selectedPane3Pr : undefined;
+        openChat(
+          currentRepoKey,
+          issue
+            ? { composer: `/issue ${issue.number}` }
+            : pr
+              ? { composer: `/pr ${pr.number}` }
+              : undefined,
+        );
         setView("chat");
         setPane(2);
       },

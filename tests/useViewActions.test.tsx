@@ -3,7 +3,11 @@ import { describe, it, expect, vi } from "vitest";
 import React, { useRef } from "react";
 import { render } from "ink-testing-library";
 import { Text } from "ink";
-import { useViewActions, type ViewActionsInput } from "../src/tui/hooks/useViewActions.js";
+import {
+  chatTargetFor,
+  useViewActions,
+  type ViewActionsInput,
+} from "../src/tui/hooks/useViewActions.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ReviewState } from "../src/tui/components/ReviewView.js";
 import type { TranscriptState } from "../src/tui/hooks/useTranscript.js";
@@ -109,6 +113,7 @@ const TRANSCRIPT = (live: boolean | null, follow = true): TranscriptState =>
   ({
     id: "t-1",
     path: null,
+    repoKey: null,
     expectLive: true,
     loading: false,
     error: null,
@@ -135,6 +140,9 @@ function makeSpies() {
     setReviewState: vi.fn(),
     openIssueTranscript: vi.fn(),
     openHelp: vi.fn(),
+    openChat: vi.fn(),
+    setView: vi.fn(),
+    setPane: vi.fn(),
     chatSubmit: vi.fn(async () => {}),
     chatEdit: vi.fn(async () => {}),
     chatRoute: vi.fn(async () => {}),
@@ -181,8 +189,13 @@ function mount(
     reviewState: EMPTY_REVIEW,
     setReviewState: spies.setReviewState,
     detail: null,
+    prDetail: null,
+    selectedPr: undefined,
     openIssueTranscript: spies.openIssueTranscript,
     openHelp: spies.openHelp,
+    openChat: spies.openChat,
+    setView: spies.setView,
+    setPane: spies.setPane,
     chatDraftActions: {
       submit: spies.chatSubmit,
       edit: spies.chatEdit,
@@ -206,7 +219,7 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
       ["prs", "openSelectedPr"],
     ] as const) {
       const { api, spies, unmount } = mount({ view });
-      expect(ids(api)).toEqual(["browser", "close", "help"]);
+      expect(ids(api)).toEqual(["browser", "chat", "close", "help"]);
       api["browser"]?.();
       expect(spies[spy]).toHaveBeenCalledTimes(1);
       api["close"]?.();
@@ -232,7 +245,7 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
         loading: false,
       },
     });
-    expect(ids(api)).toEqual(["browser", "close", "help", "transcript"]);
+    expect(ids(api)).toEqual(["browser", "chat", "close", "help", "transcript"]);
     api["browser"]?.();
     expect(spies.openDetailIssueInBrowser).toHaveBeenCalledTimes(1);
     api["close"]?.();
@@ -274,13 +287,13 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("transcript offers follow only while the file is live, pausing at the tail", () => {
     const dead = mount({ view: "transcript", transcript: TRANSCRIPT(false) });
-    expect(ids(dead.api)).toEqual(["close", "help", "thinking"]);
+    expect(ids(dead.api)).toEqual(["chat", "close", "help", "thinking"]);
     dead.api["thinking"]?.();
     expect(dead.spies.toggleTranscriptThinking).toHaveBeenCalledTimes(1);
     dead.unmount();
 
     const live = mount({ view: "transcript", transcript: TRANSCRIPT(true, true) });
-    expect(ids(live.api)).toEqual(["close", "follow", "help", "thinking"]);
+    expect(ids(live.api)).toEqual(["chat", "close", "follow", "help", "thinking"]);
     live.api["follow"]?.();
     expect(live.spies.toEnd).toHaveBeenCalledTimes(1);
     expect(live.spies.setTranscriptFollow).toHaveBeenCalledWith(false);
@@ -357,10 +370,11 @@ describe("useViewActions — review", () => {
     open: { kind: "chatDraft", idx: 0 },
   };
 
-  it("exposes the eight review ids plus help", () => {
+  it("exposes the eight review ids plus help and chat", () => {
     const { api, unmount } = mount({ view: "review", reviewState: openBatch });
     expect(ids(api)).toEqual([
       "all",
+      "chat",
       "close",
       "discard",
       "edit",
@@ -524,6 +538,158 @@ describe("useViewActions — review", () => {
     expect(spies.chatSubmit).not.toHaveBeenCalled();
     expect(spies.chatEdit).not.toHaveBeenCalled();
     expect(spies.chatRoute).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
+// Spec 2026-09-02 §5 (D6/D7): `c` from an overlay chats about what the overlay
+// is showing — the repo it belongs to, with the issue/PR thread prefilled when
+// one is in view. No repo in context ⇒ null ⇒ the caller toasts (and Task 2's
+// footer pill is absent for exactly the same predicate).
+describe("chatTargetFor (spec 2026-09-02 §5)", () => {
+  it("issue detail → the issue's repo with /issue N prefilled", () => {
+    expect(
+      chatTargetFor("detail", {
+        detail: { nwo: "Acme/API", issue: { number: 46 } } as never,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: null as never,
+      }),
+    ).toEqual({ key: "acme/api", composer: "/issue 46" });
+  });
+  it("PR detail and the PRs list → /pr N", () => {
+    expect(
+      chatTargetFor("prDetail", {
+        detail: null,
+        prDetail: { pr: { nwo: "acme/api", number: 12 } } as never,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: null as never,
+      }),
+    ).toEqual({ key: "acme/api", composer: "/pr 12" });
+    expect(
+      chatTargetFor("prs", {
+        detail: null,
+        prDetail: null,
+        selectedPr: { nwo: "acme/api", number: 7 } as never,
+        transcript: null,
+        reviewState: null as never,
+      }),
+    ).toEqual({ key: "acme/api", composer: "/pr 7" });
+  });
+  it("transcript → the ticket's repo key, no prefill; null when the ticket has none", () => {
+    expect(
+      chatTargetFor("transcript", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: { repoKey: "/w/acme" } as never,
+        reviewState: null as never,
+      }),
+    ).toEqual({ key: "/w/acme" });
+    expect(
+      chatTargetFor("transcript", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: { repoKey: null } as never,
+        reviewState: null as never,
+      }),
+    ).toBeNull();
+  });
+  it("review → the selected item's repo (batch nwo, comment nwo, chat draft key); null past the list", () => {
+    // Only the four fields the cursor walk reads — cast at each call site so
+    // the `{ ...rs, cursor }` variants below stay spreadable objects.
+    const rs = {
+      batches: [{ nwo: "acme/api" }],
+      drafts: [{ nwo: "beta/two" }],
+      chatDrafts: [{ key: "/w/c" }],
+      cursor: 0,
+      open: null,
+    };
+    expect(
+      chatTargetFor("review", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: rs as never,
+      }),
+    ).toEqual({ key: "acme/api" });
+    expect(
+      chatTargetFor("review", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: { ...rs, cursor: 1 } as never,
+      }),
+    ).toEqual({ key: "beta/two" });
+    expect(
+      chatTargetFor("review", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: { ...rs, cursor: 2 } as never,
+      }),
+    ).toEqual({ key: "/w/c" });
+    expect(
+      chatTargetFor("review", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: { ...rs, cursor: 3 } as never,
+      }),
+    ).toBeNull();
+  });
+  it("an overlay with nothing selected, and every chatless view, target nothing", () => {
+    const none = {
+      detail: null,
+      prDetail: null,
+      selectedPr: undefined,
+      transcript: null,
+      reviewState: EMPTY_REVIEW,
+    };
+    for (const view of ["detail", "prDetail", "prs", "transcript", "review"] as const)
+      expect(chatTargetFor(view, none), view).toBeNull();
+    for (const view of ["main", "repoDetail", "cmdOutput", "chat", "help"] as const)
+      expect(chatTargetFor(view, none), view).toBeNull();
+  });
+});
+
+describe("the overlay chat handler (spec 2026-09-02 §5)", () => {
+  it("opens the target's chat and switches the view; a null target toasts", () => {
+    const detail = mount({
+      view: "detail",
+      detail: { nwo: "Acme/API", issue: { number: 46 } } as never,
+    });
+    detail.api["chat"]!();
+    expect(detail.spies.openChat).toHaveBeenCalledWith("acme/api", { composer: "/issue 46" });
+    expect(detail.spies.setView).toHaveBeenCalledWith("chat");
+    expect(detail.spies.setPane).toHaveBeenCalledWith(2);
+    detail.unmount();
+
+    const bare = mount({
+      view: "transcript",
+      transcript: { ...TRANSCRIPT(false), repoKey: null },
+    });
+    bare.api["chat"]!();
+    expect(bare.spies.openChat).not.toHaveBeenCalled();
+    expect(bare.spies.showToast).toHaveBeenCalledWith("info", "select a repo first (←)");
+    bare.unmount();
+  });
+
+  it("a target with no thread in view opens the plain session — no composer prefill", () => {
+    const { api, spies, unmount } = mount({
+      view: "transcript",
+      transcript: { ...TRANSCRIPT(false), repoKey: "/w/acme" },
+    });
+    api["chat"]!();
+    expect(spies.openChat).toHaveBeenCalledWith("/w/acme", undefined);
+    expect(spies.setView).toHaveBeenCalledWith("chat");
     unmount();
   });
 });

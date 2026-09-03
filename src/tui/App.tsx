@@ -87,7 +87,7 @@ import { useAddRepoForm } from "./hooks/useAddRepoForm.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useGithubData } from "./hooks/useGithubData.js";
 import { useLogOverlayActions } from "./hooks/useLogOverlayActions.js";
-import { useViewActions } from "./hooks/useViewActions.js";
+import { chatTargetFor, useViewActions } from "./hooks/useViewActions.js";
 import { useChat } from "./hooks/useChat.js";
 import { useChatDrafts } from "./hooks/useChatDrafts.js";
 import { useChatInput } from "./hooks/useChatInput.js";
@@ -208,7 +208,7 @@ export interface DetailState {
 /** The fullscreen PR detail overlay — reached from pane 3 (`enter`) or the p
  * view (`enter`); `from` is where `esc`/`q` returns focus/selection to. No
  * fetch: PrPreview renders straight off the already-loaded `DashPr`. */
-interface PrDetailState {
+export interface PrDetailState {
   pr: DashPr;
   from: "main" | "prs";
 }
@@ -290,6 +290,19 @@ const localCheapKey = (c: LocalCheap | null): unknown =>
   c === null
     ? null
     : { ...c, daemon: { ...c.daemon, uptimeSeconds: wholeMinutes(c.daemon.uptimeSeconds) } };
+
+/** `enter` on a queue row opens its transcript: live for a RUNNING row, and
+ * carrying the TICKET's own checkout (QueueRow.repoPath) so the transcript's
+ * `c` chats about that repo (spec 2026-09-02 §5/D7). A Q&A ticket has no
+ * checkout — null, and `c` there toasts. Module scope: the snapshot row is the
+ * only place the path exists, and LocalRow deliberately carries just the id. */
+function queueTranscriptOpts(
+  q: LocalCheap["queue"] | undefined,
+  row: { kind: "running" | "recent"; id: string },
+): { expectLive: boolean; repoKey: string | null } {
+  const found = [...(q?.running ?? []), ...(q?.recent ?? [])].find((r) => r.id === row.id);
+  return { expectLive: row.kind === "running", repoKey: found?.repoPath ?? null };
+}
 
 export function App(props: AppProps): React.JSX.Element {
   const {
@@ -639,12 +652,12 @@ export function App(props: AppProps): React.JSX.Element {
   const openQueueTranscript = useCallback((): void => {
     const tgt = localTarget;
     if (tgt?.kind === "running" || tgt?.kind === "recent") {
-      openTranscript(tgt.id, { expectLive: tgt.kind === "running" });
+      openTranscript(tgt.id, queueTranscriptOpts(localCheap?.queue, tgt));
       setView("transcript");
     } else if (tgt?.kind === "waiting") {
       showToast("info", "not started yet — no transcript");
     }
-  }, [localTarget, openTranscript, showToast]);
+  }, [localTarget, localCheap, openTranscript, showToast]);
 
   // Section-body windowing (outbox/worktrees lists) — minimal-movement
   // prevStart per section, exactly the LocalDashboard rule it replaces.
@@ -921,7 +934,7 @@ export function App(props: AppProps): React.JSX.Element {
         const recent = queueSnap?.recent.some((r) => r.id === candidate) ?? false;
         if (running || recent) {
           setTranscriptFrom(from);
-          openTranscript(candidate, { expectLive: running });
+          openTranscript(candidate, { expectLive: running, repoKey: nwo.toLowerCase() });
           setView("transcript");
           return;
         }
@@ -1330,6 +1343,13 @@ export function App(props: AppProps): React.JSX.Element {
   const chats = health?.chats ?? null;
   const chatBadge = useCallback((key: string) => chatBadgeFor(chats, key), [chats]);
 
+  // What `c` would chat about from the CURRENT overlay (spec 2026-09-02 §5,
+  // D6/D7) — the same pure call useViewActions' own `chat` handler makes, so
+  // the pill below and the live key agree by construction. `main` is the rail's
+  // own reading (the selected row's key), which this helper deliberately does
+  // not know.
+  const chatTarget = chatTargetFor(view, { detail, prDetail, selectedPr, transcript, reviewState });
+
   // ── Derived-mnemonic bindings + the two footer rows (mnemonic spec §2/§4,
   // footer spec 2026-09-02 §6): ONE context table drives the footer, the help
   // modal and the keyboard dispatch tail — render and input consume the same
@@ -1356,7 +1376,7 @@ export function App(props: AppProps): React.JSX.Element {
     composerFocused,
     mode: layout.mode,
     target: crumbs[crumbs.length - 1] ?? "",
-    chatReachable: currentRepoKey !== null,
+    chatReachable: view === "main" ? currentRepoKey !== null : chatTarget !== null,
     helpContext: helpCtx.current,
   });
   const openHelp = useCallback((): void => {
@@ -1442,7 +1462,12 @@ export function App(props: AppProps): React.JSX.Element {
     chatDraftActions,
     chatHandlers,
     detail,
+    prDetail,
+    selectedPr,
     openIssueTranscript,
+    openChat,
+    setView,
+    setPane,
   });
   const mainActions = useMainActions({
     client,
