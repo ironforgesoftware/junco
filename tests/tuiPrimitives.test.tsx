@@ -188,6 +188,14 @@ describe("scrollbarOffsetAt (click/drag to scroll)", () => {
     );
     expect(lastFrame()).toBe("");
   });
+  it("paints the same track with or without onScrollTo", () => {
+    const bare = render(<Scrollbar offset={0} viewport={5} total={10} height={4} />).lastFrame();
+    const live = render(
+      <Scrollbar offset={0} viewport={5} total={10} height={4} onScrollTo={() => {}} />,
+    ).lastFrame();
+    expect(bare).toBe("█\n█\n│\n│");
+    expect(live).toBe(bare);
+  });
 });
 
 describe("Preview pane scrollbar (Task 15)", () => {

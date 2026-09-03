@@ -1,5 +1,5 @@
 import React from "react";
-import { Text } from "ink";
+import { Box, Text } from "ink";
 import { ClickableBox } from "../../ClickableBox.js";
 
 /** Track/thumb glyph per row; empty array when everything fits (no bar). */
@@ -54,17 +54,23 @@ export function Scrollbar({
   const cells = scrollbarCells(offset, viewport, total, height);
   // No bar ⇒ no region either: when it all fits there is nothing to jump to.
   if (cells.length === 0) return null;
-  const jump =
-    onScrollTo === undefined
-      ? undefined
-      : (_x: number, y: number): void => onScrollTo(scrollbarOffsetAt(y, height, viewport, total));
+  const track = cells.map((c, i) => (
+    <Text key={i} dimColor={c === "│"}>
+      {c}
+    </Text>
+  ));
+  // `height` is explicit so the hit rect is the painted track and no more: in
+  // a row-direction parent a bare Box stretches to the full body height, and
+  // the rows past the last cell would then map past the end of the content.
+  const box = { flexDirection: "column" as const, flexShrink: 0, width: 1, height };
+  // A bar with no `onScrollTo` stays a plain Box — registering an inert region
+  // would swallow presses on this column that today reach the pane behind it.
+  if (onScrollTo === undefined) return <Box {...box}>{track}</Box>;
+  const jump = (_x: number, y: number): void =>
+    onScrollTo(scrollbarOffsetAt(y, height, viewport, total));
   return (
-    <ClickableBox flexDirection="column" flexShrink={0} width={1} onPressAt={jump} onDrag={jump}>
-      {cells.map((c, i) => (
-        <Text key={i} dimColor={c === "│"}>
-          {c}
-        </Text>
-      ))}
+    <ClickableBox {...box} onPressAt={jump} onDrag={jump}>
+      {track}
     </ClickableBox>
   );
 }
