@@ -4,6 +4,7 @@ import { Box, Text } from "ink";
 import { render, cleanup } from "ink-testing-library";
 import { MouseProvider, useOnMouseMiss, useOnAnyMousePress } from "../src/tui/MouseProvider.js";
 import { ClickableBox } from "../src/tui/ClickableBox.js";
+import { Scrollbar } from "../src/tui/components/primitives/Scrollbar.js";
 import { until, fireUntil } from "./helpers/until.js";
 
 afterEach(cleanup);
@@ -203,5 +204,55 @@ describe("ClickableBox + MouseProvider", () => {
     expect(onPress).not.toHaveBeenCalled();
     expect(r.lastFrame()).toContain("H");
     expect(r.lastFrame()).not.toContain("H*");
+  });
+});
+
+/** A 10×6 pane with a 4-row scrollbar in its last column — the transcript
+ * surfaces' shape in miniature. Which handler a press runs is the whole point:
+ * the bar is only a region when something wired `onScrollTo`, and even then
+ * only over the rows it actually paints. */
+function Pane({
+  onPane,
+  onScrollTo,
+}: {
+  onPane: () => void;
+  onScrollTo?: (offset: number) => void;
+}) {
+  return (
+    <MouseProvider>
+      <ClickableBox onPress={onPane} width={10} height={6}>
+        <Box flexDirection="column" flexGrow={1}>
+          {["a", "b", "c", "d", "e", "f"].map((t) => (
+            <Text key={t}>{t}</Text>
+          ))}
+        </Box>
+        <Scrollbar offset={0} viewport={4} total={40} height={4} onScrollTo={onScrollTo} />
+      </ClickableBox>
+    </MouseProvider>
+  );
+}
+
+describe("Scrollbar as a hit region", () => {
+  it("without onScrollTo the bar registers nothing: its column reaches the pane behind it", async () => {
+    const onPane = vi.fn();
+    const r = render(<Pane onPane={onPane} />);
+    await until(() => (r.lastFrame() ?? "").includes("█"));
+    // x=9 is the bar's own column, y=1 a row it paints.
+    await fireUntil(r.stdin, press(9, 1), () => onPane.mock.calls.length >= 1);
+  });
+
+  it("with onScrollTo the bar wins its own column — but only the rows it paints", async () => {
+    const onPane = vi.fn();
+    const onScrollTo = vi.fn();
+    const r = render(<Pane onPane={onPane} onScrollTo={onScrollTo} />);
+    await until(() => (r.lastFrame() ?? "").includes("█"));
+    // On the painted track (rows 0..3) the bar is the deepest region.
+    await fireUntil(r.stdin, press(9, 1), () => onScrollTo.mock.calls.length >= 1);
+    expect(onPane).not.toHaveBeenCalled();
+    // Below it (rows 4..5 of the pane) the press belongs to the pane: the
+    // explicit `height` stops the bar stretching over the whole body band,
+    // where those rows would have mapped past the end of the content.
+    await fireUntil(r.stdin, press(9, 5), () => onPane.mock.calls.length >= 1);
+    expect(onScrollTo).toHaveBeenCalledTimes(1);
   });
 });
