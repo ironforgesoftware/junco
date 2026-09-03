@@ -89,6 +89,33 @@ describe("useFooterBindings", () => {
       pane: 1,
     });
   });
+  // Ruling R6' (fix round 3): `view === "help"` wins over EVERY other input,
+  // the log overlay included. Before this the overlay won, and the footer
+  // rendered the overlay's own live chips underneath the help modal — chips a
+  // pointer could still reach, which is what made `? help` a trap. The modal's
+  // CONTENT is unaffected: it comes from `helpContext`, the origin captured at
+  // open time (R5), not from this context.
+  it("help wins over the log overlay: the footer under the modal is help's own context", () => {
+    const r = run({
+      ...base,
+      view: "help",
+      logOverlay: true,
+      helpContext: { kind: "logOverlay" },
+    });
+    expect(r.bindingContext).toEqual({ kind: "structuralOnly", view: "help" });
+    // One chip, no keymap — nothing under the modal can dispatch.
+    expect(r.bindings.keymap.size).toBe(0);
+    expect(r.footer.navigate.chips.map((c) => c.label)).toEqual(["close"]);
+    expect(r.footer.navigate.pinned).toEqual([]);
+    // …while the modal still lists the LOG OVERLAY's keys, from the origin.
+    expect(r.helpBindings.keymap.get("l")).toBe("level");
+  });
+  it("help wins over filtering too (same precedence)", () => {
+    expect(run({ ...base, view: "help", filtering: true }).bindingContext).toEqual({
+      kind: "structuralOnly",
+      view: "help",
+    });
+  });
   it("helpBindings defaults to the main-body context under the modal", () => {
     const r = run({ ...base, view: "help" });
     expect(r.bindingContext).toEqual({ kind: "structuralOnly", view: "help" });

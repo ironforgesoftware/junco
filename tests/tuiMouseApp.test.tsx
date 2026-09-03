@@ -416,15 +416,15 @@ describe("footer chips: mouse", () => {
 
   const HELP_TITLE = "junco dashboard — keys";
 
-  /** The log overlay open with the help modal over it — the one state where a
-   * modal is up AND the footer below it still renders the OVERLAY's rows
-   * (`logOverlay` wins over `view` in both useFooterBindings and App's
-   * actionHandlers). Mounted at 100 columns exactly, because
-   * ink-testing-library's stdout is fixed at 100 and on a wider frame the right
-   * edge — where the pinned chips live — no longer lines up with the real yoga
-   * columns the hit-test resolves against; and at 60 rows, because HelpModal is
-   * ~45 rows tall and on the suite's usual 30-row terminal it pushes the footer
-   * clean off the frame entirely (nothing to click, and nothing to prove). */
+  /** The log overlay open with the help modal over it. Mounted at 100 columns
+   * exactly, because ink-testing-library's stdout is fixed at 100 and on a
+   * wider frame the right edge — where the pinned chips live — no longer lines
+   * up with the real yoga columns the hit-test resolves against; and at 60
+   * rows, because HelpModal is ~45 rows tall and on the suite's usual 30-row
+   * terminal it pushes the footer clean off the frame entirely (nothing to
+   * click, and nothing to prove). Returns the overlay's OWN navigate row as it
+   * read before `?` — the columns its chips occupied, which is what the
+   * "click where a chip used to be" probes need. */
   const helpOverLogOverlay = async () => {
     const r = renderApp({
       sizeOverride: { columns: 100, rows: 60 },
@@ -436,9 +436,10 @@ describe("footer chips: mouse", () => {
     await fireUntil(r.stdin, "G", () => (r.lastFrame() ?? "").includes("seed-h"));
     // Enter opens the full-screen overlay; Enter is unbound inside it.
     await fireUntil(r.stdin, "\r", () => (r.lastFrame() ?? "").includes("following"));
+    const overlayNav = rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""));
     r.stdin.write("?"); // the overlay's own arm dispatches help (Ruling R5)
     await until(() => (r.lastFrame() ?? "").includes(HELP_TITLE));
-    return r;
+    return { r, overlayNav };
   };
 
   /** Press a footer cell repeatedly, but ONLY while the help modal is still up
@@ -459,27 +460,27 @@ describe("footer chips: mouse", () => {
     await until(() => !(r.lastFrame() ?? "").includes(HELP_TITLE));
   };
 
-  /** Column of `needle` on the footer's navigate row (last frame line). */
-  const navCell = (frame: string, needle: string): [number, number] => {
-    const y = navigateY(frame);
-    return [rowAt(frame, y).indexOf(needle), y];
-  };
-
-  // Regression (fix round 1, re-pointed by Ruling R6 in round 2): help opened
-  // from the LOG OVERLAY is the one state where the modal is up and the footer
-  // below it still renders a live-looking `? help` chip. Clicking it used to
-  // call openHelp with view === "help", re-arming the origin to "help" itself —
-  // after which any-key close and onMouseMiss both re-opened help and the
-  // dashboard was stuck until Ctrl-C. Two independent things now prevent that:
-  // R6 makes every footer chip inert while a modal is open (so the press is a
-  // plain MISS, which onMouseMiss turns into a close-back-to-origin), and
-  // openHelp refuses to run at all while view === "help".
-  it("help over the log overlay: clicking its own '? help' chip closes help, never traps", async () => {
-    const r = await helpOverLogOverlay();
-    const [x, y] = navCell(r.lastFrame() ?? "", "? help");
-    expect(x).toBeGreaterThan(0);
-    await pressUntilHelpCloses(r, x, y);
-    // Closed back to its ORIGIN: the log overlay, still open behind it.
+  // Regression (fix round 1, re-pointed by Ruling R6' in round 3). The trap:
+  // help opened from the LOG OVERLAY used to derive the OVERLAY's binding
+  // context — `logOverlay` won over `view` in useFooterBindings — so the footer
+  // under the modal rendered the overlay's live chips, `? help` among them.
+  // Clicking that called openHelp with view === "help", re-arming the origin to
+  // "help" itself, after which any-key close and onMouseMiss both re-opened
+  // help: stuck until Ctrl-C. R6' fixes it at the root — under the modal the
+  // footer is HELP's own context (`any key close`, empty keymap) — and
+  // openHelp's guard stays as defence in depth.
+  it("help over the log overlay: the footer is help's own, and a press on it closes back to the overlay", async () => {
+    const { r } = await helpOverLogOverlay();
+    const f = r.lastFrame() ?? "";
+    const y = navigateY(f);
+    const nav = rowAt(f, y);
+    // The overlay's chips are gone with its context — nothing here dispatches.
+    expect(nav).toContain("any key");
+    expect(nav).not.toContain("? help");
+    expect(nav).not.toContain("q close");
+    // So a press anywhere on the footer is a MISS, which onMouseMiss turns
+    // into a close back to the ORIGIN: the log overlay, still open behind it.
+    await pressUntilHelpCloses(r, 4, y);
     await until(() => (r.lastFrame() ?? "").includes("following"));
     // And the origin was never re-armed to "help": re-open, close by key, and
     // it is the overlay again rather than the modal re-appearing.
@@ -492,17 +493,15 @@ describe("footer chips: mouse", () => {
     await until(() => !(r.lastFrame() ?? "").includes("following"));
   });
 
-  // Ruling R6, the general case: a modal owns the pointer. `q close` is the
-  // sharpest probe — it is the log overlay's OWN close verb, so if the chip
-  // still dispatched under the modal the overlay would shut behind it and
-  // `following` would be gone the moment help closed.
-  it("help over the log overlay: a footer chip press under the modal never dispatches", async () => {
-    const r = await helpOverLogOverlay();
-    const [x, y] = navCell(r.lastFrame() ?? "", "q close");
+  // The same guarantee aimed at the sharpest cell on the row: where the
+  // overlay's OWN close verb sat a moment ago. If anything of the overlay's
+  // context survived under the modal, this press would shut the overlay behind
+  // it and `following` would be gone the moment help closed.
+  it("help over the log overlay: pressing where 'q close' used to be is a miss, not a close", async () => {
+    const { r, overlayNav } = await helpOverLogOverlay();
+    const x = overlayNav.indexOf("q close");
     expect(x).toBeGreaterThan(0);
-    await pressUntilHelpCloses(r, x, y);
-    // The press reached onMouseMiss, not logOverlayActions.close: the overlay
-    // is still open. (Pre-R6 this closed it — `following` would be absent.)
+    await pressUntilHelpCloses(r, x, navigateY(r.lastFrame() ?? ""));
     await until(() => (r.lastFrame() ?? "").includes("following"));
     expect(r.lastFrame() ?? "").toContain("level ≥ info"); // overlay state intact
     r.stdin.write(ESC); // and the overlay still closes on its own key

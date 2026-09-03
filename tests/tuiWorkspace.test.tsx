@@ -6,7 +6,7 @@ import { Workspace } from "../src/tui/components/Workspace.js";
 import { computeLayout } from "../src/tui/layout.js";
 import type { FooterRows } from "../src/tui/footerModel.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
-import { until, tick } from "./helpers/until.js";
+import { until } from "./helpers/until.js";
 
 afterEach(cleanup);
 
@@ -91,18 +91,18 @@ describe("Workspace", () => {
   });
 });
 
-// Ruling R6 (fix round 2): a modal owns the pointer. Workspace renders the
-// footer OUTSIDE the modal — deliberately, so navigation stays readable — but
-// a chip that still dispatched under an open modal is a surprise at best and,
-// for `? help` over the log overlay, was a trap (fix round 1). Passing
-// `chipActions` through only when `modal === null` is the whole mechanism, so
-// it is pinned here, at the component that owns the decision.
-describe("Workspace footer chips under a modal (R6)", () => {
+// The footer's chips are wired straight through to `chipActions` — the modal
+// case is NOT handled here (Ruling R6', fix round 3): under the help modal the
+// footer renders help's OWN context, which has no dispatchable chip, so the
+// derivation in hooks/useFooterBindings.ts is what keeps a pointer from
+// reaching the surface underneath. Disarming every chip at this level instead
+// would also disarm the palette's own `⏎ run`, which is a real verb.
+describe("Workspace footer chip clicks", () => {
   // SGR press at 0-based cell (x, y) — the suite's wire format.
   const press = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
   const size = { columns: 100, rows: 20 };
 
-  const mount = (modal: React.ReactNode | null, onQuit: () => void) =>
+  const mount = (onQuit: () => void) =>
     render(
       <MouseProvider>
         <Workspace
@@ -112,7 +112,7 @@ describe("Workspace footer chips under a modal (R6)", () => {
           toast={null}
           footer={FOOTER}
           chipActions={{ quit: onQuit }}
-          modal={modal}
+          modal={null}
         >
           <Text>BODY</Text>
         </Workspace>
@@ -126,27 +126,13 @@ describe("Workspace footer chips under a modal (R6)", () => {
     return [(lines[y] ?? "").indexOf("quit"), y];
   };
 
-  it("dispatches a footer chip when no modal is open", async () => {
+  it("dispatches a footer chip through chipActions", async () => {
     let hits = 0;
-    const r = mount(null, () => hits++);
+    const r = mount(() => hits++);
     await until(() => (r.lastFrame() ?? "").includes("quit"));
     const [x, y] = quitCell(r.lastFrame() ?? "");
     expect(x).toBeGreaterThan(0);
     r.stdin.write(press(x, y));
     await until(() => hits === 1);
-  });
-
-  it("makes every footer chip inert while a modal is open", async () => {
-    let hits = 0;
-    const r = mount(<Text>MODAL CONTENT</Text>, () => hits++);
-    await until(() => (r.lastFrame() ?? "").includes("MODAL CONTENT"));
-    // The chip still RENDERS (navigation stays readable under the modal) …
-    const [x, y] = quitCell(r.lastFrame() ?? "");
-    expect(x).toBeGreaterThan(0);
-    // … it just no longer resolves to a handler: the press hits no region.
-    r.stdin.write(press(x, y));
-    await tick();
-    await tick();
-    expect(hits).toBe(0);
   });
 });

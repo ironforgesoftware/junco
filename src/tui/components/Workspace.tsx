@@ -29,11 +29,11 @@ export function Workspace({
   /** The two footer rows (footerModel.buildFooterRows). */
   footer: FooterRows;
   /** Chip click handlers — pill/mnemonic chips by ID, structural by KEY.
-   * Ignored while a modal is open (Ruling R6): the footer renders BELOW the
-   * modal rather than behind it, so its chips would otherwise stay clickable
-   * through one — and under the help modal they are the chips of the surface
-   * underneath (the log overlay), which made `? help` a trap. A modal owns the
-   * pointer; the rows still render, they just stop resolving to handlers. */
+   * Wired through unconditionally, modal or not: an open modal's footer IS
+   * that modal's own context (palette/addRepo/help are structuralOnly; a
+   * confirm empties the handlers), so there is nothing of the surface
+   * underneath left to click — see hooks/useFooterBindings.ts, Ruling R6'.
+   * Blanket-disarming here instead would also kill the palette's own ⏎ run. */
   chipActions?: Record<string, () => void>;
   modal: React.ReactNode | null;
   /** Vertical alignment for the modal body — "top" for modals taller than
@@ -55,7 +55,7 @@ export function Workspace({
           children
         )}
       </Box>
-      <Footer rows={footer} toast={toast} chipActions={modal === null ? chipActions : undefined} />
+      <Footer rows={footer} toast={toast} chipActions={chipActions} />
     </Box>
   );
 }

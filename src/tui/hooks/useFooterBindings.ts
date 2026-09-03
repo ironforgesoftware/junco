@@ -62,6 +62,15 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     helpContext,
   } = input;
   const bindingContext = useMemo((): BindingContext => {
+    // Help FIRST — ahead of the log overlay and everything else (Ruling R6').
+    // The modal covers the body but not the footer, so whatever context wins
+    // here is what a pointer can reach underneath it. Letting `logOverlay` win
+    // rendered the OVERLAY's live chips below the modal, `? help` among them:
+    // clicking that re-entered openHelp and trapped the dashboard. Help's own
+    // structuralOnly context has one chip (`any key close`) and no keymap, so
+    // nothing under the modal dispatches. The modal's CONTENT is unaffected —
+    // it comes from `helpContext`, the origin captured at open time (R5).
+    if (view === "help") return { kind: "structuralOnly", view: "help" };
     if (logOverlay) return { kind: "logOverlay" };
     if (filtering) return { kind: "structuralOnly", view: "filtering" };
     // A focused composer derives NOTHING (spec §8.3): the empty keymap is
@@ -71,7 +80,6 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
         ? { kind: "structuralOnly", view: "chatCompose" }
         : { kind: "view", view: "chat" };
     switch (view) {
-      case "help":
       case "palette":
       case "addRepo":
       case "config":
