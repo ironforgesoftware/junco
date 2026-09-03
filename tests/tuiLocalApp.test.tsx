@@ -166,10 +166,15 @@ describe("section bodies", () => {
     await until(() => (r.lastFrame() ?? "").includes("system"));
     await tap(r, TO_QUEUE_ROW);
     await until(() => (r.lastFrame() ?? "").includes("sub-fix-typos"));
+    // Both directions are read off the NAVIGATE row, the only part of the bar
+    // that still differs by pane on a system row: the queue BODY offers
+    // `⏎ transcript` / `← rail`, the rail offers `→ issues` / `⏎ detail`.
+    // (Ruling R11: the ACTIONS row is that section's verbs on both panes now,
+    // so neither `retry` nor `add repo` discriminates any more.)
     r.stdin.write("l"); // ensure body focus
-    await until(() => (r.lastFrame() ?? "").includes("retry"));
+    await until(() => (r.lastFrame() ?? "").includes("⏎  transcript"));
     r.stdin.write(ESC);
-    await until(() => (r.lastFrame() ?? "").includes("add repo")); // rail hint set
+    await until(() => (r.lastFrame() ?? "").includes("→  issues"));
   });
 });
 

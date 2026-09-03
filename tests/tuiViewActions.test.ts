@@ -35,6 +35,8 @@ const GLOBALS = {
   q: "quit",
   "?": "help",
 };
+/** The go-somewhere globals, in chip order (spec 2026-09-02 §3.1, right of `│`). */
+const GO = ["queue", "review", "prs"];
 
 describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", () => {
   it("main:issues (pane 2 — the issue list)", () => {
@@ -285,13 +287,60 @@ describe("invariants", () => {
     expect(ids).toContain("chat");
   });
 
-  it("chips: a section body (no verbs of its own) advertises the go-somewhere globals", () => {
-    // repoDetail's own body-verb list is now empty — chat moved to the
-    // MAIN_GLOBAL chip sets above, so this body's row is just review/PRs
-    // (spec 2026-09-02 §3.1's "body verbs │ review · PRs" — no verbs here).
+  it("chips: a section body advertises its own verbs, then the go-somewhere globals", () => {
+    // Spec 2026-09-02 §4 "main · queue/outbox/… body": the body's verbs, then
+    // `review` · `PRs`. No repo is in context, so no repo-scoped verb belongs.
+    const b = buildContextBindings(main("queue", 2), "wide");
+    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+    expect(ids).toEqual(["retry", "delete", "review", "prs"]);
+  });
+
+  it("chips: pane 1 on a SYSTEM row lists that section's verbs, not the rail's (R11)", () => {
+    // The bug this pins: pane 1 used to hand EVERY row the rail's repo verbs,
+    // so a queue row on the rail advertised `audit browser refresh add repo
+    // Unwatch` against the target `queue` — verbs that only toast there.
+    const b = buildContextBindings(main("queue", 1), "wide");
+    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+    expect(ids).toEqual(["retry", "delete", "review", "prs"]);
+    for (const repoVerb of ["chat", "assess", "browser", "refresh", "addRepo", "unwatch"]) {
+      expect(ids).not.toContain(repoVerb);
+    }
+  });
+
+  it("chips: pane 1 on a LOCAL-ONLY repo row (repoDetail body) keeps the rail set (R11)", () => {
+    const b = buildContextBindings(main("repoDetail", 1), "wide");
+    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+    // …including the pinned pair, which `chipOrder` carries and footerModel
+    // re-homes to `navigate.pinned` (the section orders never listed them).
+    expect(ids).toEqual([
+      "chat",
+      "assess",
+      "browser",
+      "refresh",
+      "addRepo",
+      "unwatch",
+      ...GO,
+      "quit",
+      "help",
+    ]);
+  });
+
+  it("chips: the repoDetail BODY carries the repo verbs and chat, not a bare review/PRs (R11)", () => {
+    // Spec 2026-09-02 §4 "main · repo detail body": pill · browser · refresh ·
+    // audit │ queue · review · PRs. `c` is live on this body (useMainActions'
+    // chat handler reads `currentRepoKey`, which a repoDetail row supplies),
+    // so the chip that advertises it must exist — pill ⇔ handler.
     const b = buildContextBindings(main("repoDetail", 2), "wide");
     const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
-    expect(ids).toEqual(["review", "prs"]);
+    expect(ids).toEqual(["chat", "browser", "refresh", "assess", ...GO]);
+  });
+
+  it("chips: pane 3 keeps the PR-monitor set on every body (R11)", () => {
+    for (const body of ["issues", "repoDetail", "queue"] as const) {
+      const b = buildContextBindings(main(body, 3), "wide");
+      const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+      expect(ids, body).toEqual(["chat", "browser", "prs", "review", "quit", "help"]);
+    }
   });
 
   it("structuralOnly contexts derive nothing", () => {

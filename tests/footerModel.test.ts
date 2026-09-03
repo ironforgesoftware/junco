@@ -121,6 +121,50 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "structural:::palette",
       "structural:,:config",
     ]);
+    // The main view pins [help, quit] — no `close` option exists there, so the
+    // one bindings.all-derived formula yields the main pair (Ruling R5).
+    expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:quit:quit"]);
+  });
+  it("rail on a SYSTEM row: that section's verbs │ review, PRs — no pill, no repo verbs (R11)", () => {
+    // The undelivered §4 row: pane 1 used to hand a queue row the RAIL order,
+    // so the bar read `audit browser refresh add repo Unwatch │ queue review
+    // PRs` against the target `queue` — five verbs that only toast there.
+    const r = rows(
+      { kind: "main", body: "queue", pane: 1 },
+      { target: "queue", chatReachable: false },
+    );
+    expect(texts(r.actions.chips)).toEqual([
+      "mnemonic:retry:retry",
+      "mnemonic:delete:delete",
+      "│",
+      "mnemonic:review:review",
+      "mnemonic:prs:PRs",
+    ]);
+    expect(r.actions.chips.some((c) => c.kind === "pill")).toBe(false);
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:→:issues",
+      "structural:enter:detail",
+      "structural:g/G:first/last",
+      "structural:::palette",
+      "structural:,:config",
+    ]);
+    expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:quit:quit"]);
+  });
+  it("repo detail body: pill · browser · refresh · audit │ queue · review · PRs (R11)", () => {
+    // The other undelivered §4 row: this body used to render a bare `│ review
+    // PRs` with NO pill, while `c` was live on it — pill ⇔ handler, broken.
+    const r = rows({ kind: "main", body: "repoDetail", pane: 2 }, { target: "junco" });
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:chat:chat",
+      "mnemonic:browser:browser",
+      "mnemonic:refresh:refresh",
+      "mnemonic:assess:audit",
+      "│",
+      "mnemonic:queue:queue",
+      "mnemonic:review:review",
+      "mnemonic:prs:PRs",
+    ]);
   });
   it("medium width (100 cols) drops , and : from navigate and nothing from actions", () => {
     // Ruling R10: NAV_DROP_MEDIUM/mode-gated dropping is gone — `columns`

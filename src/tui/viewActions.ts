@@ -323,6 +323,26 @@ const ISSUES_CHIP_ORDER = [
   "help",
 ];
 const PANE3_CHIP_ORDER = ["chat", "browser", "prs", "review", "quit", "help"];
+/** Spec §4 "main · repo detail body" (Ruling R11): a repo IS in context on
+ * this body — `useMainActions`' `chat` handler reads `currentRepoKey`, which a
+ * repoDetail row supplies — so the pill leads, followed by the repo-scoped
+ * verbs a checkout with no issue list can act on. Before R11 this body fell
+ * into the section arm below and rendered a bare `│ review PRs`: a live `c`
+ * with no chip advertising it. */
+const REPO_DETAIL_CHIP_ORDER = ["chat", "browser", "refresh", "assess", "queue", "review", "prs"];
+/** Spec §4 "main · rail, system row" and "…queue/outbox/… body" (Ruling R11):
+ * the section's own verbs, then the go-somewhere globals. NO repo is in
+ * context, so neither the pill nor a repo-scoped verb belongs — on the rail as
+ * much as in the body. `quit`/`help` are deliberately absent: footerModel
+ * re-homes those to `navigate.pinned` off `bindings.all` regardless. */
+const sectionChipOrder = (body: MainBody): string[] => [
+  ...BODY_VERBS[body].filter((o) => !o.hidden).map((o) => o.id),
+  "review",
+  "prs",
+];
+/** A rail row that names a repo (watched → the issues body, everything else →
+ * repoDetail); the other five bodies are the pinned system rows. */
+const isRepoBody = (body: MainBody): boolean => body === "issues" || body === "repoDetail";
 
 function mnemonicChip(d: DerivedMnemonic): Chip {
   return {
@@ -355,23 +375,24 @@ export function buildContextBindings(context: BindingContext, _mode: LayoutMode)
         excluded: MAIN_EXCLUDED,
       });
       const visible = all.filter((d) => !d.hidden);
+      // Chip order per §4 row, in the table's own precedence (Ruling R11).
+      // Pane 1 is the RAIL, so it asks what the selected ROW is first: a repo
+      // row (watched or local-only) keeps the rail's set — `add repo` /
+      // `unwatch` are rail verbs and §4's "rail, repo row" lists them — while
+      // a system row gets that section's verbs. Only past pane 1 does the
+      // BODY decide, which is where `repoDetail` earns its own order.
       const chipOrder =
         pane === 1
-          ? RAIL_CHIP_ORDER
+          ? isRepoBody(context.body)
+            ? RAIL_CHIP_ORDER
+            : sectionChipOrder(context.body)
           : pane === 3
             ? PANE3_CHIP_ORDER
             : context.body === "issues"
               ? ISSUES_CHIP_ORDER
-              : // Section/RepoDetail bodies: the body's own verbs, then the
-                // go-somewhere globals (spec 2026-09-02 §3.1). Chat is not
-                // among them: these bodies never have a repo in context, so
-                // footerModel's chat-pill promotion is a no-op here anyway —
-                // the keymap already carries `c` regardless.
-                [
-                  ...BODY_VERBS[context.body].filter((o) => !o.hidden).map((o) => o.id),
-                  "review",
-                  "prs",
-                ];
+              : context.body === "repoDetail"
+                ? REPO_DETAIL_CHIP_ORDER
+                : sectionChipOrder(context.body);
       const byId = new Map(visible.map((d) => [d.id, d]));
       return {
         // Mnemonics only (spec 2026-09-02 §3.2): footerModel.ts's
