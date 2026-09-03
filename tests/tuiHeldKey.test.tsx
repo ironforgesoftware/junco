@@ -9,7 +9,9 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
 import { renderApp, ISSUES, okv, stubClient, HEAVY, tap } from "./helpers/localFixtures.js";
-import { until } from "./helpers/until.js";
+import { until, fireUntil } from "./helpers/until.js";
+import { summarizeTranscript } from "../src/transcriptSummary.js";
+import { runEnd, runStart, turnEndFull } from "./helpers/transcriptFixtures.js";
 
 afterEach(cleanup);
 
@@ -80,6 +82,35 @@ describe("held navigation keys (one stdin chunk)", () => {
     await until(() => !frame(r).toLowerCase().includes("delete"));
     expect(frame(r)).not.toContain("already running");
     expect(calls).toEqual([["rm", ["sub-fix-typos"]]]);
+  });
+
+  // The follow-pausing scroll key: `[` on a followed transcript lands at the
+  // tail (an absolute offset) before stepping, so a replayed "[[" must pause
+  // ONCE and then step twice — not land at the tail twice and net one row.
+  it("[[ on a followed transcript as one chunk pauses once and scrolls two rows", async () => {
+    const summary = summarizeTranscript(
+      Array.from({ length: 20 }, (_, i) => [
+        runStart({ flow: "assess", modelId: "m" }),
+        turnEndFull({ text: `T${String(i + 1).padStart(2, "0")}` }),
+        runEnd({ stopReason: "stop", durationMs: 1000 }),
+      ]).flat(),
+    );
+    const r = renderApp({
+      client: {
+        ...stubClient,
+        readTranscript: async () => okv({ kind: "read" as const, size: 1, summary }),
+      },
+    });
+    await until(() => frame(r).includes("system"));
+    await tap(r, "jj"); // rail → queue
+    await until(() => frame(r).includes("sub-fix-typos"));
+    await fireUntil(r.stdin, "l", () => frame(r).includes("retry"));
+    await fireUntil(r.stdin, "\r", () => frame(r).includes("transcript ▸"));
+    const range = (): RegExpExecArray | null => /(\d+)–(\d+)\/(\d+)/.exec(frame(r));
+    await until(() => range() !== null && range()![2] === range()![3]); // following the tail
+    const total = range()![3]!;
+    r.stdin.write("[[");
+    await until(() => range()?.[2] === String(Number(total) - 2));
   });
 
   it("jj in a system body as one chunk moves two rows", async () => {

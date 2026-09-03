@@ -69,6 +69,7 @@ import { ClickableBox } from "./ClickableBox.js";
 import { Button } from "./components/primitives/Button.js";
 import { useGuardedInput } from "./useGuardedInput.js";
 import { useScroll } from "./useScroll.js";
+import { useFollowLatch } from "./useFollowLatch.js";
 import type { LogReaderDeps } from "../logReader.js";
 import { useToast } from "./hooks/useToast.js";
 import { useConfirm } from "./hooks/useConfirm.js";
@@ -403,11 +404,6 @@ export function App(props: AppProps): React.JSX.Element {
     ackReveal: ackTranscriptReveal,
     toggleExpanded: toggleTranscriptExpanded,
   } = useTranscript({ client, aliveRef, pollMs: transcriptPollMs });
-  // The transcript view's `[` pause latch — useChatInput's `followRef`, for the
-  // same reason: a held `[` replays inside one closure where `transcript.follow`
-  // is stale-true on every pass, and `toEnd` sets an absolute offset.
-  const transcriptFollowRef = useRef(false);
-  transcriptFollowRef.current = transcript?.follow ?? false;
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
@@ -600,6 +596,23 @@ export function App(props: AppProps): React.JSX.Element {
     sysSection,
   ]);
   const { scroll, scrollBy, scrollTo, onScrollMax, toEnd } = useScroll(scrollKey);
+  // The two follow-pause latches App owns (useFollowLatch; the chat's lives
+  // in useChatInput): key and wheel pause through the same latch, landing at
+  // the tail first, and a replayed run or a wheel burst pauses once.
+  const transcriptLatch = useFollowLatch(transcript?.follow ?? false, {
+    pause: () => {
+      toEnd();
+      setTranscriptFollow(false);
+    },
+    resume: () => setTranscriptFollow(true),
+  });
+  const logLatch = useFollowLatch(logFollow, {
+    pause: () => {
+      setLogFollow(false);
+      toEnd();
+    },
+    resume: () => setLogFollow(true),
+  });
 
   // No render-time fs call: an empty/absent file both show the placeholder until
   // the first line arrives (a running daemon fills within one poll).
@@ -1326,20 +1339,21 @@ export function App(props: AppProps): React.JSX.Element {
   // (2026-09-02) removed the pane doors, and with no door there is no in-view
   // rail move: the rail-switch effect of Ruling R7 went with them, so a chat
   // is opened fresh by `c` and stays on the repo it was opened for. ──
-  const { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo, onReveal } = useChatInput({
-    view,
-    chatApi,
-    chatDraftActions,
-    client,
-    aliveRef,
-    showToast,
-    currentNwo,
-    setView,
-    scrollBy,
-    scrollTo,
-    toEnd,
-    visibleRows: chatVisibleRows(layout.bodyRows),
-  });
+  const { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo, onReveal, pauseFollow } =
+    useChatInput({
+      view,
+      chatApi,
+      chatDraftActions,
+      client,
+      aliveRef,
+      showToast,
+      currentNwo,
+      setView,
+      scrollBy,
+      scrollTo,
+      toEnd,
+      visibleRows: chatVisibleRows(layout.bodyRows),
+    });
   const composerFocused = chatState?.composerFocused === true;
   // Anchor-row click: the mouse form of ↑/↓ (a delta off the live cursor).
   const chatCursor = chatState?.cursor ?? 0;
@@ -1700,17 +1714,12 @@ export function App(props: AppProps): React.JSX.Element {
       setLogSearchMode(true);
       return;
     }
-    if (input === "G" || key.end) {
-      setLogFollow(true);
-      return;
-    }
+    if (input === "G" || key.end) return void logLatch.resume();
     if (input === "[" || key.upArrow) {
       // Scrolling up pauses follow, landing at the tail first so the step-up
-      // is relative to the bottom rather than a stale offset.
-      if (logFollow) {
-        setLogFollow(false);
-        toEnd();
-      }
+      // is relative to the bottom rather than a stale offset (latched — a
+      // held `[` replays inside one closure).
+      logLatch.pause();
       scrollBy(-1);
       return;
     }
@@ -1907,15 +1916,11 @@ export function App(props: AppProps): React.JSX.Element {
       if (key.return || input === " ") return void toggleTranscriptExpanded();
       if (input === "]") return void scrollBy(1);
       if (input === "[") {
-        if (transcriptFollowRef.current) {
-          transcriptFollowRef.current = false;
-          toEnd();
-          setTranscriptFollow(false);
-        }
+        transcriptLatch.pause();
         return void scrollBy(-1);
       }
       if (input === "G" || key.end) {
-        if (transcript?.summary?.live) setTranscriptFollow(true);
+        if (transcript?.summary?.live) transcriptLatch.resume();
         return;
       }
       if (input === "g") {
@@ -2439,12 +2444,9 @@ export function App(props: AppProps): React.JSX.Element {
           daemonUp={localCheap ? localCheap.daemon.up : undefined}
           onScrollMax={onScrollMax}
           onWheel={(d) => {
-            // Wheel-up pauses follow (landing at the tail first), mirroring the
-            // `[` key recipe; wheel-down just scrolls.
-            if (logFollow && d < 0) {
-              setLogFollow(false);
-              toEnd();
-            }
+            // Wheel-up pauses follow through the `[` key's latch; wheel-down
+            // just scrolls.
+            if (d < 0) logLatch.pause();
             scrollBy(d);
           }}
         />
@@ -2452,11 +2454,8 @@ export function App(props: AppProps): React.JSX.Element {
         <ClickableBox
           flexGrow={1}
           onWheel={(d) => {
-            // Wheel-up pauses follow (landing at the tail first), the `[` recipe.
-            if (d < 0 && transcript.follow) {
-              toEnd();
-              setTranscriptFollow(false);
-            }
+            // Wheel-up pauses follow through the `[` key's latch.
+            if (d < 0) transcriptLatch.pause();
             scrollBy(d);
           }}
         >
@@ -2479,10 +2478,7 @@ export function App(props: AppProps): React.JSX.Element {
         <ClickableBox
           flexGrow={1}
           onWheel={(d) => {
-            if (d < 0 && chatState.follow) {
-              toEnd();
-              chatApi.setFollow(false);
-            }
+            if (d < 0) pauseFollow(); // the chat's own latch (useChatInput)
             scrollBy(d);
           }}
         >

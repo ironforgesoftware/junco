@@ -13,7 +13,7 @@ function Probe({ onReady }: { onReady: (api: ReturnType<typeof useConfirm>) => v
 }
 
 describe("useConfirm", () => {
-  it("starts null, askConfirm sets it, clearConfirm clears it", async () => {
+  it("starts null, askConfirm sets it, a cancel answer clears it", async () => {
     let api!: ReturnType<typeof useConfirm>;
     const r = render(<Probe onReady={(a) => (api = a)} />);
     expect(r.lastFrame()).toBe("none");
@@ -32,8 +32,8 @@ describe("useConfirm", () => {
     expect(r.lastFrame()).toBe("Delete branch:This cannot be undone.");
     expect(api.confirm?.danger).toBe(true);
 
-    // clearConfirm drops the state without invoking onConfirm.
-    api.clearConfirm();
+    // A cancel drops the state without invoking onConfirm (no onCancel given).
+    api.settle("cancel");
     await until(() => r.lastFrame() === "none");
     expect(confirmed).toBe(false);
 
