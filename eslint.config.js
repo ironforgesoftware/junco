@@ -53,10 +53,14 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // reading of the spine, not the header's crumb tail, so App names the
   // overlay/selection sources once (`targetArgs`, reusing `chatArgs` for the
   // overlay half) and calls hooks/useFooterTarget.ts — the derivation itself
-  // is entirely in the hook. +1 for the chat-scroll brief's page keys (1,891 →
-  // 1,892): `useChatInput` gains `visibleRows: chatVisibleRows(layout.bodyRows)`
-  // so PgUp/PgDn move exactly the window ChatView paints.
-  { file: "src/tui/App.tsx", max: 1892 },
+  // is entirely in the hook. −10 net for the chat-scroll brief (2026-09-02,
+  // 1,891 → 1,881): +1 for `visibleRows: chatVisibleRows(layout.bodyRows)` on
+  // the useChatInput call (PgUp/PgDn page by exactly the window ChatView
+  // paints), then −11 for the pane doors — −3 hook inputs (moveRail,
+  // moveRailTo, railCount), −1 for the `chatKey` local, and −7 for Ruling R7's
+  // rail-switch effect (the `prevRailKey` ref plus its six effect lines): with
+  // no door there is no in-view rail move to re-subscribe to.
+  { file: "src/tui/App.tsx", max: 1881 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

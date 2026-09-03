@@ -1311,7 +1311,10 @@ export function App(props: AppProps): React.JSX.Element {
 
   // ── The chat view (spec 2026-09-01 §8): the key cascade, the id-keyed
   // verbs, and the composer's slash router all live in the hook; App keeps
-  // the spine — this call, the rail-switch effect, and the render branch. ──
+  // the spine — this call and the render branch. The chat-scroll brief
+  // (2026-09-02) removed the pane doors, and with no door there is no in-view
+  // rail move: the rail-switch effect of Ruling R7 went with them, so a chat
+  // is opened fresh by `c` and stays on the repo it was opened for. ──
   const { handleChatKey, chatHandlers, onComposerSubmit } = useChatInput({
     view,
     pane,
@@ -1325,30 +1328,9 @@ export function App(props: AppProps): React.JSX.Element {
     setPane,
     scrollBy,
     toEnd,
-    moveRail,
-    moveRailTo,
-    railCount: railRows.length,
     visibleRows: chatVisibleRows(layout.bodyRows),
   });
-  // Spec §8.1: the rail stays the nav spine while the chat is open, so moving
-  // its selection switches the subscription to the newly selected row.
-  const chatKey = chatState?.key ?? null;
   const composerFocused = chatState?.composerFocused === true;
-  // Ruling R7 (2026-09-02 footer redesign): a rail CHANGE switches the session,
-  // a mere mismatch does not. `c` from an overlay legitimately opens a chat for
-  // a repo the rail is not parked on (a PRs-view row of another repo, a
-  // transcript's checkout path — spec 2026-09-02 §5), and the old
-  // "chatKey !== currentRepoKey" test re-opened the RAIL's session on the very
-  // next render, throwing that session and its prefilled composer away. The ref
-  // is updated on every run, chat view or not, so entering the chat later never
-  // replays a rail move the operator made while looking at something else.
-  const prevRailKey = useRef<string | null>(null);
-  useEffect(() => {
-    const key = currentRepoKey;
-    const moved = key !== null && key !== prevRailKey.current;
-    prevRailKey.current = key;
-    if (moved && view === "chat" && chatKey !== null && chatKey !== key) openChat(key);
-  }, [view, currentRepoKey, chatKey, openChat]);
   // Anchor-row click: the mouse form of ↑/↓ (a delta off the live cursor).
   const chatCursor = chatState?.cursor ?? 0;
   const chatRowPress = useCallback(
@@ -2472,8 +2454,9 @@ export function App(props: AppProps): React.JSX.Element {
           />
         </ClickableBox>
       ) : view === "chat" && chatState ? (
-        // Full-screen like the transcript (spec §8.1); the rail stays the nav
-        // spine through the pane doors even though it isn't painted here.
+        // Full-screen like the transcript (spec §8.1). No rail is painted and,
+        // since the chat-scroll brief, no door leads to one: every key is the
+        // chat's own (hooks/useChatInput.ts).
         <ClickableBox
           flexGrow={1}
           onWheel={(d) => {

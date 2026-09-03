@@ -141,9 +141,6 @@ function mount(
     setPane: (p) => void calls.push(`pane:${p}`),
     scrollBy: (d) => void calls.push(`scroll:${d}`),
     toEnd: rec("toEnd"),
-    moveRail: (d) => void calls.push(`rail:${d}`),
-    moveRailTo: (i) => void calls.push(`railTo:${i}`),
-    railCount: 7,
     // A 10-row body ⇒ a page is 9 rows (visibleRows - 1, one row of overlap).
     visibleRows: o.visibleRows ?? 10,
   };
@@ -183,13 +180,14 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
   });
 
   it("the composer only owns the keys while the CHAT pane holds the focus", () => {
-    // `openChat` (the rail-switch effect) resets composerFocused while pane 1
-    // still has the focus — ChatView's Composer is inactive there, so the
-    // cascade must read it as blurred or nothing owns the keys at all.
+    // Defence in depth: ChatView hands the Composer `focused &&
+    // composerFocused`, so with pane 1 focused its useGuardedInput is inactive
+    // — reading `composerFocused` alone here would claim every key for a hook
+    // that isn't listening. The cascade must read that state as blurred.
     const h = mount({ chat: chatState({ composerFocused: true }), pane: 1 });
     expect(h.api.handleChatKey("j", K())).toBe(true);
     h.api.handleChatKey("i", K());
-    expect(h.calls).toEqual(["rail:1", "focus:true", "pane:2"]);
+    expect(h.calls).toEqual(["scroll:1", "focus:true", "pane:2"]);
   });
 
   it("blurred: ↑/↓ (and j/k, [/]) scroll the transcript a row at a time", () => {
@@ -204,9 +202,6 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     api.handleChatKey("[", K());
     api.handleChatKey("", K({ return: true }));
     api.handleChatKey(" ", K());
-    api.handleChatKey("h", K());
-    api.handleChatKey("", K({ leftArrow: true }));
-    api.handleChatKey("", K({ rightArrow: true }));
     api.handleChatKey("G", K());
     api.handleChatKey("g", K());
     api.handleChatKey("", K({ end: true }));
@@ -224,9 +219,6 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
       "scroll:-1",
       "expand",
       "expand",
-      "pane:1",
-      "pane:1",
-      "pane:2",
       "follow:true",
       "follow:false",
       "scroll:-1000000",
@@ -287,18 +279,20 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     expect(p.calls).toEqual([]);
   });
 
-  it("pane 1 routes the movement keys to the RAIL (spec §8.1), not the chat cursor", () => {
-    const h = mount({ pane: 1 });
-    const api = h.api;
-    api.handleChatKey("j", K());
-    api.handleChatKey("k", K());
-    api.handleChatKey("", K({ downArrow: true }));
-    api.handleChatKey("g", K());
-    api.handleChatKey("G", K());
-    expect(h.calls).toEqual(["rail:1", "rail:-1", "rail:1", "railTo:0", "railTo:6"]);
-    // The doors still work from pane 1 — `l` returns focus to the chat.
-    api.handleChatKey("l", K());
-    expect(h.calls).toContain("pane:2");
+  it("the pane doors are gone: h/l and ←/→ are swallowed, and the rail never moves", () => {
+    // The chat view is full-screen with no rail painted, so there is nothing
+    // to walk into: these keys are unbound here, and unbound means swallowed
+    // (never falling through to the main-view tail of App's cascade).
+    for (const [input, key] of [
+      ["h", K()],
+      ["l", K()],
+      ["", K({ leftArrow: true })],
+      ["", K({ rightArrow: true })],
+    ] as const) {
+      const h = mount();
+      expect(h.api.handleChatKey(input, key)).toBe(true);
+      expect(h.calls, input).toEqual([]);
+    }
   });
 });
 

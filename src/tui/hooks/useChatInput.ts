@@ -24,10 +24,6 @@ export interface ChatInputDeps {
   setPane: (p: Pane) => void;
   scrollBy: (delta: number) => void;
   toEnd: () => void;
-  moveRail: (delta: number) => void;
-  moveRailTo: (idx: number) => void;
-  /** Rail row count — `G` from pane 1 lands on the last row. */
-  railCount: number;
   /** Body rows the transcript window shows — `ChatView`'s own
    * `chatVisibleRows(height)`, so PgUp/PgDn move exactly one screen. */
   visibleRows: number;
@@ -53,8 +49,10 @@ function issueNumber(arg: string | undefined): number | null {
 /**
  * The chat view's input half (Ruling R15), lifted out of App so the nav spine
  * keeps only the wiring: the esc state machine and the blurred key recipes
- * (spec 2026-09-01 §8.3), the draft-card verbs (§8.6), and the composer's
- * slash router (§8.2).
+ * (spec 2026-09-01 §8.3, whose movement recipe and pane doors the chat-scroll
+ * brief of 2026-09-02 supersedes — ↑/↓ scroll, `tab` walks the cards, and
+ * there is no door to the rail), the draft-card verbs (§8.6), and the
+ * composer's slash router (§8.2).
  *
  * NOT to be confused with `../viewActions.ts`, which derives WHICH key means
  * which verb; this hook is what those verbs do.
@@ -72,9 +70,6 @@ export function useChatInput({
   setPane,
   scrollBy,
   toEnd,
-  moveRail,
-  moveRailTo,
-  railCount,
   visibleRows,
 }: ChatInputDeps): ChatInputApi {
   // `chatApi` is a fresh object every render; every memo/callback below closes
@@ -215,9 +210,9 @@ export function useChatInput({
     // Composer `focused && composerFocused`, so its useGuardedInput is live
     // only while the CHAT pane holds the focus. Reading `composerFocused`
     // alone here would claim the keys for a hook that isn't listening —
-    // every key swallowed, nothing typed, only esc out. That state is
-    // reachable: `openChat` from the rail-switch effect resets
-    // `composerFocused` to true while pane 1 still holds the focus.
+    // every key swallowed, nothing typed, only esc out. Every door into the
+    // chat takes pane 2 with it (useMainActions/useViewActions both
+    // `setPane(2)`), so this is defence in depth rather than a live state.
     if (chat.composerFocused && pane === 2) {
       // PgUp/PgDn are not text — the Composer ignores them (its typing branch
       // needs a non-empty `input`, and ink reports both as ""), so they stay
@@ -234,29 +229,19 @@ export function useChatInput({
       }
       return true;
     }
-    // Blurred. The rail is still the nav spine (spec §8.1), so while pane 1
-    // holds focus the movement keys drive the RAIL — App's rail-switch effect
-    // then re-subscribes the chat to the newly selected row.
-    if (pane === 1) {
-      if (input === "j" || key.downArrow) return took(() => moveRail(1));
-      if (input === "k" || key.upArrow) return took(() => moveRail(-1));
-      if (input === "g") return took(() => moveRailTo(0));
-      if (input === "G") return took(() => moveRailTo(railCount - 1));
-    }
+    // Blurred. Every key below is the CHAT's — the chat-scroll brief
+    // (2026-09-02) removed the pane doors, so spec §8.1's "the rail is still
+    // the nav spine" no longer holds here: the view is full-screen, the rail
+    // is not painted, and a chat is opened fresh by `c`.
     if (key.escape) return took(close);
     // `i` composes — which means the CHAT pane, not just the composer flag:
-    // focusing it from the rail without taking the pane back would leave the
-    // Composer's hook inactive (see the pane check above).
+    // setting the flag without taking the pane back would leave the Composer's
+    // hook inactive (see the pane check above).
     if (input === "i")
       return took(() => {
         focusComposer(true);
         setPane(2);
       });
-    // The pane doors: this view swallows ↑/↓ for its own cursor (as every
-    // overlay does), so the rail needs an explicit way in and back out. `tab`
-    // toggles them, keeping the help modal's "←/→ · h/l · tab" line true here.
-    if (input === "h" || key.leftArrow) return took(() => setPane(1));
-    if (input === "l" || key.rightArrow) return took(() => setPane(2));
     // `tab` walks the CARDS (this brief supersedes spec §8.3's pane door):
     // ↑/↓ scroll now, so the anchor cursor needs a key of its own. Ink reports
     // shift+tab as `tab` with the shift modifier set. With no anchors
