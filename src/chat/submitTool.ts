@@ -153,7 +153,19 @@ export function makeSubmitTool(deps: SubmitToolDeps): ChatToolDefinition {
         settled("aborted", null);
         return text("the turn was aborted — the draft stays parked");
       }
-      const r = await deps.run(draft, route);
+      let r: SubmitRunResult;
+      try {
+        r = await deps.run(draft, route);
+      } catch (e) {
+        // A throw here would leave the proposal with NO terminal record: the
+        // dashboard's card stays pending (spec §4.1) until a daemon restart
+        // stamps it expired. Every executor failure closes the proposal
+        // instead, with the same wording an exit-code failure gets (spec
+        // §4.2's `failed` row: the draft stays parked).
+        const detail = e instanceof Error ? e.message : String(e);
+        deps.record({ ...base, status: "failed", exitCode: null, output: null, detail });
+        return text(`submit failed — ${detail} — the draft stays parked`);
+      }
       const output = tail(r.output);
       if (r.code === 0 && r.archived) {
         deps.record({

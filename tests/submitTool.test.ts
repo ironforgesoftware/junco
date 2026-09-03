@@ -27,6 +27,8 @@ function harness(o: {
   lookup?: ReturnType<SubmitToolDeps["findDraft"]>;
   decision?: Decision;
   run?: Awaited<ReturnType<SubmitToolDeps["run"]>>;
+  /** The executor throws instead of resolving (a store/fs failure). */
+  runThrows?: Error;
 }) {
   const records: unknown[] = [];
   const calls: string[] = [];
@@ -40,16 +42,19 @@ function harness(o: {
       if (signal?.aborted) return "aborted";
       return o.decision ?? "run";
     },
-    run: async (d, route) => (
-      calls.push(`run:${d.id}:${route}`),
-      o.run ?? {
-        code: 0,
-        output: "queued add-readme\n",
-        timedOut: false,
-        archived: true,
-        detail: null,
-      }
-    ),
+    run: async (d, route) => {
+      calls.push(`run:${d.id}:${route}`);
+      if (o.runThrows) throw o.runThrows;
+      return (
+        o.run ?? {
+          code: 0,
+          output: "queued add-readme\n",
+          timedOut: false,
+          archived: true,
+          detail: null,
+        }
+      );
+    },
     record: (r) => records.push(r),
     confirmTimeoutMinutes: 10,
   };
@@ -154,6 +159,22 @@ describe("junco_submit (pure)", () => {
         undefined,
       ),
     ).rejects.toThrow(/blocked/);
+  });
+
+  it("an executor that THROWS still closes the proposal with one failed record", async () => {
+    const h = harness({ runThrows: new Error("EACCES: permission denied, mkdir '/data'") });
+    const r = await h.tool.execute("call_3", {}, undefined);
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]).toMatchObject({
+      type: "junco_chat_command",
+      commandId: "call_3",
+      status: "failed",
+      exitCode: null,
+      output: null,
+      detail: "EACCES: permission denied, mkdir '/data'",
+    });
+    expect(text(r)).toContain("EACCES");
+    expect(text(r)).toContain("stays parked");
   });
 
   it("a pre-aborted signal never proposes", async () => {

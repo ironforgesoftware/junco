@@ -103,6 +103,34 @@ describe("runSubmit (spec 2026-09-03 §3.4)", () => {
     expect(listChatDrafts(cfg).map((d) => d.id)).toContain(set.id);
   });
 
+  it("an archive that throws is reported, not raised — the CLI already queued the files", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-se-"));
+    const cfg = cfgAt(root);
+    const d = draft("acme__api-5", ["a.md"]);
+    writeChatDraft(cfg, d);
+    const { spawnFn, calls } = fakeSpawn((c) => {
+      c.stdout.emit("data", Buffer.from("queued\n"));
+      c.emit("close", 0);
+    });
+    // reviewStore.remove mkdirs OUTSIDE its try (src/reviewStore.ts:153) and
+    // rethrows any non-ENOENT rename error (:163).
+    const r = await runSubmit(cfg, d, "inbox", {
+      spawnFn,
+      cliPath: "/dist/cli.js",
+      store: {
+        mkdirFn: () => {
+          throw new Error("EACCES: permission denied, mkdir 'submitted'");
+        },
+      },
+    });
+    expect(calls).toHaveLength(1); // the submit itself ran
+    expect(r.code).toBe(0);
+    expect(r.output).toBe("queued\n");
+    expect(r.archived).toBe(false);
+    expect(r.detail).toMatch(/^submitted, but the draft did not archive: EACCES/);
+    expect(listChatDrafts(cfg).map((x) => x.id)).toContain(d.id); // still parked
+  });
+
   it("a draft that is no longer parked is refused without spawning", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-se-"));
     const cfg = cfgAt(root);

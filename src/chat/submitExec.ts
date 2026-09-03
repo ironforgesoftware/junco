@@ -67,12 +67,25 @@ export async function runSubmit(
       };
     }
   }
-  const archived = archiveChatDraft(cfg, live.id, "submitted", deps.store);
+  // The CLI has already queued every file: an archive failure must not become
+  // a throw. `store.remove` mkdirs OUTSIDE its try and rethrows any non-ENOENT
+  // rename error (reviewStore.ts:153,163), so a read-only or racing data dir
+  // would otherwise propagate out of a submit that SUCCEEDED and leave the
+  // proposal with no terminal record (spec §3.5).
+  let archived = false;
+  let archiveError: string | null = null;
+  try {
+    archived = archiveChatDraft(cfg, live.id, "submitted", deps.store);
+  } catch (e) {
+    archiveError = e instanceof Error ? e.message : String(e);
+  }
   return {
     code: 0,
     output: chunks.join(""),
     timedOut: false,
     archived,
-    detail: archived ? null : "submitted, but the draft did not archive",
+    detail: archived
+      ? null
+      : `submitted, but the draft did not archive${archiveError === null ? "" : `: ${archiveError}`}`,
   };
 }
