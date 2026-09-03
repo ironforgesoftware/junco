@@ -389,8 +389,12 @@ export function useChat({
       setChat((s) => {
         if (s === null || s.summary === null) return s;
         const n = anchorIds(s.summary).length;
-        const cursor = n === 0 ? s.cursor : Math.max(0, Math.min(s.cursor + delta, n - 1));
-        return { ...s, cursor, follow: false };
+        // Nothing to move to ⇒ nothing changes, `follow` included. `tab` is
+        // the cursor key now (chat-scroll brief) and a plain Q&A chat has no
+        // anchors at all: dropping follow here unpinned the window from the
+        // tail and, with a never-scrolled offset of 0, jumped it to the top.
+        if (n === 0) return s;
+        return { ...s, cursor: Math.max(0, Math.min(s.cursor + delta, n - 1)), follow: false };
       }),
     [],
   );

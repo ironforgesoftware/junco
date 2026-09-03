@@ -259,6 +259,15 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     expect(h.calls).toEqual(["cursor:1", "cursor:-1"]);
   });
 
+  it("blurred: tab off a followed chat lands at the tail first, like every other pause", () => {
+    // `moveCursor` pauses follow when it actually moves, and a paused window
+    // falls back to the stored offset — 0 on a chat nobody has scrolled — so
+    // the cursor key needs the same toEnd() recipe the scroll keys use.
+    const h = mount({ chat: chatState({ follow: true }) });
+    h.api.handleChatKey("", K({ tab: true }));
+    expect(h.calls).toEqual(["toEnd", "cursor:1"]);
+  });
+
   it("focused: PgUp/PgDn scroll the transcript — they are keys, not text", () => {
     const h = mount({ chat: chatState({ composerFocused: true }) });
     expect(h.api.handleChatKey("", K({ pageUp: true }))).toBe(true);

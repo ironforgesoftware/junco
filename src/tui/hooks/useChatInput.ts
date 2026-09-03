@@ -260,7 +260,16 @@ export function useChatInput({
     // ↑/↓ scroll now, so the anchor cursor needs a key of its own. Ink reports
     // shift+tab as `tab` with the shift modifier set. With no anchors
     // `moveCursor` simply has nowhere to go — a silent no-op, not a toast.
-    if (key.tab) return took(() => moveCursor(key.shift ? -1 : 1));
+    if (key.tab)
+      return took(() => {
+        // A move that lands pauses follow (useChat.moveCursor), so the window
+        // must be AT the tail first — the same recipe every scroll-up key
+        // uses, or the paused window falls back to a stale offset. A move that
+        // does not land leaves follow alone, and this jump is then a no-op:
+        // the followed window is already at the tail.
+        if (chat.follow) toEnd();
+        moveCursor(key.shift ? -1 : 1);
+      });
     if (key.return || input === " ") return took(toggleExpanded);
     // Chat-shaped scrolling (this brief supersedes spec §8.3's cursor
     // movement): the transcript is prose, so ↑/↓ walk it a row at a time —
