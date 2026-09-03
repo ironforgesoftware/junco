@@ -403,6 +403,11 @@ export function App(props: AppProps): React.JSX.Element {
     ackReveal: ackTranscriptReveal,
     toggleExpanded: toggleTranscriptExpanded,
   } = useTranscript({ client, aliveRef, pollMs: transcriptPollMs });
+  // The transcript view's `[` pause latch — useChatInput's `followRef`, for the
+  // same reason: a held `[` replays inside one closure where `transcript.follow`
+  // is stale-true on every pass, and `toEnd` sets an absolute offset.
+  const transcriptFollowRef = useRef(false);
+  transcriptFollowRef.current = transcript?.follow ?? false;
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
@@ -412,7 +417,7 @@ export function App(props: AppProps): React.JSX.Element {
   const assessHistory = useAssessHistory(assessHistoryFn, assessHistoryPollMs);
   // useConfirm sits above useAddRepoForm because the add-repo flow feeds its
   // bot-grant confirm gate through the same modal (askConfirm is stable).
-  const { confirm, askConfirm, clearConfirm } = useConfirm();
+  const { confirm, askConfirm, settle: settleConfirm } = useConfirm();
   const { addRepoError, addRepoBusy, handleAddRepo, setAddRepoError } = useAddRepoForm({
     client,
     clonesDir,
@@ -1678,6 +1683,9 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (input && !key.ctrl && !key.meta) {
+        // Functional on purpose: this sits under App's own useGuardedInput,
+        // which cannot opt out of the held-key replay, so "aa" arrives as two
+        // calls in one closure and must append through the pending value.
         setLogFilters((f) => ({ ...f, search: f.search + input }));
         return;
       }
@@ -1768,22 +1776,14 @@ export function App(props: AppProps): React.JSX.Element {
     // Toast is dismissed by the next keystroke, before it is acted on.
     if (confirm) {
       dismissToast();
-      if (key.escape || input === "n") {
-        const onCancel = confirm.onCancel;
-        clearConfirm();
-        onCancel?.();
-        return;
-      }
+      // `settleConfirm` answers at most once per opening — a held `y` reaches
+      // this closure as a replayed run with `confirm` still open on every pass.
+      if (key.escape || input === "n") return void settleConfirm("cancel");
       // Enter confirms only a NON-danger confirm. A danger confirm demands the
       // literal `y`: the unwatch modal opens from an async continuation (after
       // its `--plan` spawn resolves), so a stray Enter typed during that window
       // must never land on a destructive confirm the operator hasn't read.
-      if ((key.return && !confirm.danger) || input === "y") {
-        const fn = confirm.onConfirm;
-        clearConfirm();
-        fn();
-        return;
-      }
+      if ((key.return && !confirm.danger) || input === "y") return void settleConfirm("confirm");
       return;
     }
 
@@ -1907,7 +1907,8 @@ export function App(props: AppProps): React.JSX.Element {
       if (key.return || input === " ") return void toggleTranscriptExpanded();
       if (input === "]") return void scrollBy(1);
       if (input === "[") {
-        if (transcript?.follow) {
+        if (transcriptFollowRef.current) {
+          transcriptFollowRef.current = false;
           toEnd();
           setTranscriptFollow(false);
         }
@@ -1923,7 +1924,9 @@ export function App(props: AppProps): React.JSX.Element {
         // re-pinned to the tail — g looked inert on exactly the transcript a
         // reader most wants to stop scrolling.
         setTranscriptFollow(false);
-        setTranscriptCursor(0);
+        // No reveal: the window is going to ROW 0, not to the first tool call,
+        // which may sit below the fold behind a long preamble.
+        setTranscriptCursor(0, { reveal: false });
         return void scrollBy(-1_000_000); // clamps to 0
       }
       return;
@@ -2054,7 +2057,7 @@ export function App(props: AppProps): React.JSX.Element {
         return;
       }
       if (input && !key.ctrl && !key.meta) {
-        setFilter((f) => f + input);
+        setFilter((f) => f + input); // functional: see the log search above
         return;
       }
       return;
@@ -2355,21 +2358,13 @@ export function App(props: AppProps): React.JSX.Element {
             keyHint="y"
             label="confirm"
             tone={confirm.danger ? "danger" : "primary"}
-            onPress={() => {
-              const fn = confirm.onConfirm;
-              clearConfirm();
-              fn();
-            }}
+            onPress={() => settleConfirm("confirm")}
           />
           <Button
             keyHint="esc"
             label="cancel"
             tone="neutral"
-            onPress={() => {
-              const onCancel = confirm.onCancel;
-              clearConfirm();
-              onCancel?.();
-            }}
+            onPress={() => settleConfirm("cancel")}
           />
         </Box>
       </Box>

@@ -247,6 +247,20 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     expect(h.calls).toEqual(["toEnd", "follow:false", "scroll:-1"]);
   });
 
+  it("a held k replayed inside one closure pauses once and then steps every press", () => {
+    // useGuardedInput replays "kkk" as three calls against the SAME render,
+    // where `chat.follow` still reads true: without the latch every pass
+    // would land at the tail again and the burst would net one row.
+    const h = mount({ chat: chatState({ follow: true }) });
+    for (let i = 0; i < 3; i++) h.api.handleChatKey("k", K());
+    expect(h.calls).toEqual(["toEnd", "follow:false", "scroll:-1", "scroll:-1", "scroll:-1"]);
+    // And a replayed "ff" toggles twice — off (pausing at the tail), then on.
+    const f = mount({ chat: chatState({ follow: true }) });
+    f.api.chatHandlers["follow"]!();
+    f.api.chatHandlers["follow"]!();
+    expect(f.calls).toEqual(["toEnd", "follow:false", "follow:true"]);
+  });
+
   it("blurred: tab walks the cards forward, shift+tab back", () => {
     const h = mount();
     h.api.handleChatKey("", K({ tab: true }));

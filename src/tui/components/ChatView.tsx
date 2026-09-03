@@ -81,10 +81,11 @@ export interface ChatViewProps {
   scroll: number;
   height: number;
   width: number;
-  /** Whether this view holds the keys. App mounts it full-screen and passes
-   * `true` (the chat is the only surface while it is the view — the pane the
-   * operator came from is not consulted); tests use `false` to paint a
-   * blurred frame. */
+  /** Whether this view holds the keys. App mounts it full-screen and always
+   * passes `true` (the chat is the only surface while it is the view — the
+   * pane the operator came from is not consulted). The prop stays so the view
+   * can paint itself blurred (border, selection, composer) should it ever
+   * share the screen. */
   focused: boolean;
   onScrollMax?: (max: number) => void;
   onRowPress?: (anchorIdx: number) => void;

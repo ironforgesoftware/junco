@@ -193,6 +193,12 @@ describe("useTranscript", () => {
     await until(() => m.frame().includes("reveal:false"));
     m.api().setCursor(0);
     await until(() => m.frame().includes("cursor:0:follow:false:reveal:true"));
+    // `g`: the cursor is parked without owing a nudge — the window goes to
+    // row 0, not to the first tool call below the fold.
+    m.api().moveCursor(1);
+    await until(() => m.frame().includes("cursor:1:follow:false:reveal:true"));
+    m.api().setCursor(0, { reveal: false });
+    await until(() => m.frame().includes("cursor:0:follow:false:reveal:false"));
   });
 
   it("an arrow pauses the tail even when the transcript has no tool calls", async () => {

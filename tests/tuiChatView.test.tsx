@@ -358,10 +358,11 @@ describe("TranscriptBody", () => {
     await until(() => onReveal.mock.calls.length === 1);
     expect(onReveal).toHaveBeenCalledWith(3);
     expect(r.lastFrame()).toContain("card"); // the nudged window, not row 20
-    // The parent commits the start and clears the flag: no second ack, and
-    // the window now comes from `scroll` alone.
+    // The parent commits the start and clears the flag: the same window, now
+    // from `scroll` alone (rows 3–12), and no second ack.
     r.rerender(<TranscriptBody {...base} scroll={3} reveal={false} focused onReveal={onReveal} />);
-    await until(() => r.lastFrame()!.includes("card"));
+    await until(() => r.lastFrame()!.includes("row 12") && !r.lastFrame()!.includes("row 13"));
+    expect(r.lastFrame()).toContain("card");
     r.rerender(<TranscriptBody {...base} scroll={25} reveal={false} focused onReveal={onReveal} />);
     await until(() => r.lastFrame()!.includes("row 25"));
     expect(r.lastFrame()).not.toContain("card");

@@ -400,11 +400,16 @@ export function useChat({
         // anchors at all: dropping follow here unpinned the window from the
         // tail and, with a never-scrolled offset of 0, jumped it to the top.
         if (n === 0) return s;
-        // `reveal` even when the clamp leaves the index alone: tab on the last
-        // card after scrolling away from it should still bring it back.
+        // Following means "at the tail", so a move out of follow steps from
+        // the LAST card (useTranscript.moveCursor's rule): `s.cursor` is the
+        // stale 0 the tail never moved, and stepping from it revealed the
+        // second card from the top. `reveal` even when the clamp leaves the
+        // index alone: tab on the last card after scrolling away from it
+        // should still bring it back.
+        const from = s.follow ? n - 1 : s.cursor;
         return {
           ...s,
-          cursor: Math.max(0, Math.min(s.cursor + delta, n - 1)),
+          cursor: Math.max(0, Math.min(from + delta, n - 1)),
           follow: false,
           reveal: true,
         };

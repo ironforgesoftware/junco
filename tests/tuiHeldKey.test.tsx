@@ -52,6 +52,36 @@ describe("held navigation keys (one stdin chunk)", () => {
     expect(selOn(r, "Second issue")).toBe(false);
   });
 
+  // The replay's one hazard: a confirm answered by a run. `confirm` is the same
+  // open modal for every replay of the closure, so without a latch "yy" would
+  // fire onConfirm twice — here that second call would surface as the
+  // in-flight guard's "already running" toast; elsewhere (the bot-grant
+  // confirm) it would simply run twice.
+  it("yy on a destructive confirm as one chunk confirms exactly once", async () => {
+    const calls: [string, string[]][] = [];
+    const r = renderApp({
+      runCliFn: async (n, a) => {
+        calls.push([n, a]);
+        await new Promise((res) => setTimeout(res, 50)); // stays in flight past the second y
+        return { code: 0, output: "removed", timedOut: false };
+      },
+    });
+    await until(() => frame(r).includes("system"));
+    await tap(r, "jj"); // rail → queue
+    await until(() => frame(r).includes("sub-fix-typos"));
+    r.stdin.write("l");
+    await until(() => selOn(r, "#1 exec"));
+    r.stdin.write("j");
+    await until(() => selOn(r, "sub-fix-typos"));
+    r.stdin.write("D");
+    await until(() => frame(r).toLowerCase().includes("delete"));
+    r.stdin.write("yy");
+    await until(() => calls.length === 1);
+    await until(() => !frame(r).toLowerCase().includes("delete"));
+    expect(frame(r)).not.toContain("already running");
+    expect(calls).toEqual([["rm", ["sub-fix-typos"]]]);
+  });
+
   it("jj in a system body as one chunk moves two rows", async () => {
     const wt = HEAVY.worktrees[0];
     const r = renderApp({

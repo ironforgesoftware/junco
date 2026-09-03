@@ -79,9 +79,14 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // `onReveal` on both views (+2). −3 for the chat's pane decoupling (same
   // day, 1,904 → 1,901): the full-screen chat view owns its keys by view, so
   // `pane`/`setPane` leave the useChatInput call and `setPane` leaves the
-  // useViewActions call. Lowering this further is the render body's
-  // extraction (#387), not shaving these.
-  { file: "src/tui/App.tsx", max: 1901 },
+  // useViewActions call. −15 for that branch's review wave (1,901 → 1,886):
+  // the confirm modal's answer latches in `useConfirm.settle` (a replayed "yy"
+  // must confirm once), so the key branch and both buttons collapse to one
+  // call each (−18), against +3 for the transcript `[` pause latch
+  // (`transcriptFollowRef`, its render sync, and the clear in the branch).
+  // Lowering this further is the render body's extraction (#387), not shaving
+  // these.
+  { file: "src/tui/App.tsx", max: 1886 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
