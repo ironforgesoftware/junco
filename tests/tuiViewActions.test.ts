@@ -175,11 +175,13 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       "?": "help",
       c: "chat",
     });
-    // repoDetail is not one of D7's "repo in context" overlays — no pill there.
+    // Ruling R8 (spec 2026-09-02 D7): the repoDetail OVERLAY carries a repo
+    // too, so it gets the chat pill like every other repo-scoped overlay.
     expect(km({ kind: "view", view: "repoDetail" })).toEqual({
       b: "browser",
       q: "close",
       "?": "help",
+      c: "chat",
     });
     expect(km({ kind: "view", view: "prs" })).toEqual({
       b: "browser",

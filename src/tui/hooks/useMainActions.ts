@@ -68,7 +68,6 @@ export interface MainActionsInput {
   githubSetRefreshing: Dispatch<SetStateAction<boolean>>;
   setReviewState: Dispatch<SetStateAction<ReviewState>>;
   loadReview: () => Promise<void>;
-  resetPalette: () => void;
   setAddRepoError: (e: string | null) => void;
   showToast: (kind: ToastKind, text: string) => void;
   forceLocalRefresh: () => Promise<void>;
@@ -124,7 +123,6 @@ export function useMainActions({
   githubSetRefreshing,
   setReviewState,
   loadReview,
-  resetPalette,
   setAddRepoError,
   showToast,
   forceLocalRefresh,
@@ -156,10 +154,6 @@ export function useMainActions({
         setView("review");
         void loadReview();
       },
-      commands: () => {
-        resetPalette();
-        setView("palette");
-      },
       addRepo: () => {
         if (!githubEnabled)
           return void showToast("info", "github mode is off ([github] enabled=false)");
@@ -179,7 +173,6 @@ export function useMainActions({
       githubRefreshAll,
       setReviewState,
       loadReview,
-      resetPalette,
       githubEnabled,
       watchlistError,
       setAddRepoError,

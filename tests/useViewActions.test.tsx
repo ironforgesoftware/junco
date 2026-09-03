@@ -257,7 +257,7 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("repoDetail's browser opens the frozen target, and toasts when it has no nwo", () => {
     const hit = mount({ view: "repoDetail", repoDetailTarget: REPO });
-    expect(ids(hit.api)).toEqual(["browser", "close", "help"]);
+    expect(ids(hit.api)).toEqual(["browser", "chat", "close", "help"]);
     hit.api["browser"]?.();
     expect(hit.spies.openRepoBrowser).toHaveBeenCalledWith("acme/widgets");
     hit.unmount();
@@ -554,6 +554,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: null,
         selectedPr: undefined,
         transcript: null,
+        repoDetailTarget: null,
         reviewState: null as never,
       }),
     ).toEqual({ key: "acme/api", composer: "/issue 46" });
@@ -565,6 +566,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: { pr: { nwo: "acme/api", number: 12 } } as never,
         selectedPr: undefined,
         transcript: null,
+        repoDetailTarget: null,
         reviewState: null as never,
       }),
     ).toEqual({ key: "acme/api", composer: "/pr 12" });
@@ -574,6 +576,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: null,
         selectedPr: { nwo: "acme/api", number: 7 } as never,
         transcript: null,
+        repoDetailTarget: null,
         reviewState: null as never,
       }),
     ).toEqual({ key: "acme/api", composer: "/pr 7" });
@@ -585,6 +588,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: null,
         selectedPr: undefined,
         transcript: { repoKey: "/w/acme" } as never,
+        repoDetailTarget: null,
         reviewState: null as never,
       }),
     ).toEqual({ key: "/w/acme" });
@@ -594,6 +598,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: null,
         selectedPr: undefined,
         transcript: { repoKey: null } as never,
+        repoDetailTarget: null,
         reviewState: null as never,
       }),
     ).toBeNull();
@@ -614,6 +619,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: null,
         selectedPr: undefined,
         transcript: null,
+        repoDetailTarget: null,
         reviewState: rs as never,
       }),
     ).toEqual({ key: "acme/api" });
@@ -623,6 +629,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: null,
         selectedPr: undefined,
         transcript: null,
+        repoDetailTarget: null,
         reviewState: { ...rs, cursor: 1 } as never,
       }),
     ).toEqual({ key: "beta/two" });
@@ -632,6 +639,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: null,
         selectedPr: undefined,
         transcript: null,
+        repoDetailTarget: null,
         reviewState: { ...rs, cursor: 2 } as never,
       }),
     ).toEqual({ key: "/w/c" });
@@ -641,6 +649,7 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
         prDetail: null,
         selectedPr: undefined,
         transcript: null,
+        repoDetailTarget: null,
         reviewState: { ...rs, cursor: 3 } as never,
       }),
     ).toBeNull();
@@ -652,11 +661,34 @@ describe("chatTargetFor (spec 2026-09-02 §5)", () => {
       selectedPr: undefined,
       transcript: null,
       reviewState: EMPTY_REVIEW,
+      repoDetailTarget: null,
     };
     for (const view of ["detail", "prDetail", "prs", "transcript", "review"] as const)
       expect(chatTargetFor(view, none), view).toBeNull();
     for (const view of ["main", "repoDetail", "cmdOutput", "chat", "help"] as const)
       expect(chatTargetFor(view, none), view).toBeNull();
+  });
+  it("repoDetail overlay → the frozen rail target's key; null without one (Ruling R8)", () => {
+    expect(
+      chatTargetFor("repoDetail", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: EMPTY_REVIEW,
+        repoDetailTarget: REPO,
+      }),
+    ).toEqual({ key: "acme/widgets" });
+    expect(
+      chatTargetFor("repoDetail", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: EMPTY_REVIEW,
+        repoDetailTarget: null,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -690,6 +722,17 @@ describe("the overlay chat handler (spec 2026-09-02 §5)", () => {
     api["chat"]!();
     expect(spies.openChat).toHaveBeenCalledWith("/w/acme", undefined);
     expect(spies.setView).toHaveBeenCalledWith("chat");
+    unmount();
+  });
+
+  // Ruling R8 (spec 2026-09-02 D7): the repoDetail overlay's `chat` handler
+  // is the same shared verb, keyed to the frozen rail target's key.
+  it("repoDetail's chat opens the frozen target's session", () => {
+    const { api, spies, unmount } = mount({ view: "repoDetail", repoDetailTarget: REPO });
+    api["chat"]!();
+    expect(spies.openChat).toHaveBeenCalledWith("acme/widgets", undefined);
+    expect(spies.setView).toHaveBeenCalledWith("chat");
+    expect(spies.setPane).toHaveBeenCalledWith(2);
     unmount();
   });
 });

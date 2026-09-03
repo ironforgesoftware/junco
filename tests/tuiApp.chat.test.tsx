@@ -11,6 +11,7 @@
  * ink's own input-listener effect has certainly run before the first key.
  */
 import { describe, it, expect } from "vitest";
+import { resolve } from "node:path";
 import {
   CHEAP,
   EMPTY_QUEUE,
@@ -22,6 +23,7 @@ import {
 } from "./helpers/localFixtures.js";
 import { makeDashPr } from "./helpers/dashFixtures.js";
 import { githubTicketId } from "../src/githubInbox.js";
+import { expandHome } from "../src/config.js";
 import { until, fireUntil, tick } from "./helpers/until.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
@@ -460,5 +462,26 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
     await until(() => frame(r2).includes("transcript ▸"));
     r2.stdin.write("c");
     await until(() => frame(r2).includes("select a repo first"));
+  });
+
+  // QueueRow.repoPath is the ticket's raw `repo:` frontmatter — may be `~/…`
+  // or relative — and must be normalised the same way every other consumer
+  // resolves it (runOnce.ts / repoContext.ts), not passed through verbatim.
+  it("a queue-row transcript normalises a ~-relative repoPath before chatting about it", async () => {
+    const withHomeRepo = {
+      ...CHEAP,
+      queue: { ...CHEAP.queue, running: [{ ...CHEAP.queue.running[0]!, repoPath: "~/dev/foo" }] },
+    };
+    const c = verbClient();
+    const r = renderApp({ client: c.client, localCheapFn: async () => withHomeRepo });
+    await until(() => frame(r).includes(LOADED));
+    await tap(r, TO_QUEUE_ROW);
+    await until(() => frame(r).includes("sub-fix-typos"));
+    r.stdin.write("l");
+    await until(() => selOn(r, "#1 exec"));
+    r.stdin.write("\r"); // enter — the running row's transcript
+    await until(() => frame(r).includes("transcript ▸"));
+    r.stdin.write("c");
+    await until(() => frame(r).includes(`chat · ${resolve(expandHome("~/dev/foo"))}`));
   });
 });

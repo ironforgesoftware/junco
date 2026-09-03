@@ -55,7 +55,6 @@ function makeSpies() {
     githubSetRefreshing: vi.fn(),
     setReviewState: vi.fn(),
     loadReview: vi.fn(async () => undefined),
-    resetPalette: vi.fn(),
     setAddRepoError: vi.fn(),
     showToast: vi.fn(),
     forceLocalRefresh: vi.fn(async () => undefined),
@@ -119,7 +118,6 @@ function mount(
     githubSetRefreshing: spies.githubSetRefreshing,
     setReviewState: spies.setReviewState,
     loadReview: spies.loadReview,
-    resetPalette: spies.resetPalette,
     setAddRepoError: spies.setAddRepoError,
     showToast: spies.showToast,
     forceLocalRefresh: spies.forceLocalRefresh,
@@ -145,7 +143,6 @@ const ALL_IDS = [
   "assessAutoPlan",
   "browser",
   "chat",
-  "commands",
   "delete",
   "dispatch",
   "dispatchAsk",
@@ -270,14 +267,6 @@ describe("useMainActions — the main view's action table", () => {
     ).toMatchObject({ loading: true, error: null, open: null, cursor: 0 });
     expect(spies.setView).toHaveBeenCalledWith("review");
     expect(spies.loadReview).toHaveBeenCalledTimes(1);
-    unmount();
-  });
-
-  it("commands resets the palette before showing it", () => {
-    const { api, spies, unmount } = mount();
-    api["commands"]?.();
-    expect(spies.resetPalette).toHaveBeenCalledTimes(1);
-    expect(spies.setView).toHaveBeenCalledWith("palette");
     unmount();
   });
 

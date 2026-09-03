@@ -84,6 +84,7 @@ export function chatTargetFor(
     selectedPr: DashPr | null | undefined;
     transcript: TranscriptState | null;
     reviewState: ReviewState;
+    repoDetailTarget: UnifiedRepo | null;
   },
 ): { key: string; composer?: string } | null {
   switch (view) {
@@ -95,6 +96,11 @@ export function chatTargetFor(
       return s.prDetail
         ? { key: s.prDetail.pr.nwo.toLowerCase(), composer: `/pr ${s.prDetail.pr.number}` }
         : null;
+    // Ruling R8 (spec 2026-09-02 D7): the rail's UnifiedRepo.key IS already
+    // the chat key (nwo lowercased or a resolved local path) — no second
+    // lowercase pass here.
+    case "repoDetail":
+      return s.repoDetailTarget ? { key: s.repoDetailTarget.key } : null;
     case "prs":
       return s.selectedPr
         ? { key: s.selectedPr.nwo.toLowerCase(), composer: `/pr ${s.selectedPr.number}` }
@@ -318,7 +324,14 @@ export function useViewActions({
     // pill and a live `c` can never disagree. No target ⇒ toast, never a chat
     // about whatever the rail happens to be parked on.
     const chat = (): void => {
-      const t = chatTargetFor(view, { detail, prDetail, selectedPr, transcript, reviewState });
+      const t = chatTargetFor(view, {
+        detail,
+        prDetail,
+        selectedPr,
+        transcript,
+        reviewState,
+        repoDetailTarget,
+      });
       if (t === null) return void showToast("info", "select a repo first (←)");
       openChat(t.key, t.composer === undefined ? undefined : { composer: t.composer });
       setView("chat");
@@ -346,6 +359,7 @@ export function useViewActions({
         return {
           close,
           help: openHelp,
+          chat,
           browser: () => {
             const nwo = repoDetailTarget?.nwo;
             if (nwo !== null && nwo !== undefined) openRepoBrowser(nwo);

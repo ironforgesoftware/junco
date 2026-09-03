@@ -163,8 +163,9 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     CLOSE,
     HELP,
   ],
-  // Not one of D7's "repo in context" overlays — no chat pill here.
-  repoDetail: [{ id: "browser", label: "browser" }, CLOSE, HELP],
+  // Ruling R8 (spec 2026-09-02 D7): a repo IS in context here too — the chat
+  // pill is appended after `browser`, same as every other repo-scoped overlay.
+  repoDetail: [{ id: "browser", label: "browser" }, { id: "chat", label: "chat" }, CLOSE, HELP],
   prs: [{ id: "browser", label: "browser" }, { id: "chat", label: "chat" }, CLOSE, HELP],
   prDetail: [{ id: "browser", label: "browser" }, { id: "chat", label: "chat" }, CLOSE, HELP],
   review: [

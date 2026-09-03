@@ -14,6 +14,7 @@ import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState } from "./state.js";
 import { githubTicketId, lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
+import { expandHome } from "../config.js";
 import { defaultEditFile } from "./editFile.js";
 import type { GithubRepoMapping } from "../types.js";
 import type { UpdateInfo } from "../updateCheck.js";
@@ -301,7 +302,10 @@ function queueTranscriptOpts(
   row: { kind: "running" | "recent"; id: string },
 ): { expectLive: boolean; repoKey: string | null } {
   const found = [...(q?.running ?? []), ...(q?.recent ?? [])].find((r) => r.id === row.id);
-  return { expectLive: row.kind === "running", repoKey: found?.repoPath ?? null };
+  return {
+    expectLive: row.kind === "running",
+    repoKey: found?.repoPath ? resolve(expandHome(found.repoPath)) : null,
+  };
 }
 
 export function App(props: AppProps): React.JSX.Element {
@@ -1354,7 +1358,14 @@ export function App(props: AppProps): React.JSX.Element {
   // the pill below and the live key agree by construction. `main` is the rail's
   // own reading (the selected row's key), which this helper deliberately does
   // not know.
-  const chatTarget = chatTargetFor(view, { detail, prDetail, selectedPr, transcript, reviewState });
+  const chatTarget = chatTargetFor(view, {
+    detail,
+    prDetail,
+    selectedPr,
+    transcript,
+    reviewState,
+    repoDetailTarget,
+  });
 
   // ── Derived-mnemonic bindings + the two footer rows (mnemonic spec §2/§4,
   // footer spec 2026-09-02 §6): ONE context table drives the footer, the help
@@ -1504,7 +1515,6 @@ export function App(props: AppProps): React.JSX.Element {
     githubSetRefreshing,
     setReviewState,
     loadReview,
-    resetPalette,
     setAddRepoError,
     showToast,
     forceLocalRefresh,
