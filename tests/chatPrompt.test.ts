@@ -63,4 +63,23 @@ describe("chat prompt (spec 2026-09-01 §6.5)", () => {
     expect(planSetRuleText()).toContain("junco-plan");
     expect(typeof loadExample()).toBe("string");
   });
+  it("teaches junco_submit only when the tool is registered, and keeps the read-only framing otherwise", () => {
+    const on = buildChatPrompt({
+      cwd: "/repo",
+      nwo: "acme/api",
+      planSetsEnabled: false,
+      submitTool: true,
+    });
+    expect(on).toMatch(/junco_submit[\s\S]*only when the operator asks/i);
+    expect(on).toMatch(/never in the same turn/i);
+    expect(on).toMatch(/blocks until/i);
+    const off = buildChatPrompt({
+      cwd: "/repo",
+      nwo: "acme/api",
+      planSetsEnabled: false,
+      submitTool: false,
+    });
+    expect(off).not.toContain("junco_submit");
+    expect(off).toMatch(/You never run, submit, or dispatch anything/);
+  });
 });

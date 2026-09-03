@@ -94,9 +94,23 @@ for the full per-view list.
 | review view                                | `a` all · `n` none · `f` file/post · `D` Discard · `s` submit · `e` edit · `r` route · `c` chat · `q` close                            |
 | log overlay                                | `f` follow · `l` level · `t` ticket · `/` search · `G` bottom · `esc`/`q` close                                                        |
 | chat view (composer blurred)               | `s` submit · `e` edit · `r` route · `D` Discard · `t` thinking · `f` follow · `q` close                                                |
+| chat view (submit awaiting you)            | `y` submit · `n` keep parked                                                                                                           |
 | help modal                                 | `any key` close                                                                                                                        |
 
 `c` from an issue or PR opens the repo's chat with `/issue N` (or `/pr N`) already typed into the composer — enter pulls the thread in; esc blurs the composer (the prefilled text stays), esc again leaves the chat view; nothing is sent unless you press enter.
+
+Asking the chat to **submit** a draft it parked ("submit it", "queue the README ticket")
+makes the agent call its one action tool, `junco_submit`. Nothing runs yet: a card
+appears under the answer — `▸ submit add-readme → inbox — awaiting you · y submit · n keep parked`
+— the composer blurs, the header reads `◐ awaiting your confirmation`, and the agent's turn
+waits (its own clock paused) until you press `y` or `n`. `y` runs the same `junco submit`
+the card's `s` would, the card becomes `✓ submitted → inbox …` (`⏎` shows the CLI output),
+and the agent reports the outcome in the same reply; `n` keeps the draft parked and tells
+it so. No decision for `chat.confirmTimeoutMinutes` (10) expires the proposal. While a
+proposal waits, the draft verbs are off — the same draft cannot be submitted twice — and
+`i` still opens the composer (a message typed now reaches the agent after it decides).
+`/submit [id]` in the composer submits the parked draft directly, no agent turn spent.
+The agent can do nothing else: no other CLI verb, no shell, and it never moves your view.
 
 Inside the chat view the keys read as a chat, not as a list: `↑`/`↓` (also `j`/`k` and `[`/`]`) scroll the transcript a row at a time, `PgUp`/`PgDn` move a page — those two keep working while the composer is focused, so you can read back over the conversation without blurring — `tab`/`shift+tab` step between the draft cards, `⏎` (or space) expands the card under the cursor, `G`/`End` resumes following the tail and `g`/`Home` jumps to the top. `i` focuses the composer, `esc` blurs it (aborting a streaming turn first) and `esc` again leaves — back to the pane `c` was pressed on. Scrolling and the cards are independent: a card is brought into view only when `tab` lands on it (or you click it), and the scroll keys are free to leave it behind again; sending a message always re-follows the tail, so what you just wrote is on screen. Your messages read `you:`, the agent's `junco:`. The view is full-screen with no rail: `←`/`→` and `h`/`l` do nothing here, and moving the rail selection elsewhere never switches an open chat to another repo — `c` opens the one you want.
 

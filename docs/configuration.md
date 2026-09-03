@@ -326,7 +326,9 @@ On a hit the push is refused: the ticket fails, the worktree is **preserved** fo
 
 `chat` configures the dashboard's per-repo chat with the coding agent (press `t` on a repo
 row) — a file-backed Pi session that lives in the **daemon**, not the dashboard process, so it
-survives both a dashboard quit and a daemon restart.
+survives both a dashboard quit and a daemon restart. With `chat.submitTool` on (the default)
+the agent can submit a draft it parked — after you confirm in the dashboard; see
+[Dashboard](dashboard.md).
 
 | Key                          | Default | Reload  | Effect                                                                                                                                                                                                      |
 | ---------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

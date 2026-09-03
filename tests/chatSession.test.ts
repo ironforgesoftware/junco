@@ -717,6 +717,7 @@ describe("junco_submit wiring (spec 2026-09-03)", () => {
       );
       await session.ensureSession();
       expect(captured!.tools?.includes("junco_submit")).toBe(on);
+      expect(captured!.appendSystemPrompt?.includes("junco_submit")).toBe(on);
       expect((captured!.customTools ?? []).length).toBe(on ? 1 : 0);
       // The read-only file tools are never widened by the action tool.
       expect(captured!.tools?.filter((t) => t !== "junco_submit")).toEqual([
