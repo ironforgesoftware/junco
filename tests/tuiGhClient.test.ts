@@ -1713,6 +1713,32 @@ describe("chat", () => {
     if (!r.ok) expect(r.error).toBe("chat_disabled");
   });
 
+  it("chat.decide success (202) reports settled:true", async () => {
+    const fetchFn = (async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.decide("k", "c1", "run")).toEqual({ ok: true, value: { settled: true } });
+  });
+
+  it("chat.decide with nothing pending (409) reports settled:false, not an error", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "not_pending" }), {
+        status: 409,
+      })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    expect(await c.chat.decide("k", "c1", "decline")).toEqual({
+      ok: true,
+      value: { settled: false },
+    });
+  });
+
+  it("chat.decide non-2xx/409 surfaces the daemon's error", async () => {
+    const fetchFn = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+    const c = makeGhDashboardClient(cfg, { ...fakes(), fetchFn });
+    const r = await c.chat.decide("k", "c1", "run");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("chat request failed (500)");
+  });
+
   it("chat.subscribe wires the daemon healthBase through to subscribeChat", () => {
     const c = makeGhDashboardClient(cfg, fakes());
     const stop = c.chat.subscribe("k", null, { record: () => {}, status: () => {}, end: () => {} });

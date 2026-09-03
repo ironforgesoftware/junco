@@ -205,6 +205,14 @@ export interface DashboardClient {
     abort(key: string): Promise<Result<{ aborted: boolean }>>;
     fresh(key: string): Promise<Result<null>>;
     note(key: string, record: Omit<ChatDraftRecord, "ts">): Promise<Result<null>>;
+    /** The y/n for a pending junco_submit card (spec 2026-09-03 §4.5).
+     *  `settled: false` = the daemon had nothing pending under that id — a
+     *  stale card; not an error. */
+    decide(
+      key: string,
+      commandId: string,
+      decision: "run" | "decline",
+    ): Promise<Result<{ settled: boolean }>>;
   };
   /** Parked chat drafts (Task 11's draftStore) awaiting human confirmation —
    * the chat analogue of listReview/listCommentDrafts. */

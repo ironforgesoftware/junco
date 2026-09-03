@@ -163,7 +163,7 @@ export function subscribeChat(
 }
 
 export async function postChat(
-  path: "prompt" | "abort" | "new" | "note",
+  path: "prompt" | "abort" | "new" | "note" | "decide",
   body: Record<string, unknown>,
   deps: ChatClientDeps,
 ): Promise<{ status: number; body: unknown }> {

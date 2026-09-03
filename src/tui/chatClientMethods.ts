@@ -93,6 +93,18 @@ export function chatClientMethods(
           return null;
         });
       },
+      decide(key: string, commandId: string, decision: "run" | "decline") {
+        return attempt(async () => {
+          const r = await postChat(
+            "decide",
+            { key, commandId, decision },
+            { fetchFn, baseUrl: healthBase },
+          );
+          if (r.status === 409) return { settled: false };
+          if (r.status !== 202) throw new Error(chatErr(r));
+          return { settled: true };
+        });
+      },
     },
     listChatDrafts() {
       return attempt(async () => listChatDrafts(cfg));

@@ -35,6 +35,10 @@ function fakeManager(over: Partial<ChatRoutesManager> = {}) {
     abort: async (...a) => (calls.push(["abort", ...a]), { ok: true, value: { aborted: true } }),
     fresh: async (...a) => (calls.push(["fresh", ...a]), { ok: true, value: null }),
     note: async (...a) => (calls.push(["note", ...a]), { ok: true, value: null }),
+    decide: async (...a) => (
+      calls.push(["decide", ...a]),
+      { ok: true, value: { settled: a[1] === "live" } }
+    ),
     subscribe: async (key, since, sub) => {
       calls.push(["subscribe", key, since]);
       subs.add(sub);
@@ -304,6 +308,23 @@ describe("/chat routes (spec 2026-09-01 §5)", () => {
       ).status,
     ).toBe(202);
     expect(m.calls.filter((c) => c[0] === "note")).toHaveLength(1);
+  });
+
+  it("POST /chat/decide: 202 when it settled a pending confirmation, 409 when nothing is pending, 400 on a bad body", async () => {
+    const m = fakeManager();
+    const url = await serve(m);
+    const post = (body: unknown) =>
+      fetch(`${url}/chat/decide`, { method: "POST", body: JSON.stringify(body) });
+    expect((await post({ key: "k", commandId: "live", decision: "run" })).status).toBe(202);
+    const stale = await post({ key: "k", commandId: "old", decision: "decline" });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: "not_pending" });
+    expect((await post({ key: "k", commandId: "live", decision: "maybe" })).status).toBe(400);
+    expect((await post({ key: "k", decision: "run" })).status).toBe(400);
+    expect(m.calls.filter((c) => c[0] === "decide")).toEqual([
+      ["decide", "k", "live", "run"],
+      ["decide", "k", "old", "decline"],
+    ]);
   });
 
   it("GET /chat/events replays from `since`, then streams live lines (id-less when bus-only) and ends", async () => {

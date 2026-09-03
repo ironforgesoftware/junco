@@ -14,7 +14,7 @@ import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
 
 export type ChatRoutesManager = Pick<
   ChatManager,
-  "enabled" | "prompt" | "abort" | "fresh" | "note" | "subscribe" | "status"
+  "enabled" | "prompt" | "abort" | "fresh" | "note" | "decide" | "subscribe" | "status"
 >;
 
 export interface ChatRoutes {
@@ -252,7 +252,8 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
       path !== "/chat/prompt" &&
       path !== "/chat/abort" &&
       path !== "/chat/new" &&
-      path !== "/chat/note"
+      path !== "/chat/note" &&
+      path !== "/chat/decide"
     )
       return json(res, 404, { error: "not found" });
 
@@ -301,6 +302,21 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
         res.end();
         return;
       }
+      case "/chat/decide": {
+        const { commandId, decision } = obj;
+        if (
+          typeof commandId !== "string" ||
+          commandId === "" ||
+          (decision !== "run" && decision !== "decline")
+        )
+          return json(res, 400, { error: "bad request" });
+        const r = await manager.decide(key, commandId, decision);
+        if (!r.ok) return fail(r.error);
+        if (!r.value.settled) return json(res, 409, { error: "not_pending" });
+        res.writeHead(202);
+        res.end();
+        return;
+      }
       default:
         return json(res, 404, { error: "not found" });
     }
@@ -325,7 +341,8 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
           path === "/chat/prompt" ||
           path === "/chat/abort" ||
           path === "/chat/new" ||
-          path === "/chat/note"
+          path === "/chat/note" ||
+          path === "/chat/decide"
         )
           return json(res, 405, { error: "method not allowed" });
         return json(res, 404, { error: "not found" });
