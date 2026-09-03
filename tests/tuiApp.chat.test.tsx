@@ -280,9 +280,12 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     c.push(50, chatCommand({ status: "ran", exitCode: 0, output: "queued add-readme" }));
     c.push(60, chatTurnEnd());
     await until(() => r.lastFrame()!.includes("✓ submitted → inbox · add-readme · exit 0"));
-    // Answered: the footer is the blurred chat's own actions row again.
-    await until(() => footerActions().includes("thinking"));
+    // Answered (fix round 1, ruling R2): the tail and the composer come back,
+    // so the footer is the composer's own row — not the confirm one.
+    await until(() => r.lastFrame()!.includes("esc blur/abort"));
     expect(footerActions()).not.toContain("keep parked");
+    r.stdin.write("\x1b"); // blur again to reach the card's keys
+    await until(() => footerActions().includes("thinking"));
     r.stdin.write("\r"); // ⏎ on the card expands the CLI output
     await until(() => r.lastFrame()!.includes("queued add-readme"));
   });

@@ -486,6 +486,32 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     await until(() => api.chat!.expanded.has(commandAnchor("call_1")));
   });
 
+  // Fix round 1 (controller ruling R2): the client fires status("live") BEFORE
+  // the replayed lines, so the reducer cannot tell a replayed proposal from a
+  // live one. Opening a chat whose history holds an answered card used to park
+  // the view on it — follow paused, composer blurred, TranscriptBody nudging
+  // onto the stale anchor. The settling record gives both back.
+  it("a replayed proposed+terminal pair leaves the tail followed and the composer focused", async () => {
+    const c = makeClient();
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    // Back-to-back, the way a replayed transcript delivers them.
+    c.push(10, metaLine());
+    c.push(20, chatPrompt({ text: "submit it" }));
+    c.push(30, chatTurnStart());
+    c.push(40, chatCommand({ status: "proposed" }));
+    c.push(50, chatCommand({ status: "declined", detail: "operator declined" }));
+    c.push(60, chatTurnEnd());
+    await until(() => api.chat!.summary !== null && api.chat!.pending === null);
+    await until(() => api.chat!.follow === true);
+    expect(api.chat!.composerFocused).toBe(true);
+    // The card is still reachable — the cursor was left where the proposal put
+    // it, and `reveal` is the view's to ack as usual.
+    expect(anchorIds(api.chat!.summary!)[api.chat!.cursor]).toBe(commandAnchor("call_1"));
+  });
+
   it("decide() posts the pending command's id; a stale decision surfaces as an error", async () => {
     const decisions: string[] = [];
     const c = makeClient({

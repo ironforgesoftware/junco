@@ -241,7 +241,16 @@ export function useChat({
             ...(at >= 0 ? { cursor: at, follow: false, reveal: true } : {}),
           };
         } else if (settledCommand && next.pending?.commandId === command.commandId) {
-          next = { ...next, pending: null };
+          // Controller ruling R2 (fix round 1): the settling record undoes the
+          // proposal's parking unconditionally — the transcript replays on
+          // every (re)connect and the reducer cannot tell a replayed pair from
+          // a live one, so a chat whose history holds an answered card used to
+          // open scrolled to it, follow paused, composer blurred. After a
+          // decision the operator wants the tail (the model's closing text
+          // streams there) and a composer to reply with — send()'s semantics
+          // since #475. The cursor stays put: the card is still reachable with
+          // `tab`/`⏎`.
+          next = { ...next, pending: null, follow: true, composerFocused: true };
         }
         return next;
       });
