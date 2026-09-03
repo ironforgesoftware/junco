@@ -67,9 +67,13 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // follow-pausing `transcriptScrollTo` useCallback (+7). That last one is the
   // whole trade: a memoized view may only be handed a STABLE callback (perf
   // #259, pinned by tests/renderPerf.test.tsx), so the inline arrow that would
-  // have cost 1 line is not an option. Lowering this further is the render
-  // body's extraction (#387), not shaving these.
-  { file: "src/tui/App.tsx", max: 1891 },
+  // have cost 1 line is not an option. +3 for the held-key run fix (2026-09-03,
+  // 1,891 → 1,894): `moveSectionCursor` steps from the PENDING cursor inside a
+  // functional `setSectionCursor` (a `last` local plus the two-line resolver)
+  // so a burst that useGuardedInput replays inside one closure composes.
+  // Lowering this further is the render body's extraction (#387), not shaving
+  // these.
+  { file: "src/tui/App.tsx", max: 1894 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

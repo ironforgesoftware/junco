@@ -28,7 +28,9 @@ export function TextField({
       if (key.backspace || key.delete) return onChange(value.slice(0, -1));
       if (input && !key.ctrl && !key.meta && !key.escape) onChange(value + input);
     },
-    { isActive: focus },
+    // `text`: the append above closes over the `value` prop, so a chunk must
+    // arrive whole — split into per-byte calls, only the last byte would land.
+    { isActive: focus, text: true },
   );
   // The block cursor marks the ACTIVE field — including when it's empty, so
   // the operator always sees where their keystrokes will land.

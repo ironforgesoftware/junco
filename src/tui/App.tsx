@@ -651,10 +651,15 @@ export function App(props: AppProps): React.JSX.Element {
       : 0;
   const localTarget = localRows[localCursorSafe];
 
+  // Steps from the PENDING cursor (like moveRail): a held key's run replays
+  // inside one closure, where `localCursorSafe` is the same for every press.
   const moveSectionCursor = (delta: number): void => {
     if (sysSection === null || localRows.length === 0) return;
-    const next = Math.max(0, Math.min(localCursorSafe + delta, localRows.length - 1));
-    setSectionCursor((m) => ({ ...m, [sysSection]: next }));
+    const last = localRows.length - 1;
+    setSectionCursor((m) => {
+      const from = Math.max(0, Math.min(m[sysSection], last));
+      return { ...m, [sysSection]: Math.max(0, Math.min(from + delta, last)) };
+    });
   };
 
   // `enter` on a queue row — ONE implementation shared by the key branch

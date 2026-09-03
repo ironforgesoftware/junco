@@ -1,0 +1,75 @@
+/**
+ * A held navigation key under load reaches ink as ONE stdin chunk ("jjj").
+ * useGuardedInput replays the run press by press, and every list mover
+ * resolves from the PENDING state, so the presses compose instead of all
+ * landing on the same pre-press index (the "one step per chunk" tail of the
+ * same bug). Each write below is a single chunk on purpose — the opposite of
+ * localFixtures' `tap`, which spaces keys out to avoid exactly this.
+ */
+import { describe, it, expect, afterEach } from "vitest";
+import { cleanup } from "ink-testing-library";
+import { renderApp, ISSUES, okv, stubClient, HEAVY, tap } from "./helpers/localFixtures.js";
+import { until } from "./helpers/until.js";
+
+afterEach(cleanup);
+
+type R = ReturnType<typeof renderApp>;
+const frame = (r: R): string => r.lastFrame() ?? "";
+const selOn = (r: R, text: string): boolean =>
+  frame(r)
+    .split("\n")
+    .some((l) => l.includes(text) && l.includes("▌"));
+
+describe("held navigation keys (one stdin chunk)", () => {
+  it("jj on the rail as one chunk lands on the queue row", async () => {
+    const r = renderApp();
+    await until(() => frame(r).includes("system"));
+    r.stdin.write("jj"); // acme/api → beta/two → queue, in one chunk
+    await until(() => frame(r).includes("sub-fix-typos")); // the queue body is up
+    expect(selOn(r, "queue")).toBe(true);
+  });
+
+  it("jj on the issue list as one chunk moves two rows, not one", async () => {
+    const issues = [
+      ...ISSUES,
+      {
+        number: 3,
+        title: "Third issue",
+        labels: ["junco"],
+        updatedAt: "2026-07-06T08:00:00Z",
+        url: "https://github.com/acme/api/issues/3",
+        author: null,
+      },
+    ];
+    const r = renderApp({
+      client: { ...stubClient, listIssues: async () => okv({ issues, staleAt: null }) },
+    });
+    await until(() => frame(r).includes("Third issue"));
+    r.stdin.write("l"); // pane 2 — the issue list
+    await until(() => selOn(r, "First issue"));
+    r.stdin.write("jj");
+    await until(() => selOn(r, "Third issue"));
+    expect(selOn(r, "Second issue")).toBe(false);
+  });
+
+  it("jj in a system body as one chunk moves two rows", async () => {
+    const wt = HEAVY.worktrees[0];
+    const r = renderApp({
+      localHeavyFn: async () => ({
+        ...HEAVY,
+        worktrees: ["wt-alpha", "wt-bravo", "wt-charlie"].map((slug) => ({
+          ...wt,
+          path: `/w/acme-api/${slug}`,
+          slug,
+        })),
+      }),
+    });
+    await until(() => frame(r).includes("system"));
+    await tap(r, "jjjj"); // rail → worktrees
+    await until(() => frame(r).includes("wt-charlie"));
+    r.stdin.write("l"); // enter the body
+    await until(() => selOn(r, "wt-alpha"));
+    r.stdin.write("jj");
+    await until(() => selOn(r, "wt-charlie"));
+  });
+});
