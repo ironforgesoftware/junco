@@ -87,6 +87,36 @@ describe("CommandPalette mouse (App integration)", () => {
     expect(runCliFn).toHaveBeenCalledTimes(1);
     expect(runCliFn).toHaveBeenCalledWith("doctor", []);
   });
+
+  // Ruling R6' sanity (fix round 3): the palette IS a modal, and its footer is
+  // its OWN structuralOnly context — `type filter · ↑↓ move · ⏎ run · esc
+  // close`. Those chips must stay live; round 2's blanket "no chips under any
+  // modal" would have turned this click into a plain close.
+  it("clicking the '⏎ run' footer chip runs the filtered command", async () => {
+    const runCliFn = vi.fn(async (_name: string, _extraArgs: string[]) => ({
+      code: 0,
+      output: "ok",
+      timedOut: false,
+    }));
+    const r = renderApp({ runCliFn });
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
+    r.stdin.write(":");
+    await until(() => (r.lastFrame() ?? "").includes("run a junco command"));
+    // "doctor" has no argsHint, so running it does not stop in the args step.
+    r.stdin.write("doctor");
+    await until(() => (r.lastFrame() ?? "").includes("doctor"));
+    // The footer's navigate row (last frame line) carries the palette's own
+    // structural vocabulary; `⏎ run` dispatches App's paletteEnter recipe.
+    const lines = (r.lastFrame() ?? "").split("\n");
+    const y = lines.length - 1;
+    const x = (lines[y] ?? "").search(/⏎ {2}run/);
+    expect(x).toBeGreaterThan(0);
+    // Running unmounts the palette into cmdOutput, so a retried press lands
+    // nowhere — self-terminating, per until.ts's fireUntil contract.
+    await fireUntil(r.stdin, press(x, y), () => runCliFn.mock.calls.length > 0);
+    expect(runCliFn).toHaveBeenCalledTimes(1);
+    expect(runCliFn).toHaveBeenCalledWith("doctor", []);
+  });
 });
 
 describe("CommandOutput", () => {

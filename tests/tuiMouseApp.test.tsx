@@ -7,8 +7,9 @@
 import React, { useContext } from "react";
 import { describe, it, afterEach, expect } from "vitest";
 import { render, cleanup } from "ink-testing-library";
-import { until, fireUntil } from "./helpers/until.js";
-import { renderApp, makeAppProps, okv, stubClient } from "./helpers/localFixtures.js";
+import { until, fireUntil, tick } from "./helpers/until.js";
+import { renderApp, makeAppProps, okv, stubClient, ESC } from "./helpers/localFixtures.js";
+import type { LogReaderDeps } from "../src/logReader.js";
 import { App } from "../src/tui/App.js";
 import { MouseContext, MouseProvider } from "../src/tui/MouseProvider.js";
 import type { MouseStore } from "../src/tui/mouseRegions.js";
@@ -34,6 +35,14 @@ function StoreTap({ tap }: { tap: { store: MouseStore | null } }): null {
 
 const lineOf = (frame: string, needle: string): number =>
   frame.split("\n").findIndex((l) => l.includes(needle));
+
+// The footer is two rows now (spec 2026-09-02 §3): mnemonic chips (the verbs)
+// live on the ACTIONS row, structural ones (⏎ / ← / ↑↓ …) on the NAVIGATE row
+// below it. Both are always the frame's last two lines — layout.ts still
+// budgets CHROME_ROWS=3, the toast having moved into the actions row.
+const actionsY = (frame: string): number => frame.split("\n").length - 2;
+const navigateY = (frame: string): number => frame.split("\n").length - 1;
+const rowAt = (frame: string, y: number): string => frame.split("\n")[y] ?? "";
 
 describe("mouse row/wheel on the issues surface", () => {
   it("clicking an issue row selects it; clicking again opens the detail", async () => {
@@ -263,29 +272,29 @@ describe("review view: mouse", () => {
 });
 
 describe("footer chips: mouse", () => {
-  it("footer chip: clicking the 'queue' mnemonic jumps to the queue row; '← back' returns to the rail", async () => {
+  it("footer chip: clicking the 'queue' mnemonic jumps to the queue row and focuses its body", async () => {
     const r = renderApp();
-    // Mount lands on pane 1 (rail), whose chip row carries the bare "queue"
+    // Mount lands on pane 1 (rail), whose ACTIONS row carries the bare "queue"
     // label (mnemonic char colored — invisible in stripped frames).
-    await until(() => ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("queue"));
+    await until(() => rowAt(r.lastFrame() ?? "", actionsY(r.lastFrame() ?? "")).includes("queue"));
     const f = r.lastFrame() ?? "";
-    const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("queue");
-    // fireUntil: a press racing the region registry re-sends; the t action is
+    const y = actionsY(f);
+    const x = rowAt(f, y).indexOf("queue");
+    // fireUntil: a press racing the region registry re-sends; the action is
     // idempotent (re-selecting the queue row is a no-op).
-    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("running"));
-    // The chip parked the cursor on the queue system row + focused its body.
-    const f2 = r.lastFrame() ?? "";
-    const x2 = f2.split("\n")[footerY].indexOf("← back");
-    // Back on the rail: its hint set (with the add-repo chip) returns. A re-sent
-    // press lands on the rail hint row at worst (a harmless toast), never a
-    // destructive chip.
-    await fireUntil(r.stdin, press(x2, footerY), () =>
-      ((r.lastFrame() ?? "").split("\n").at(-1) ?? "").includes("add repo"),
+    await fireUntil(r.stdin, press(x, y), () => (r.lastFrame() ?? "").includes("running"));
+    // The chip parked the cursor on the queue system row + focused its body,
+    // whose navigate row is the queue vocabulary (⏎ transcript · ← rail).
+    await until(() =>
+      /⏎ {2}transcript/.test(rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""))),
     );
   });
 
-  it("pane 3 focused: the 'enter detail' chip opens the PR overlay, not the issue detail", async () => {
+  // Restored with Task 3's two-row Footer (Ruling R4): the navigate row
+  // renders pane 3's structural `⏎ detail` again, and App's
+  // structuralChipActions keys structural chips by their KEY string — which IS
+  // FooterChip.id — so the click runs the very recipe enter does.
+  it("pane 3 focused: the '⏎ detail' chip opens the PR overlay, not the issue detail", async () => {
     // One junco PR for the selected repo so pane 3 has a selected row.
     const pr = {
       number: 100,
@@ -317,14 +326,22 @@ describe("footer chips: mouse", () => {
     await until(() => (r.lastFrame() ?? "").includes("#100")); // PR row loaded in pane 3
     r.stdin.write("\u001b[C"); // → pane 2
     r.stdin.write("\u001b[C"); // → pane 3 (wide layout)
-    await until(() => (r.lastFrame() ?? "").includes("enter detail")); // pane-3 hint set
+    // Pane 3's rows: `⏎ detail` on the navigate row (pane 1 has it too, but
+    // pane 1's ACTIONS row carries "add repo" and pane 3's never does; pane 2
+    // says `⏎ preview` instead), so the pair identifies pane 3 exactly.
+    await until(() => {
+      const f = r.lastFrame() ?? "";
+      return (
+        !rowAt(f, actionsY(f)).includes("add repo") && /⏎ {2}detail/.test(rowAt(f, navigateY(f)))
+      );
+    });
     const f = r.lastFrame() ?? "";
-    const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("enter detail");
+    const y = navigateY(f);
+    const x = rowAt(f, y).search(/⏎ {2}detail/);
     // Landing opens the PR overlay (unmounts the chip row's main-view set, so
     // the retry self-terminates); the issue-detail overlay would say
     // "preview · #1" instead — assert the PR one specifically.
-    await fireUntil(r.stdin, press(x, footerY), () => (r.lastFrame() ?? "").includes("pr · #100"));
+    await fireUntil(r.stdin, press(x, y), () => (r.lastFrame() ?? "").includes("pr · #100"));
     expect(r.lastFrame() ?? "").not.toContain("preview · #");
   });
 
@@ -345,9 +362,9 @@ describe("footer chips: mouse", () => {
     const r = renderApp({ client });
     await until(() => (r.lastFrame() ?? "").includes("repos"));
     const f = r.lastFrame() ?? "";
-    const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("browser"); // pane-1 chip row at mount
-    await fireUntil(r.stdin, press(x, footerY), () => repoOpens === 1); // counted-once = idempotent-safe
+    const y = actionsY(f);
+    const x = rowAt(f, y).indexOf("browser"); // pane-1 actions row at mount
+    await fireUntil(r.stdin, press(x, y), () => repoOpens === 1); // counted-once = idempotent-safe
     expect(repoOpens).toBe(1);
     expect(issueOpens).toBe(0); // the old flat map would have opened the issue here
   });
@@ -366,15 +383,129 @@ describe("footer chips: mouse", () => {
     r.stdin.write("l"); // pane 2 — the only chip row carrying "investigate"
     await until(() => (r.lastFrame() ?? "").includes("investigate"));
     const f = r.lastFrame() ?? "";
-    const footerY = f.split("\n").length - 1;
-    const x = f.split("\n")[footerY].indexOf("investigate");
-    await fireUntil(r.stdin, press(x, footerY), () => analyzeCalls === 1); // counted-once = idempotent-safe
+    const y = actionsY(f);
+    const x = rowAt(f, y).indexOf("investigate");
+    await fireUntil(r.stdin, press(x, y), () => analyzeCalls === 1); // counted-once = idempotent-safe
     expect(analyzeCalls).toBe(1);
     // The keyboard recipe's success toast lands once the stubbed promise
     // resolves — same copy, proving the chip ran the verbatim branch.
     await until(() =>
       (r.lastFrame() ?? "").includes("investigation queued: analyze-acme-api-1 · v to review"),
     );
+  });
+
+  // In-memory log source (tuiLogOverlay's fixture, inlined): the overlay only
+  // needs one line to prove it mounted.
+  const oneLineLogFs = (): LogReaderDeps => {
+    const content = Buffer.from(
+      JSON.stringify({ ts: "2026-07-20T05:00:00.000Z", level: "info", msg: "seed-h" }) + "\n",
+      "utf8",
+    );
+    return {
+      existsFn: () => true,
+      statFn: () => ({ size: content.length }),
+      openFn: () => 1,
+      closeFn: () => undefined,
+      readFn: (_fd: number, buf: Buffer, _off: number, len: number, pos: number) => {
+        const slice = content.subarray(pos, pos + len);
+        slice.copy(buf, 0);
+        return slice.length;
+      },
+    };
+  };
+
+  const HELP_TITLE = "junco dashboard — keys";
+
+  /** The log overlay open with the help modal over it. Mounted at 100 columns
+   * exactly, because ink-testing-library's stdout is fixed at 100 and on a
+   * wider frame the right edge — where the pinned chips live — no longer lines
+   * up with the real yoga columns the hit-test resolves against; and at 60
+   * rows, because HelpModal is ~45 rows tall and on the suite's usual 30-row
+   * terminal it pushes the footer clean off the frame entirely (nothing to
+   * click, and nothing to prove). Returns the overlay's OWN navigate row as it
+   * read before `?` — the columns its chips occupied, which is what the
+   * "click where a chip used to be" probes need. */
+  const helpOverLogOverlay = async () => {
+    const r = renderApp({
+      sizeOverride: { columns: 100, rows: 60 },
+      logReaderDeps: oneLineLogFs(),
+      logsPollMs: 15,
+    });
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
+    // G parks the rail cursor on the last row (logs); resend is idempotent.
+    await fireUntil(r.stdin, "G", () => (r.lastFrame() ?? "").includes("seed-h"));
+    // Enter opens the full-screen overlay; Enter is unbound inside it.
+    await fireUntil(r.stdin, "\r", () => (r.lastFrame() ?? "").includes("following"));
+    const overlayNav = rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""));
+    r.stdin.write("?"); // the overlay's own arm dispatches help (Ruling R5)
+    await until(() => (r.lastFrame() ?? "").includes(HELP_TITLE));
+    return { r, overlayNav };
+  };
+
+  /** Press a footer cell repeatedly, but ONLY while the help modal is still up
+   * — pressUntilAdvanced's rationale in mouse form. A press can race a region
+   * registration and be dropped for good, so it must be resendable; but under
+   * R6 the landing press is a MISS that closes the modal, after which the very
+   * same cell is a LIVE chip again, so a stray retry would dispatch for real.
+   * Gating each resend on the modal still showing makes both safe. */
+  const pressUntilHelpCloses = async (
+    r: { stdin: { write: (s: string) => void }; lastFrame: () => string | undefined },
+    x: number,
+    y: number,
+  ) => {
+    for (let i = 0; i < 50 && (r.lastFrame() ?? "").includes(HELP_TITLE); i++) {
+      r.stdin.write(press(x, y));
+      await tick();
+    }
+    await until(() => !(r.lastFrame() ?? "").includes(HELP_TITLE));
+  };
+
+  // Regression (fix round 1, re-pointed by Ruling R6' in round 3). The trap:
+  // help opened from the LOG OVERLAY used to derive the OVERLAY's binding
+  // context — `logOverlay` won over `view` in useFooterBindings — so the footer
+  // under the modal rendered the overlay's live chips, `? help` among them.
+  // Clicking that called openHelp with view === "help", re-arming the origin to
+  // "help" itself, after which any-key close and onMouseMiss both re-opened
+  // help: stuck until Ctrl-C. R6' fixes it at the root — under the modal the
+  // footer is HELP's own context (`any key close`, empty keymap) — and
+  // openHelp's guard stays as defence in depth.
+  it("help over the log overlay: the footer is help's own, and a press on it closes back to the overlay", async () => {
+    const { r } = await helpOverLogOverlay();
+    const f = r.lastFrame() ?? "";
+    const y = navigateY(f);
+    const nav = rowAt(f, y);
+    // The overlay's chips are gone with its context — nothing here dispatches.
+    expect(nav).toContain("any key");
+    expect(nav).not.toContain("? help");
+    expect(nav).not.toContain("q close");
+    // So a press anywhere on the footer is a MISS, which onMouseMiss turns
+    // into a close back to the ORIGIN: the log overlay, still open behind it.
+    await pressUntilHelpCloses(r, 4, y);
+    await until(() => (r.lastFrame() ?? "").includes("following"));
+    // And the origin was never re-armed to "help": re-open, close by key, and
+    // it is the overlay again rather than the modal re-appearing.
+    r.stdin.write("?");
+    await until(() => (r.lastFrame() ?? "").includes(HELP_TITLE));
+    r.stdin.write("x"); // any key closes
+    await until(() => !(r.lastFrame() ?? "").includes(HELP_TITLE));
+    await until(() => (r.lastFrame() ?? "").includes("following"));
+    r.stdin.write(ESC); // and the overlay still closes normally
+    await until(() => !(r.lastFrame() ?? "").includes("following"));
+  });
+
+  // The same guarantee aimed at the sharpest cell on the row: where the
+  // overlay's OWN close verb sat a moment ago. If anything of the overlay's
+  // context survived under the modal, this press would shut the overlay behind
+  // it and `following` would be gone the moment help closed.
+  it("help over the log overlay: pressing where 'q close' used to be is a miss, not a close", async () => {
+    const { r, overlayNav } = await helpOverLogOverlay();
+    const x = overlayNav.indexOf("q close");
+    expect(x).toBeGreaterThan(0);
+    await pressUntilHelpCloses(r, x, navigateY(r.lastFrame() ?? ""));
+    await until(() => (r.lastFrame() ?? "").includes("following"));
+    expect(r.lastFrame() ?? "").toContain("level ≥ info"); // overlay state intact
+    r.stdin.write(ESC); // and the overlay still closes on its own key
+    await until(() => !(r.lastFrame() ?? "").includes("following"));
   });
 
   it("help modal: a footer press underneath is a miss — closes help, never quits", async () => {

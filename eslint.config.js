@@ -28,15 +28,33 @@ const maxLinesPerFunction = (max) => [
  * once the work named in its comment lands.
  */
 const GRANDFATHERED_FUNCTION_LINES = [
-  // `App` (1,913): #350 moved the action handlers out into src/tui/hooks/; what
+  // `App` (1,890): #350 moved the action handlers out into src/tui/hooks/; what
   // is left is the nav spine plus the render body, whose section-by-section
-  // extraction is still open under the sweep tracker #387. +87 over the 1,826
-  // it measured at after the chat draft review surface landed, for the chat
-  // VIEW spine (spec 2026-09-01 §8): the useChat/useChatInput calls, the
-  // binding-context branch (now pane-scoped, Ruling R27), the scroll key +
-  // crumbs, the rail-switch effect and its badge, and the render branch. The
-  // cascade, the verbs and the slash router live in hooks/useChatInput.ts.
-  { file: "src/tui/App.tsx", max: 1913 },
+  // extraction is still open under the sweep tracker #387. −29 from the 1,913
+  // the chat VIEW spine left it at: the footer/binding derivation (the
+  // binding-context switch, the two buildContextBindings memos and the footer
+  // rows) moved to hooks/useFooterBindings.ts (footer redesign 2026-09-02,
+  // Task 4), less the one line of `openHelp`'s re-entrancy guard. The cascade,
+  // the verbs and the slash router live in hooks/useChatInput.ts. +4 net for the
+  // chat verb (Task 5, 1,884 → 1,888): +6 for five props naming the verb's
+  // targets to useViewActions (openChat/setView/setPane/prDetail/selectedPr)
+  // plus the one `chatTarget` line the footer pill and the overlays' own `c`
+  // share, −2 from Ruling R7 collapsing the rail-switch effect's condition onto
+  // a `prevRailKey` ref. Net 0 for Ruling R8 (Task 6 batch, stays at 1,888):
+  // the `chatTarget` call gains `repoDetailTarget` in its options object,
+  // hoisted to a named `chatArgs` local (+1) rather than inlined — an inline
+  // 6-field object would have wrapped the call over the printWidth — less 1
+  // for dropping `resetPalette` from the now-dead `commands` handler's
+  // useMainActions call. +1 for Ruling R10 (Task 2 fix round 2, stays a
+  // single line): `useFooterBindings` gains `columns: size.columns` so
+  // `buildFooterRows` can fit the navigate row to the terminal width instead
+  // of a fixed medium/wide breakpoint (1,888 → 1,889). +2 for Ruling R12 (the
+  // final fix wave, 1,889 → 1,891): the footer's row-1 target label is its own
+  // reading of the spine, not the header's crumb tail, so App names the
+  // overlay/selection sources once (`targetArgs`, reusing `chatArgs` for the
+  // overlay half) and calls hooks/useFooterTarget.ts — the derivation itself
+  // is entirely in the hook.
+  { file: "src/tui/App.tsx", max: 1891 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

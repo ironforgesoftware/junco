@@ -1,8 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
-import { Header, Toast, Footer, chipSegments } from "../src/tui/components/Chrome.js";
+import { Box } from "ink";
+import { Header, Footer } from "../src/tui/components/Chrome.js";
 import type { HealthInfo } from "../src/tui/ghClient.js";
+import type { FooterRows } from "../src/tui/footerModel.js";
+import { MouseProvider } from "../src/tui/MouseProvider.js";
+import { until, fireUntil, wait } from "./helpers/until.js";
+import { renderWide, cleanupWide } from "./helpers/renderWide.js";
+import { buildContextBindings, type BindingContext } from "../src/tui/viewActions.js";
+import { buildFooterRows, rowWidth } from "../src/tui/footerModel.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
 
@@ -286,15 +293,6 @@ describe("Header PR attention chip", () => {
   });
 });
 
-describe("Toast", () => {
-  it("renders the text when live and a blank row when not", () => {
-    expect(render(<Toast toast={{ kind: "error", text: "gh boom" }} />).lastFrame()).toContain(
-      "gh boom",
-    );
-    expect(render(<Toast toast={null} />).lastFrame()).not.toContain("gh boom");
-  });
-});
-
 describe("Header (no mode tabs)", () => {
   const base = {
     crumbs: ["acme/api"],
@@ -336,96 +334,270 @@ describe("Header (no mode tabs)", () => {
   });
 });
 
-describe("chipSegments (mnemonic rendering)", () => {
-  it("splits a mnemonic label around the winning char", () => {
-    expect(
-      chipSegments({
-        kind: "mnemonic",
-        id: "analyze",
-        key: "n",
-        label: "analyze",
-        charIndex: 1,
-        guarded: false,
-      }),
-    ).toEqual([
-      { text: "a", accent: false },
-      { text: "n", accent: true },
-      { text: "alyze", accent: false },
-    ]);
-  });
+// ── the two-row footer (spec 2026-09-02 §3) ────────────────────────────────
+// ink-testing-library's Stdout hardcodes 100 columns (its `render` takes no
+// options argument at all), so a narrower terminal is simulated by wrapping
+// the component in a fixed-width COLUMN box: a column box stretches its
+// children across its full width, which is what FooterLine's flexGrow spacer
+// needs in order to push the pinned chips to the right edge.
+const renderAt = (columns: number, el: React.JSX.Element) =>
+  render(
+    <Box width={columns} flexDirection="column">
+      {el}
+    </Box>,
+  );
 
-  it("uppercases the winning char in place for guarded keys", () => {
-    expect(
-      chipSegments({
-        kind: "mnemonic",
-        id: "delete",
-        key: "D",
-        label: "delete",
-        charIndex: 0,
-        guarded: true,
-      })[0],
-    ).toEqual({ text: "D", accent: true });
-  });
-
-  it("null charIndex and structural chips render key-first", () => {
-    expect(chipSegments({ kind: "structural", key: "esc", label: "back" })).toEqual([
-      { text: "esc", accent: true },
-      { text: " back", accent: false },
-    ]);
-    expect(
-      chipSegments({
-        kind: "mnemonic",
-        id: "help",
-        key: "?",
-        label: "help",
+const rows: FooterRows = {
+  actions: {
+    label: "issue #46",
+    chips: [
+      { kind: "pill", id: "chat", key: "c", label: "chat", charIndex: 0, guarded: false },
+      { kind: "mnemonic", id: "dispatch", key: "m", label: "import", charIndex: 1, guarded: false },
+      { kind: "mnemonic", id: "delete", key: "D", label: "delete", charIndex: 0, guarded: true },
+      { kind: "separator", id: "|", key: "", label: "", charIndex: null, guarded: false },
+      { kind: "mnemonic", id: "prs", key: "p", label: "PRs", charIndex: 0, guarded: false },
+    ],
+    pinned: [],
+  },
+  navigate: {
+    label: "navigate",
+    chips: [
+      { kind: "structural", id: "↑/↓", key: "↑/↓", label: "move", charIndex: null, guarded: false },
+      {
+        kind: "structural",
+        id: "enter",
+        key: "enter",
+        label: "preview",
         charIndex: null,
         guarded: false,
-      }),
-    ).toEqual([
-      { text: "?", accent: true },
-      { text: " help", accent: false },
-    ]);
-  });
+      },
+    ],
+    pinned: [
+      { kind: "mnemonic", id: "help", key: "?", label: "help", charIndex: null, guarded: false },
+      { kind: "mnemonic", id: "quit", key: "q", label: "quit", charIndex: 0, guarded: false },
+    ],
+  },
+};
 
-  it("a winning char mid-label keeps prefix and suffix intact", () => {
-    expect(
-      chipSegments({
-        kind: "mnemonic",
-        id: "approve",
-        key: "o",
-        label: "approve",
-        charIndex: 4,
-        guarded: false,
-      }),
-    ).toEqual([
-      { text: "appr", accent: false },
-      { text: "o", accent: true },
-      { text: "ve", accent: false },
-    ]);
+describe("Footer (two rows, spec 2026-09-02 §3)", () => {
+  it("renders the actions row then the navigate row — exactly two lines, labels first", () => {
+    const f = render(<Footer rows={rows} toast={null} />).lastFrame()!;
+    const lines = f.split("\n");
+    expect(lines).toHaveLength(2);
+    // Structural chips carry a padded keycap (` ⏎ `, spec §3.4) and the label
+    // brings its own leading space, so the stripped frame shows TWO spaces
+    // between them — ` +`, never a single literal space.
+    expect(lines[0]).toMatch(/^ issue #46 +chat +import +Delete +│ +PRs/);
+    expect(lines[1]).toMatch(/^ navigate +↑↓ +move +⏎ +preview/);
+  });
+  it("pins ? help and quit to the right edge of the navigate row", () => {
+    const f = renderAt(80, <Footer rows={rows} toast={null} />).lastFrame()!;
+    const nav = f.split("\n")[1]!;
+    expect(nav.trimEnd().endsWith("? help  quit")).toBe(true);
+    expect(nav.trimEnd().length).toBeGreaterThan(60); // the spacer pushed them right
+  });
+  it("a toast replaces the actions row only; the navigate row stays", () => {
+    const f = render(
+      <Footer rows={rows} toast={{ kind: "error", text: "gh boom\nline 2" }} />,
+    ).lastFrame()!;
+    const lines = f.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("gh boom · line 2");
+    expect(lines[0]).not.toContain("import");
+    expect(lines[1]).toContain("↑↓");
+    expect(lines[1]).toContain("move");
+  });
+  it("pads both labels to the same width so the chips start in one column", () => {
+    const f = render(<Footer rows={rows} toast={null} />).lastFrame()!;
+    const [a, n] = f.split("\n");
+    expect(a!.indexOf("chat")).toBe(n!.indexOf("↑↓"));
+  });
+  it("renders a row with no chips and no pinned run at all", () => {
+    const bare: FooterRows = {
+      actions: { label: "queue", chips: [], pinned: [] },
+      navigate: { label: "navigate", chips: rows.navigate.chips, pinned: [] },
+    };
+    const lines = render(<Footer rows={bare} toast={null} />)
+      .lastFrame()!
+      .split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.trim()).toBe("queue");
+    expect(lines[1]).not.toContain("help");
+  });
+  it("clips a long row without wrapping", () => {
+    const wide = {
+      ...rows,
+      actions: {
+        ...rows.actions,
+        chips: Array.from({ length: 30 }, (_, i) => ({
+          kind: "mnemonic" as const,
+          id: `v${i}`,
+          key: "x",
+          label: `verb-number-${i}`,
+          charIndex: 0,
+          guarded: false,
+        })),
+      },
+    };
+    const f = renderAt(60, <Footer rows={wide} toast={null} />).lastFrame()!;
+    expect(f.split("\n")).toHaveLength(2);
+  });
+  it("chips with a chipActions entry are clickable by id (pill/mnemonic) or key (structural)", async () => {
+    // SGR press at 0-based cell (x, y) — the same wire format tests/tuiMouseApp.test.tsx uses.
+    const press = (x: number, y: number): string => `\u001b[<0;${x + 1};${y + 1}M`;
+    const hits: string[] = [];
+    const r = render(
+      <MouseProvider>
+        <Footer
+          rows={rows}
+          toast={null}
+          chipActions={{ chat: () => hits.push("chat"), enter: () => hits.push("enter") }}
+        />
+      </MouseProvider>,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("chat"));
+    const [a, n] = r.lastFrame()!.split("\n");
+    await fireUntil(r.stdin, press(a!.indexOf("chat"), 0), () => hits.includes("chat"));
+    await fireUntil(r.stdin, press(n!.indexOf("⏎"), 1), () => hits.includes("enter"));
+    expect(hits).toEqual(["chat", "enter"]);
+    // A chip with NO chipActions entry stays inert: `import` renders as plain
+    // text, so a press there registers nothing (and never falls through to a
+    // neighbouring chip's handler).
+    r.stdin.write(press(a!.indexOf("import"), 0));
+    await wait(60);
+    expect(hits).toEqual(["chat", "enter"]);
   });
 });
 
-describe("Footer (chips)", () => {
-  it("renders mnemonic labels and structural key-first chips, · separated", () => {
-    const f = render(
-      <Footer
-        chips={[
-          { kind: "structural", key: "↑/↓", label: "move" },
-          { kind: "mnemonic", id: "retry", key: "t", label: "retry", charIndex: 2, guarded: false },
-          {
-            kind: "mnemonic",
-            id: "delete",
-            key: "D",
-            label: "delete",
-            charIndex: 0,
-            guarded: true,
-          },
-        ]}
-      />,
-    ).lastFrame()!;
-    expect(f).toContain("↑/↓ move");
-    expect(f).toContain("retry");
-    expect(f).toContain("Delete"); // guarded char uppercased in place
-    expect(f).toContain(" · ");
+// The rows above are hand-built and short. These render what the app actually
+// derives — the full wide `main issues pane 2` navigate vocabulary (↑↓ / ←→ /
+// ⏎ / / / g G / : / ,) and an overlay's — at a width where the pinned chips
+// land past column 100, which is exactly where a 100-column frame buffer stops
+// telling the truth. See tests/helpers/renderWide.tsx for the mechanism.
+describe("Footer with the REAL derived rows (wide, pinned chips past col 100)", () => {
+  afterEach(cleanupWide);
+
+  const rowsFor = (context: BindingContext, target: string, columns: number) =>
+    buildFooterRows({
+      context,
+      bindings: buildContextBindings(context, "wide"),
+      target,
+      chatReachable: true,
+      mode: "wide",
+      columns,
+    });
+
+  const navigateLine = (context: BindingContext, target: string, columns: number): string => {
+    const r = renderWide(
+      <Box width={columns} flexDirection="column">
+        <Footer rows={rowsFor(context, target, columns)} toast={null} />
+      </Box>,
+      columns,
+    );
+    return (r.lastFrame() ?? "").split("\n")[1] ?? "";
+  };
+
+  it("main issues pane 2: ? help and quit keep their gap at the right edge", () => {
+    const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 120);
+    // Two spaces before `? help` (the spacer plus the run's own margin) and two
+    // between the pinned chips — never `? helpquit`.
+    expect(nav).toMatch(/ {2}\? help {2}quit\s*$/);
+    // …and the row really is the full wide vocabulary, not a short fixture.
+    expect(nav).toContain("g G");
+    expect(nav).toContain("palette");
+  });
+
+  it("an overlay: ? help and close keep their gap at the right edge", () => {
+    const nav = navigateLine({ kind: "view", view: "detail" }, "issue #46", 120);
+    // `close` derives the reserved `q`, which is not a letter of its label, so
+    // footerSegments renders it key-first — `q close`, not `close` (unlike
+    // main's `quit`, whose winning char IS its own first letter).
+    expect(nav).toMatch(/ {2}\? help {2}q close\s*$/);
+    expect(nav).toContain("scroll");
+  });
+
+  it("holds as the terminal widens — the spacer grows, the gaps do not change", () => {
+    for (const columns of [120, 150, 200]) {
+      const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", columns);
+      expect(nav, `columns=${columns}`).toMatch(/ {2}\? help {2}quit\s*$/);
+    }
+  });
+
+  // Pre-Ruling-R10 this pinned the BUG: at 108 columns the row used to
+  // overflow and the renderer clipped `quit` away outright. R10 fixes it by
+  // dropping just enough of NAV_DROP_ORDER (here, only ",") that the pinned
+  // chips never get clipped — this test now pins the FIX.
+  it("Ruling R10: 108 columns no longer clips quit — the row drops just enough (,) to fit", () => {
+    const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 108);
+    expect(nav).toContain("? help");
+    expect(nav).toContain("quit");
+    // Only the lowest-priority entry needed to go; g G and : both survive.
+    expect(nav).toContain("g G");
+    expect(nav).toContain("palette");
+    expect(nav).not.toContain("config"); // "," (config) is the one dropped
+  });
+
+  it("clips from the right when the row genuinely does not fit (60 columns)", () => {
+    // Even after all four NAV_DROP_ORDER entries, the remaining chips (move /
+    // panes / preview / filter) plus the pinned run still don't fit 60 —
+    // Chrome.tsx's overflow="hidden" clips it, never wraps to a third line.
+    const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 60);
+    expect(nav.length).toBeLessThanOrEqual(60);
+    expect(nav).not.toContain("quit");
+  });
+});
+
+// rowWidth (footerModel.ts, Ruling R10) estimates a row's rendered width
+// PURELY so buildFooterRows can decide what to drop before Chrome.tsx ever
+// renders it — so the estimate must match the real renderer exactly, not
+// just be internally consistent. Pinned against one real context's navigate
+// row: undropped (columns wide enough that Ruling R10's fitting drops
+// nothing), so `rowWidth` measures the SAME chips this test then renders.
+describe("rowWidth pinned against the real renderer (Ruling R10)", () => {
+  afterEach(cleanupWide);
+
+  const context: BindingContext = { kind: "main", body: "issues", pane: 2 };
+  const undropped = buildFooterRows({
+    context,
+    bindings: buildContextBindings(context, "wide"),
+    target: "acme/api",
+    chatReachable: true,
+    mode: "wide",
+    columns: 300, // wide enough that Ruling R10's fitting drops nothing
+  });
+  const labelWidth = Math.max(undropped.actions.label.length, undropped.navigate.label.length);
+  const width = rowWidth(undropped.navigate, labelWidth);
+
+  const renderAt = (columns: number): string => {
+    const r = renderWide(
+      <Box width={columns} flexDirection="column">
+        <Footer rows={undropped} toast={null} />
+      </Box>,
+      columns,
+    );
+    return (r.lastFrame() ?? "").split("\n")[1] ?? "";
+  };
+
+  // ink-testing-library's frame trims EACH line's trailing whitespace before
+  // handing it back, so the rendered STRING's length always reads 3 short of
+  // `rowWidth`: the last pinned chip's own `marginRight={2}` plus the row's
+  // `paddingRight` (from `paddingX={1}`) are real, occupied columns — Yoga
+  // reserves them so the row overflows exactly at `rowWidth` — but they are
+  // blank, so the trimmed string never shows them. `TRAILING_BLANK` names
+  // that gap once instead of asserting a bare "3" here and never explaining
+  // it: it is not a fudge factor, it is `rowWidth`'s own last-chip marginRight
+  // (2) plus the row's paddingRight (1), the exact two terms this file's own
+  // header comment says the estimate counts.
+  const TRAILING_BLANK = 2 + 1;
+
+  it("rowWidth is exactly the column count where the row's last character stops fitting", () => {
+    // At rowWidth (and TRAILING_BLANK short of it) every character up to and
+    // including pinned's last ("quit"'s "t") is present.
+    expect(renderAt(width)).toMatch(/quit$/);
+    expect(renderAt(width - TRAILING_BLANK)).toMatch(/quit$/);
+    // One column narrower still, "quit" itself starts losing characters —
+    // proof this is the real clipping boundary, not more trimmed padding.
+    expect(renderAt(width - TRAILING_BLANK - 1)).not.toMatch(/quit$/);
+    expect(renderAt(width - TRAILING_BLANK - 1)).toContain("qui");
   });
 });

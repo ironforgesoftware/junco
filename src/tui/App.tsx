@@ -14,6 +14,7 @@ import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
 import { allowedActions, deriveState } from "./state.js";
 import { githubTicketId, lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
+import { expandHome } from "../config.js";
 import { defaultEditFile } from "./editFile.js";
 import type { GithubRepoMapping } from "../types.js";
 import type { UpdateInfo } from "../updateCheck.js";
@@ -42,7 +43,7 @@ import {
   DaemonSection,
   truncStart,
 } from "./components/sections.js";
-import { buildContextBindings, type BindingContext } from "./viewActions.js";
+import type { BindingContext } from "./viewActions.js";
 import type { AssessHistory } from "../assessHistory.js";
 import { IssueList } from "./components/IssueList.js";
 import { Preview } from "./components/Preview.js";
@@ -87,12 +88,14 @@ import { useAddRepoForm } from "./hooks/useAddRepoForm.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useGithubData } from "./hooks/useGithubData.js";
 import { useLogOverlayActions } from "./hooks/useLogOverlayActions.js";
-import { useViewActions } from "./hooks/useViewActions.js";
+import { chatTargetFor, useViewActions } from "./hooks/useViewActions.js";
 import { useChat } from "./hooks/useChat.js";
 import { useChatDrafts } from "./hooks/useChatDrafts.js";
 import { useChatInput } from "./hooks/useChatInput.js";
 import { useSuspend } from "./useSuspend.js";
 import { useMainActions, type LocalRow } from "./hooks/useMainActions.js";
+import { useFooterBindings } from "./hooks/useFooterBindings.js";
+import { useFooterTarget } from "./hooks/useFooterTarget.js";
 import { summarizeUnwatchPlan } from "./unwatchSummary.js";
 // Type-only: unwatchCmd is a pure module, but the dashboard drives it through
 // the CLI (spawned), never in-process — nothing here may pull it into the bundle.
@@ -195,7 +198,9 @@ export type View =
   | "transcript"
   | "chat";
 
-interface DetailState {
+// Exported so useViewActions.ts (Ruling R1, 2026-09-02 footer redesign) can
+// type its own `detail` input without re-declaring this shape.
+export interface DetailState {
   issue: DashIssue; // snapshot taken at open — never re-read from the live list
   nwo: string; // frozen with the issue snapshot — the open target never depends on live rail state
   body: string | null;
@@ -205,7 +210,7 @@ interface DetailState {
 /** The fullscreen PR detail overlay — reached from pane 3 (`enter`) or the p
  * view (`enter`); `from` is where `esc`/`q` returns focus/selection to. No
  * fetch: PrPreview renders straight off the already-loaded `DashPr`. */
-interface PrDetailState {
+export interface PrDetailState {
   pr: DashPr;
   from: "main" | "prs";
 }
@@ -287,6 +292,29 @@ const localCheapKey = (c: LocalCheap | null): unknown =>
   c === null
     ? null
     : { ...c, daemon: { ...c.daemon, uptimeSeconds: wholeMinutes(c.daemon.uptimeSeconds) } };
+
+/** `enter` on a queue row opens its transcript: live for a RUNNING row, and
+ * carrying the TICKET's own repo so the transcript's `c` chats about it (spec
+ * 2026-09-02 §5/D7). The key follows src/chat/chatKey.ts's contract exactly
+ * (Ruling R13): a bridged row's watched `github.nwo`, lowercased, and the
+ * resolved checkout path ONLY for a local-only ticket. Keying by the path
+ * whenever one existed opened a second, path-keyed session beside the rail's
+ * nwo one for the same repo — and for an external fork, whose `repoPath` is a
+ * clone under the clones dir, the chat was refused outright (`not_a_repo`).
+ * A Q&A ticket has neither — null, and `c` there toasts. Module scope: the
+ * snapshot row is the only place either field exists, and LocalRow
+ * deliberately carries just the id. */
+function queueTranscriptOpts(
+  q: LocalCheap["queue"] | undefined,
+  row: { kind: "running" | "recent"; id: string },
+): { expectLive: boolean; repoKey: string | null } {
+  const found = [...(q?.running ?? []), ...(q?.recent ?? [])].find((r) => r.id === row.id);
+  const nwo = found?.github?.nwo;
+  return {
+    expectLive: row.kind === "running",
+    repoKey: nwo ? nwo.toLowerCase() : found?.repoPath ? resolve(expandHome(found.repoPath)) : null,
+  };
+}
 
 export function App(props: AppProps): React.JSX.Element {
   const {
@@ -636,12 +664,12 @@ export function App(props: AppProps): React.JSX.Element {
   const openQueueTranscript = useCallback((): void => {
     const tgt = localTarget;
     if (tgt?.kind === "running" || tgt?.kind === "recent") {
-      openTranscript(tgt.id, { expectLive: tgt.kind === "running" });
+      openTranscript(tgt.id, queueTranscriptOpts(localCheap?.queue, tgt));
       setView("transcript");
     } else if (tgt?.kind === "waiting") {
       showToast("info", "not started yet — no transcript");
     }
-  }, [localTarget, openTranscript, showToast]);
+  }, [localTarget, localCheap, openTranscript, showToast]);
 
   // Section-body windowing (outbox/worktrees lists) — minimal-movement
   // prevStart per section, exactly the LocalDashboard rule it replaces.
@@ -918,7 +946,7 @@ export function App(props: AppProps): React.JSX.Element {
         const recent = queueSnap?.recent.some((r) => r.id === candidate) ?? false;
         if (running || recent) {
           setTranscriptFrom(from);
-          openTranscript(candidate, { expectLive: running });
+          openTranscript(candidate, { expectLive: running, repoKey: nwo.toLowerCase() });
           setView("transcript");
           return;
         }
@@ -1305,14 +1333,20 @@ export function App(props: AppProps): React.JSX.Element {
   // its selection switches the subscription to the newly selected row.
   const chatKey = chatState?.key ?? null;
   const composerFocused = chatState?.composerFocused === true;
+  // Ruling R7 (2026-09-02 footer redesign): a rail CHANGE switches the session,
+  // a mere mismatch does not. `c` from an overlay legitimately opens a chat for
+  // a repo the rail is not parked on (a PRs-view row of another repo, a
+  // transcript's checkout path — spec 2026-09-02 §5), and the old
+  // "chatKey !== currentRepoKey" test re-opened the RAIL's session on the very
+  // next render, throwing that session and its prefilled composer away. The ref
+  // is updated on every run, chat view or not, so entering the chat later never
+  // replays a rail move the operator made while looking at something else.
+  const prevRailKey = useRef<string | null>(null);
   useEffect(() => {
-    if (
-      view === "chat" &&
-      currentRepoKey !== null &&
-      chatKey !== null &&
-      chatKey !== currentRepoKey
-    )
-      openChat(currentRepoKey);
+    const key = currentRepoKey;
+    const moved = key !== null && key !== prevRailKey.current;
+    prevRailKey.current = key;
+    if (moved && view === "chat" && chatKey !== null && chatKey !== key) openChat(key);
   }, [view, currentRepoKey, chatKey, openChat]);
   // Anchor-row click: the mouse form of ↑/↓ (a delta off the live cursor).
   const chatCursor = chatState?.cursor ?? 0;
@@ -1327,68 +1361,65 @@ export function App(props: AppProps): React.JSX.Element {
   const chats = health?.chats ?? null;
   const chatBadge = useCallback((key: string) => chatBadgeFor(chats, key), [chats]);
 
-  // ── Derived-mnemonic bindings (mnemonic spec §2/§4): ONE context table
-  // drives the footer chips, the help modal, and the keyboard dispatch tail —
-  // render and input consume the same derivation and cannot drift. ──
-  const bindingContext: BindingContext = useMemo((): BindingContext => {
-    if (logOverlay) return { kind: "logOverlay" };
-    if (filtering) return { kind: "structuralOnly", view: "filtering" };
-    // A focused composer derives NOTHING (spec §8.3): the empty keymap is
-    // what keeps typed prose off the mnemonic dispatch at layer 3d.
-    if (view === "chat")
-      return composerFocused
-        ? { kind: "structuralOnly", view: "chatCompose" }
-        : { kind: "view", view: "chat" };
-    switch (view) {
-      case "help":
-      case "palette":
-      case "addRepo":
-      case "config":
-        return { kind: "structuralOnly", view };
-      case "detail":
-      case "repoDetail":
-      case "prs":
-      case "prDetail":
-      case "review":
-      case "cmdOutput":
-      case "transcript":
-        return { kind: "view", view };
-      case "main":
-        return {
-          kind: "main",
-          pane,
-          body:
-            body?.kind === "issues"
-              ? "issues"
-              : body?.kind === "section"
-                ? body.section
-                : "repoDetail",
-        };
-    }
-  }, [logOverlay, filtering, view, composerFocused, body, pane]);
-  const bindings = useMemo(
-    () => buildContextBindings(bindingContext, layout.mode),
-    [bindingContext, layout.mode],
-  );
-  // Help opens over the MAIN view only; the modal lists the bindings of the
-  // surface underneath it (the help context itself derives nothing).
-  const helpBindings = useMemo(
-    () =>
-      buildContextBindings(
-        {
-          kind: "main",
-          pane,
-          body:
-            body?.kind === "issues"
-              ? "issues"
-              : body?.kind === "section"
-                ? body.section
-                : "repoDetail",
-        },
-        layout.mode,
-      ),
-    [body, pane, layout.mode],
-  );
+  // What `c` would chat about from the CURRENT overlay (spec 2026-09-02 §5,
+  // D6/D7) — the same pure call useViewActions' own `chat` handler makes, so
+  // the pill below and the live key agree by construction. `main` is the rail's
+  // own reading (the selected row's key), which this helper deliberately does
+  // not know.
+  const chatArgs = { detail, prDetail, selectedPr, transcript, reviewState, repoDetailTarget };
+  const chatTarget = chatTargetFor(view, chatArgs);
+  // Row 1's target label (spec §3.1, Ruling R12) — the FOOTER's reading of
+  // what the verbs act on (`issue #46`, `PR #12`, `chat · acme/api`), which is
+  // narrower than the header's crumb trail and never says "no repo" beside a
+  // live pill. hooks/useFooterTarget.ts owns every case. `chatArgs` is spread
+  // in because the two readings name the same overlay state (its `reviewState`
+  // is simply unread here — the review overlay's label is the constant
+  // "review"), which keeps this call site off the printWidth wrap.
+  const targetArgs = { currentIssue, selectedPane3Pr, cmd, chatState, ...chatArgs };
+  const footerTarget = useFooterTarget(view, pane, body, targetArgs);
+
+  // ── Derived-mnemonic bindings + the two footer rows (mnemonic spec §2/§4,
+  // footer spec 2026-09-02 §6): ONE context table drives the footer, the help
+  // modal and the keyboard dispatch tail — render and input consume the same
+  // derivation and cannot drift. hooks/useFooterBindings.ts owns the whole
+  // derivation; App only feeds it the nav spine. ──
+  // WHERE `?` was pressed (Ruling R5, spec §3.2 — `?` is help from every
+  // overlay): the view any-key close returns to, and the context whose keys
+  // the modal lists. Both are written in `openHelp` immediately before the
+  // setView that re-renders us, so the render that first shows the modal
+  // always reads the values belonging to THIS open.
+  const helpFrom = useRef<View>("main");
+  const helpCtx = useRef<BindingContext | null>(null);
+  const {
+    bindingContext,
+    bindings,
+    helpBindings,
+    footer: footerRows,
+  } = useFooterBindings({
+    view,
+    pane,
+    body,
+    logOverlay,
+    filtering,
+    composerFocused,
+    mode: layout.mode,
+    columns: size.columns,
+    target: footerTarget,
+    chatReachable: view === "main" ? currentRepoKey !== null : chatTarget !== null,
+    helpContext: helpCtx.current,
+  });
+  const openHelp = useCallback((): void => {
+    // Re-entrancy guard: help is reachable from a surface whose footer still
+    // renders a live `? help` chip UNDER the modal — the log overlay wins over
+    // `view` in both useFooterBindings and `actionHandlers`, and the footer is
+    // outside the modal, so that chip stays clickable. Re-arming the origin to
+    // "help" there would make any-key close (and onMouseMiss) re-open help
+    // forever. Already open ⇒ do nothing, and above all keep the origin.
+    if (view === "help") return;
+    helpFrom.current = view;
+    helpCtx.current = bindingContext;
+    setView("help");
+  }, [view, bindingContext]);
 
   // The shared close recipe. WHICH surface `q`/esc closes depends on what is
   // open, so it stays here (App owns the nav spine) and is handed to both
@@ -1429,6 +1460,7 @@ export function App(props: AppProps): React.JSX.Element {
   // this composition picks between them exactly as the old switch did. ──
   const logOverlayActions = useLogOverlayActions({
     close: closeSurface,
+    openHelp,
     logEntries,
     logFilters,
     logFollow,
@@ -1439,6 +1471,7 @@ export function App(props: AppProps): React.JSX.Element {
   const viewActions = useViewActions({
     view,
     close: closeSurface,
+    openHelp,
     client,
     aliveRef,
     showToast,
@@ -1457,6 +1490,13 @@ export function App(props: AppProps): React.JSX.Element {
     setReviewState,
     chatDraftActions,
     chatHandlers,
+    detail,
+    prDetail,
+    selectedPr,
+    openIssueTranscript,
+    openChat,
+    setView,
+    setPane,
   });
   const mainActions = useMainActions({
     client,
@@ -1472,6 +1512,7 @@ export function App(props: AppProps): React.JSX.Element {
     currentRepoKey,
     openChat,
     openIssueTranscript,
+    openHelp,
     currentIssue,
     currentRepo,
     selectedPane3Pr,
@@ -1486,7 +1527,6 @@ export function App(props: AppProps): React.JSX.Element {
     githubSetRefreshing,
     setReviewState,
     loadReview,
-    resetPalette,
     setAddRepoError,
     showToast,
     forceLocalRefresh,
@@ -1605,7 +1645,7 @@ export function App(props: AppProps): React.JSX.Element {
   // keyboard-only). Everything else: no-op.
   const onMouseMiss = useMemo(() => {
     if (confirm !== null) return null;
-    if (view === "help") return () => setView("main");
+    if (view === "help") return () => setView(helpFrom.current);
     if (view === "palette") return () => setView("main");
     if (view === "addRepo") return () => setView("main");
     return null;
@@ -1771,6 +1811,14 @@ export function App(props: AppProps): React.JSX.Element {
     // layer 3 — toast dismissal for every branch below the modal layers.
     dismissToast();
 
+    // layer 3a — help is any-key-close, and it sits AHEAD of the overlay and
+    // view branches: `?` opens it from the log overlay too (Ruling R5), and
+    // layer 3b below would otherwise swallow every key under the modal.
+    if (view === "help") {
+      setView(helpFrom.current); // any key closes, back where it opened
+      return;
+    }
+
     // layer 3b — the full-screen log overlay owns ALL input while open; its
     // filter/follow/scroll keys never leak to the view underneath.
     if (logOverlay) {
@@ -1788,14 +1836,12 @@ export function App(props: AppProps): React.JSX.Element {
     // layer 3d — derived-mnemonic dispatch (mnemonic spec §4). The keymap
     // never contains structural keys, and every text-owning context
     // (filtering/palette/addRepo/config) is structuralOnly with an EMPTY
-    // keymap, so this sits safely ahead of the view branches. Help stays
-    // any-key-close because its context derives nothing either.
-    if (view !== "help") {
-      const actionId = bindings.keymap.get(input);
-      if (actionId !== undefined) {
-        actionHandlers[actionId]?.();
-        return;
-      }
+    // keymap, so this sits safely ahead of the view branches. Help never
+    // reaches here — layer 3a returned already.
+    const actionId = bindings.keymap.get(input);
+    if (actionId !== undefined) {
+      actionHandlers[actionId]?.();
+      return;
     }
 
     // layer 4 ── the view cascade ──
@@ -1806,11 +1852,6 @@ export function App(props: AppProps): React.JSX.Element {
     // recipes live in hooks/useChatInput.ts; the s/e/D/r/t/f/q mnemonics have
     // already dispatched at layer 3d above.
     if (handleChatKey(input, key)) return;
-
-    if (view === "help") {
-      setView("main"); // any key closes
-      return;
-    }
 
     if (view === "repoDetail") {
       if (key.escape) return void setView("main");
@@ -1823,8 +1864,8 @@ export function App(props: AppProps): React.JSX.Element {
       if (key.escape) return void setView("main");
       if (input === "]" || key.downArrow) return void scrollBy(1);
       if (input === "[" || key.upArrow) return void scrollBy(-1);
-      if (input === "t")
-        return void openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null, "detail");
+      // `t` (transcript) dispatches at layer 3d now — useViewActions' own
+      // `detail` case (Ruling R1, spec 2026-09-02 footer redesign, Task 1).
       return;
     }
 
@@ -2033,8 +2074,8 @@ export function App(props: AppProps): React.JSX.Element {
     }
 
     // Named verbs (quit/help/queue/PRs/review/…) dispatched at layer 3d via
-    // the derived keymap; `,` config at layer 3c. `:` stays a structural
-    // symbol alias for the palette alongside the derived `c` commands key.
+    // the derived keymap; `,` config at layer 3c. `:` is the palette's own
+    // structural key (spec 2026-09-02 D5) — `c` now derives `chat` instead.
     if (input === ":") {
       resetPalette();
       setView("palette");
@@ -2369,7 +2410,7 @@ export function App(props: AppProps): React.JSX.Element {
         />
       }
       toast={toast}
-      chips={bindings.chips}
+      footer={footerRows}
       chipActions={chipActions}
       modal={modal}
       modalAlign={view === "help" ? "top" : "center"}

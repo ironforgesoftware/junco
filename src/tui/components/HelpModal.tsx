@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { Modal } from "./Modal.js";
 import type { LayoutMode } from "../layout.js";
 import type { ContextBindings } from "../viewActions.js";
+import { NAV_HELP_ROWS } from "../footerModel.js";
 
 function Section({ title, rows }: { title: string; rows: [string, string][] }): React.JSX.Element {
   return (
@@ -35,8 +36,9 @@ export function HelpModal({
   pane: 1 | 2 | 3;
   mode: LayoutMode;
   trigger: string;
-  /** The bindings of the surface UNDER the modal (App passes the main-body
-   * context — help opens from the main view only). */
+  /** The bindings of the surface UNDER the modal: `?` opens help from every
+   * overlay (Ruling R5, spec 2026-09-02 §3.2), so App passes the context it
+   * captured when the key was pressed — the main body's own before any open. */
   bindings: ContextBindings;
   /** Latest npm version when newer than the running one; null/absent → no line. */
   updateLatest?: string | null;
@@ -49,10 +51,17 @@ export function HelpModal({
     c.kind === "structural" ? [[c.key, c.label] as [string, string]] : [],
   );
   const visible = bindings.all.filter((d) => !d.hidden);
-  const hidden = bindings.all.filter((d) => d.hidden && d.id !== "close");
+  // The hidden set is the SHIFT VARIANTS (import-as-ask, audit auto-plan…).
+  // `close` and `help` are hidden for a different reason — they are the
+  // reserved `q`/`?` the footer pins right (Ruling R5) — and the "system"
+  // section below documents both, so neither belongs in the variant list.
+  const hidden = bindings.all.filter((d) => d.hidden && d.id !== "close" && d.id !== "help");
   const thisView: [string, string][] = [
     ...structural,
-    ...visible.map((d): [string, string] => [d.key, d.label]),
+    ...visible.map((d): [string, string] => [
+      d.key,
+      d.id === "chat" ? "chat with the agent about the repo under the cursor" : d.label,
+    ]),
     ...hidden.map((d): [string, string] => [d.key, `${d.label} (shift variant)`]),
   ];
   return (
@@ -62,28 +71,12 @@ export function HelpModal({
         trigger label is `{trigger}`)
       </Text>
       <Text dimColor>
-        keys are mnemonics: the highlighted letter in each footer chip IS the key; an uppercase
-        letter means shift (guarded/destructive).
+        keys are mnemonics: the underlined letter in each footer chip IS the key; an uppercase
+        letter means shift (guarded/destructive). The filled chip is chat — c on any screen with a
+        repo in context.
       </Text>
       <Section title="this view" rows={thisView} />
-      <Section
-        title="navigate"
-        rows={[
-          ["↑/↓ · j/k", "move selection / scroll"],
-          ["←/→ · h/l · tab", "switch panes"],
-          ["[ / ]", "scroll (alias of ↑/↓ in views)"],
-          ["g/G", "first / last"],
-          ["enter", "open detail — repo (rail), issue (list), PR (monitor / PRs view)"],
-          ["t on an issue", "transcript of the ticket junco built for it (live while it runs)"],
-          [
-            "t on a repo row",
-            "chat with the agent about that repo (rail / PR pane, or a local repo body)",
-          ],
-          ["/", "filter issues (esc clears)"],
-          [",", "config editor"],
-          [":", "command palette (alias of the commands chip)"],
-        ]}
-      />
+      <Section title="navigate" rows={[...NAV_HELP_ROWS]} />
       <Section
         title="system rows"
         rows={[

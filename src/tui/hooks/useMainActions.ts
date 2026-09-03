@@ -9,6 +9,7 @@ import type { LocalCheap } from "../localSnapshot.js";
 import type { ToastKind } from "../theme.js";
 import type { ReviewState } from "../components/ReviewView.js";
 import type { ConfirmState } from "./useConfirm.js";
+import type { ChatApi } from "./useChat.js";
 import type { Pane, View } from "../App.js";
 
 /**
@@ -37,8 +38,9 @@ export interface MainActionsInput {
   currentNwo: string | undefined;
   /** The selected row's chat session key (chatKey.ts); null on a system row. */
   currentRepoKey: string | null;
-  /** useChat's opener — `t` on a repo row starts/attaches its session. */
-  openChat: (key: string) => void;
+  /** useChat's opener — `c` on a row starts/attaches its session, prefilling
+   * the composer with the selected issue/PR's thread (spec 2026-09-02 §5). */
+  openChat: ChatApi["openChat"];
   /** `t` on an ISSUE row (#330) — the other half of the shared key. */
   openIssueTranscript: (
     nwo: string | null | undefined,
@@ -52,6 +54,10 @@ export interface MainActionsInput {
   localCheap: LocalCheap | null;
   exit: () => void;
   onExit: () => void;
+  /** App's help opener (Ruling R5, spec 2026-09-02 §3.2): records WHICH
+   * surface the modal was opened from so any-key close returns there and the
+   * modal lists that surface's own keys. */
+  openHelp: () => void;
   setView: (v: View) => void;
   setRailSel: (key: string | null) => void;
   setPane: (p: Pane) => void;
@@ -62,7 +68,6 @@ export interface MainActionsInput {
   githubSetRefreshing: Dispatch<SetStateAction<boolean>>;
   setReviewState: Dispatch<SetStateAction<ReviewState>>;
   loadReview: () => Promise<void>;
-  resetPalette: () => void;
   setAddRepoError: (e: string | null) => void;
   showToast: (kind: ToastKind, text: string) => void;
   forceLocalRefresh: () => Promise<void>;
@@ -110,6 +115,7 @@ export function useMainActions({
   localCheap,
   exit,
   onExit,
+  openHelp,
   setView,
   setRailSel,
   setPane,
@@ -117,7 +123,6 @@ export function useMainActions({
   githubSetRefreshing,
   setReviewState,
   loadReview,
-  resetPalette,
   setAddRepoError,
   showToast,
   forceLocalRefresh,
@@ -135,7 +140,7 @@ export function useMainActions({
         exit();
         onExit();
       },
-      help: () => setView("help"),
+      help: openHelp,
       queue: () => {
         setRailSel(sysKey("queue"));
         setPane(2);
@@ -149,10 +154,6 @@ export function useMainActions({
         setView("review");
         void loadReview();
       },
-      commands: () => {
-        resetPalette();
-        setView("palette");
-      },
       addRepo: () => {
         if (!githubEnabled)
           return void showToast("info", "github mode is off ([github] enabled=false)");
@@ -165,13 +166,13 @@ export function useMainActions({
     [
       exit,
       onExit,
+      openHelp,
       setView,
       setRailSel,
       setPane,
       githubRefreshAll,
       setReviewState,
       loadReview,
-      resetPalette,
       githubEnabled,
       watchlistError,
       setAddRepoError,
@@ -214,20 +215,36 @@ export function useMainActions({
         }
         void openBrowser();
       },
-      // `t` on a repo row (spec 2026-09-01 §8.1): attach the chat to the
-      // selected row's key and hand it the focus — the composer is focused
-      // from mount, so the chat pane must be the focused pane. Its twin is
-      // `transcript` below: the two share the derived `t`, and viewActions'
-      // `bodyVerbs` is what decides which of them the pane offers (R27), so
-      // neither handler needs a pane branch of its own.
+      // `c` on any row (spec 2026-09-02 D5 — chat is now a MAIN_GLOBAL):
+      // attach the chat to the selected row's key and hand it the focus — the
+      // composer is focused from mount, so the chat pane must be the focused
+      // pane. Formerly shared the derived `t` with `transcript` below,
+      // pane-scoped by viewActions' `bodyVerbs` (Ruling R27); R27 is
+      // withdrawn, `chat` claims its own `c` everywhere, and `transcript`
+      // below is the issue list's own `t`.
       chat: () => {
-        if (currentRepoKey === null) return void showToast("info", "no repo selected");
-        openChat(currentRepoKey);
+        if (currentRepoKey === null) return void showToast("info", "select a repo first (←)");
+        // Pane-aware like `browser` above: the rail opens the bare session, the
+        // issue list and pane 3 hand the chat the thread the cursor is on —
+        // TYPED into the composer, never sent (spec 2026-09-02 §5).
+        const issue = pane === 2 && body?.kind === "issues" ? currentIssue : undefined;
+        const pr = pane === 3 ? selectedPane3Pr : undefined;
+        openChat(
+          currentRepoKey,
+          issue
+            ? { composer: `/issue ${issue.number}` }
+            : pr
+              ? { composer: `/pr ${pr.number}` }
+              : undefined,
+        );
         setView("chat");
         setPane(2);
       },
       // `t` on an ISSUE row (#330): the transcript of the ticket the bridge
-      // built for it. Only the issues LIST derives this verb.
+      // built for it. The ISSUES BODY derives this verb — the keymap carries
+      // it on every pane of that body (viewActions' BODY_VERBS.issues) — but
+      // only the issue LIST renders it as a chip (ISSUES_CHIP_ORDER), and with
+      // no issue under the cursor it is a no-op.
       transcript: () => openIssueTranscript(currentNwo, currentIssue),
     }),
     [

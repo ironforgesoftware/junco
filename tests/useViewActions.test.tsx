@@ -3,7 +3,11 @@ import { describe, it, expect, vi } from "vitest";
 import React, { useRef } from "react";
 import { render } from "ink-testing-library";
 import { Text } from "ink";
-import { useViewActions, type ViewActionsInput } from "../src/tui/hooks/useViewActions.js";
+import {
+  chatTargetFor,
+  useViewActions,
+  type ViewActionsInput,
+} from "../src/tui/hooks/useViewActions.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ReviewState } from "../src/tui/components/ReviewView.js";
 import type { TranscriptState } from "../src/tui/hooks/useTranscript.js";
@@ -12,6 +16,8 @@ import type { UnifiedRepo } from "../src/tui/railModel.js";
 import type { PendingAssess } from "../src/assessReview.js";
 import type { PendingComment } from "../src/commentReview.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
+import type { DashIssue } from "../src/tui/state.js";
+import { makeDashIssue } from "./helpers/dashFixtures.js";
 import { until } from "./helpers/until.js";
 
 const BATCH: PendingAssess = {
@@ -107,6 +113,7 @@ const TRANSCRIPT = (live: boolean | null, follow = true): TranscriptState =>
   ({
     id: "t-1",
     path: null,
+    repoKey: null,
     expectLive: true,
     loading: false,
     error: null,
@@ -131,6 +138,11 @@ function makeSpies() {
     setTranscriptFollow: vi.fn(),
     toEnd: vi.fn(),
     setReviewState: vi.fn(),
+    openIssueTranscript: vi.fn(),
+    openHelp: vi.fn(),
+    openChat: vi.fn(),
+    setView: vi.fn(),
+    setPane: vi.fn(),
     chatSubmit: vi.fn(async () => {}),
     chatEdit: vi.fn(async () => {}),
     chatRoute: vi.fn(async () => {}),
@@ -176,6 +188,14 @@ function mount(
     toEnd: spies.toEnd,
     reviewState: EMPTY_REVIEW,
     setReviewState: spies.setReviewState,
+    detail: null,
+    prDetail: null,
+    selectedPr: undefined,
+    openIssueTranscript: spies.openIssueTranscript,
+    openHelp: spies.openHelp,
+    openChat: spies.openChat,
+    setView: spies.setView,
+    setPane: spies.setPane,
     chatDraftActions: {
       submit: spies.chatSubmit,
       edit: spies.chatEdit,
@@ -193,14 +213,13 @@ function mount(
 const ids = (a: Record<string, () => void>): string[] => Object.keys(a).sort();
 
 describe("useViewActions — per-view action id sets (the refactor's invariant)", () => {
-  it("detail / prDetail / prs expose browser+close, each wired to its own opener", () => {
+  it("prDetail / prs expose browser+close, each wired to its own opener", () => {
     for (const [view, spy] of [
-      ["detail", "openDetailIssueInBrowser"],
       ["prDetail", "openPrDetailInBrowser"],
       ["prs", "openSelectedPr"],
     ] as const) {
       const { api, spies, unmount } = mount({ view });
-      expect(ids(api)).toEqual(["browser", "close"]);
+      expect(ids(api)).toEqual(["browser", "chat", "close", "help"]);
       api["browser"]?.();
       expect(spies[spy]).toHaveBeenCalledTimes(1);
       api["close"]?.();
@@ -209,9 +228,36 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
     }
   });
 
+  // Ruling R1 (2026-09-02 footer redesign, Task 1): the brief adds a
+  // `transcript` chip/keymap entry to the detail overlay, so App's layer-3d
+  // dispatch (which returns on ANY keymap hit) would otherwise swallow `t`
+  // before the raw cascade's own check ever ran — this handler is the one
+  // true path, replacing that raw `if (input === "t")` line in App.tsx.
+  it("detail exposes browser+close+transcript; transcript opens the frozen issue's ticket transcript", () => {
+    const DETAIL_ISSUE: DashIssue = makeDashIssue({ number: 46 });
+    const { api, spies, unmount } = mount({
+      view: "detail",
+      detail: {
+        issue: DETAIL_ISSUE,
+        nwo: "acme/widgets",
+        body: null,
+        planComment: null,
+        loading: false,
+      },
+    });
+    expect(ids(api)).toEqual(["browser", "chat", "close", "help", "transcript"]);
+    api["browser"]?.();
+    expect(spies.openDetailIssueInBrowser).toHaveBeenCalledTimes(1);
+    api["close"]?.();
+    expect(spies.close).toHaveBeenCalledTimes(1);
+    api["transcript"]?.();
+    expect(spies.openIssueTranscript).toHaveBeenCalledWith("acme/widgets", DETAIL_ISSUE, "detail");
+    unmount();
+  });
+
   it("repoDetail's browser opens the frozen target, and toasts when it has no nwo", () => {
     const hit = mount({ view: "repoDetail", repoDetailTarget: REPO });
-    expect(ids(hit.api)).toEqual(["browser", "close"]);
+    expect(ids(hit.api)).toEqual(["browser", "chat", "close", "help"]);
     hit.api["browser"]?.();
     expect(hit.spies.openRepoBrowser).toHaveBeenCalledWith("acme/widgets");
     hit.unmount();
@@ -225,15 +271,15 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("cmdOutput offers reRun only for a finished command", () => {
     const running = mount({ view: "cmdOutput", cmd: { ...CMD, running: true } });
-    expect(ids(running.api)).toEqual(["close"]);
+    expect(ids(running.api)).toEqual(["close", "help"]);
     running.unmount();
 
     const none = mount({ view: "cmdOutput", cmd: null });
-    expect(ids(none.api)).toEqual(["close"]);
+    expect(ids(none.api)).toEqual(["close", "help"]);
     none.unmount();
 
     const done = mount({ view: "cmdOutput", cmd: { ...CMD, extraArgs: ["--json"] } });
-    expect(ids(done.api)).toEqual(["close", "reRun"]);
+    expect(ids(done.api)).toEqual(["close", "help", "reRun"]);
     done.api["reRun"]?.();
     expect(done.spies.runPaletteCommand).toHaveBeenCalledWith("status", ["--json"]);
     done.unmount();
@@ -241,13 +287,13 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("transcript offers follow only while the file is live, pausing at the tail", () => {
     const dead = mount({ view: "transcript", transcript: TRANSCRIPT(false) });
-    expect(ids(dead.api)).toEqual(["close", "thinking"]);
+    expect(ids(dead.api)).toEqual(["chat", "close", "help", "thinking"]);
     dead.api["thinking"]?.();
     expect(dead.spies.toggleTranscriptThinking).toHaveBeenCalledTimes(1);
     dead.unmount();
 
     const live = mount({ view: "transcript", transcript: TRANSCRIPT(true, true) });
-    expect(ids(live.api)).toEqual(["close", "follow", "thinking"]);
+    expect(ids(live.api)).toEqual(["chat", "close", "follow", "help", "thinking"]);
     live.api["follow"]?.();
     expect(live.spies.toEnd).toHaveBeenCalledTimes(1);
     expect(live.spies.setTranscriptFollow).toHaveBeenCalledWith(false);
@@ -262,17 +308,45 @@ describe("useViewActions — per-view action id sets (the refactor's invariant)"
 
   it("the chat view hands through useChatInput's own arm (Ruling R15)", () => {
     const { api, spies, unmount } = mount({ view: "chat" });
-    expect(ids(api)).toEqual(["close"]);
+    expect(ids(api)).toEqual(["close", "help"]);
     api["close"]!();
     expect(spies.chatClose).toHaveBeenCalledTimes(1);
     expect(spies.close).not.toHaveBeenCalled(); // NOT the shared close recipe
     unmount();
   });
 
-  it("the chromeless views expose no mnemonic actions", () => {
+  it("the chromeless views expose help alone (their contexts derive nothing else)", () => {
     for (const view of ["palette", "addRepo", "config", "help", "main"] as const) {
       const { api, unmount } = mount({ view });
-      expect(ids(api)).toEqual([]);
+      expect(ids(api)).toEqual(["help"]);
+      unmount();
+    }
+  });
+
+  // Ruling R5 (spec 2026-09-02 §3.2): `?` is help EVERYWHERE, so every arm of
+  // this hook must dispatch it — the overlays' keymaps all carry the hidden
+  // reserved `?`, and a missing handler would leave both the key and the
+  // pinned footer chip silently inert on that one view.
+  it("every view arm dispatches help through App's openHelp", () => {
+    for (const view of [
+      "detail",
+      "prDetail",
+      "repoDetail",
+      "prs",
+      "cmdOutput",
+      "transcript",
+      "review",
+      "chat",
+      "palette",
+      "addRepo",
+      "config",
+      "help",
+      "main",
+    ] as const) {
+      const { api, spies, unmount } = mount({ view });
+      expect(Object.keys(api), view).toContain("help");
+      api["help"]!();
+      expect(spies.openHelp, view).toHaveBeenCalledTimes(1);
       unmount();
     }
   });
@@ -296,14 +370,16 @@ describe("useViewActions — review", () => {
     open: { kind: "chatDraft", idx: 0 },
   };
 
-  it("exposes the eight review ids", () => {
+  it("exposes the eight review ids plus help and chat", () => {
     const { api, unmount } = mount({ view: "review", reviewState: openBatch });
     expect(ids(api)).toEqual([
       "all",
+      "chat",
       "close",
       "discard",
       "edit",
       "file",
+      "help",
       "none",
       "route",
       "submit",
@@ -462,6 +538,203 @@ describe("useViewActions — review", () => {
     expect(spies.chatSubmit).not.toHaveBeenCalled();
     expect(spies.chatEdit).not.toHaveBeenCalled();
     expect(spies.chatRoute).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
+// Spec 2026-09-02 §5 (D6/D7): `c` from an overlay chats about what the overlay
+// is showing — the repo it belongs to, with the issue/PR thread prefilled when
+// one is in view. No repo in context ⇒ null ⇒ the caller toasts (and Task 2's
+// footer pill is absent for exactly the same predicate).
+describe("chatTargetFor (spec 2026-09-02 §5)", () => {
+  it("issue detail → the issue's repo with /issue N prefilled", () => {
+    expect(
+      chatTargetFor("detail", {
+        detail: { nwo: "Acme/API", issue: { number: 46 } } as never,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        repoDetailTarget: null,
+        reviewState: null as never,
+      }),
+    ).toEqual({ key: "acme/api", composer: "/issue 46" });
+  });
+  it("PR detail and the PRs list → /pr N", () => {
+    expect(
+      chatTargetFor("prDetail", {
+        detail: null,
+        prDetail: { pr: { nwo: "acme/api", number: 12 } } as never,
+        selectedPr: undefined,
+        transcript: null,
+        repoDetailTarget: null,
+        reviewState: null as never,
+      }),
+    ).toEqual({ key: "acme/api", composer: "/pr 12" });
+    expect(
+      chatTargetFor("prs", {
+        detail: null,
+        prDetail: null,
+        selectedPr: { nwo: "acme/api", number: 7 } as never,
+        transcript: null,
+        repoDetailTarget: null,
+        reviewState: null as never,
+      }),
+    ).toEqual({ key: "acme/api", composer: "/pr 7" });
+  });
+  it("transcript → the ticket's repo key, no prefill; null when the ticket has none", () => {
+    expect(
+      chatTargetFor("transcript", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: { repoKey: "/w/acme" } as never,
+        repoDetailTarget: null,
+        reviewState: null as never,
+      }),
+    ).toEqual({ key: "/w/acme" });
+    expect(
+      chatTargetFor("transcript", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: { repoKey: null } as never,
+        repoDetailTarget: null,
+        reviewState: null as never,
+      }),
+    ).toBeNull();
+  });
+  it("review → the selected item's repo (batch nwo, comment nwo, chat draft key); null past the list", () => {
+    // Only the four fields the cursor walk reads — cast at each call site so
+    // the `{ ...rs, cursor }` variants below stay spreadable objects.
+    const rs = {
+      batches: [{ nwo: "acme/api" }],
+      drafts: [{ nwo: "beta/two" }],
+      chatDrafts: [{ key: "/w/c" }],
+      cursor: 0,
+      open: null,
+    };
+    expect(
+      chatTargetFor("review", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        repoDetailTarget: null,
+        reviewState: rs as never,
+      }),
+    ).toEqual({ key: "acme/api" });
+    expect(
+      chatTargetFor("review", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        repoDetailTarget: null,
+        reviewState: { ...rs, cursor: 1 } as never,
+      }),
+    ).toEqual({ key: "beta/two" });
+    expect(
+      chatTargetFor("review", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        repoDetailTarget: null,
+        reviewState: { ...rs, cursor: 2 } as never,
+      }),
+    ).toEqual({ key: "/w/c" });
+    expect(
+      chatTargetFor("review", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        repoDetailTarget: null,
+        reviewState: { ...rs, cursor: 3 } as never,
+      }),
+    ).toBeNull();
+  });
+  it("an overlay with nothing selected, and every chatless view, target nothing", () => {
+    const none = {
+      detail: null,
+      prDetail: null,
+      selectedPr: undefined,
+      transcript: null,
+      reviewState: EMPTY_REVIEW,
+      repoDetailTarget: null,
+    };
+    for (const view of ["detail", "prDetail", "prs", "transcript", "review"] as const)
+      expect(chatTargetFor(view, none), view).toBeNull();
+    for (const view of ["main", "repoDetail", "cmdOutput", "chat", "help"] as const)
+      expect(chatTargetFor(view, none), view).toBeNull();
+  });
+  it("repoDetail overlay → the frozen rail target's key; null without one (Ruling R8)", () => {
+    expect(
+      chatTargetFor("repoDetail", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: EMPTY_REVIEW,
+        repoDetailTarget: REPO,
+      }),
+    ).toEqual({ key: "acme/widgets" });
+    expect(
+      chatTargetFor("repoDetail", {
+        detail: null,
+        prDetail: null,
+        selectedPr: undefined,
+        transcript: null,
+        reviewState: EMPTY_REVIEW,
+        repoDetailTarget: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("the overlay chat handler (spec 2026-09-02 §5)", () => {
+  it("opens the target's chat and switches the view; a null target toasts", () => {
+    const detail = mount({
+      view: "detail",
+      detail: { nwo: "Acme/API", issue: { number: 46 } } as never,
+    });
+    detail.api["chat"]!();
+    expect(detail.spies.openChat).toHaveBeenCalledWith("acme/api", { composer: "/issue 46" });
+    expect(detail.spies.setView).toHaveBeenCalledWith("chat");
+    expect(detail.spies.setPane).toHaveBeenCalledWith(2);
+    detail.unmount();
+
+    const bare = mount({
+      view: "transcript",
+      transcript: { ...TRANSCRIPT(false), repoKey: null },
+    });
+    bare.api["chat"]!();
+    expect(bare.spies.openChat).not.toHaveBeenCalled();
+    // `esc`, not `←`: inside an overlay the left arrow does nothing, so the
+    // hint names the key that actually gets you back to the rail.
+    expect(bare.spies.showToast).toHaveBeenCalledWith("info", "select a repo first (esc)");
+    bare.unmount();
+  });
+
+  it("a target with no thread in view opens the plain session — no composer prefill", () => {
+    const { api, spies, unmount } = mount({
+      view: "transcript",
+      transcript: { ...TRANSCRIPT(false), repoKey: "/w/acme" },
+    });
+    api["chat"]!();
+    expect(spies.openChat).toHaveBeenCalledWith("/w/acme", undefined);
+    expect(spies.setView).toHaveBeenCalledWith("chat");
+    unmount();
+  });
+
+  // Ruling R8 (spec 2026-09-02 D7): the repoDetail overlay's `chat` handler
+  // is the same shared verb, keyed to the frozen rail target's key.
+  it("repoDetail's chat opens the frozen target's session", () => {
+    const { api, spies, unmount } = mount({ view: "repoDetail", repoDetailTarget: REPO });
+    api["chat"]!();
+    expect(spies.openChat).toHaveBeenCalledWith("acme/widgets", undefined);
+    expect(spies.setView).toHaveBeenCalledWith("chat");
+    expect(spies.setPane).toHaveBeenCalledWith(2);
     unmount();
   });
 });

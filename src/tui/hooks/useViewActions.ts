@@ -4,11 +4,14 @@ import type { DashboardClient } from "../ghClient.js";
 import type { UnifiedRepo } from "../railModel.js";
 import type { ToastKind } from "../theme.js";
 import type { ReviewState } from "../components/ReviewView.js";
-import type { View } from "../App.js";
+import type { View, DetailState, PrDetailState } from "../App.js";
+import type { DashPr } from "../prState.js";
 import type { CmdState } from "./useCmdOutput.js";
 import type { TranscriptState } from "./useTranscript.js";
 import type { ChatDraftActions } from "./useChatDrafts.js";
+import type { ChatApi } from "./useChat.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
+import type { DashIssue } from "../state.js";
 
 export interface ViewActionsInput {
   /** The current view — this hook owns every arm EXCEPT `main`. */
@@ -37,6 +40,87 @@ export interface ViewActionsInput {
   /** The `chat` view's own arm, built by useChatInput (Ruling R15) — this hook
    * only picks it, the way it picks every other view's. */
   chatHandlers: Record<string, () => void>;
+  /** The open issue-detail overlay's frozen snapshot (App.tsx `detail` state)
+   * — read-only here; the `detail` case's `transcript` handler reads its
+   * nwo/issue, same freshness as the raw `if (input === "t")` key check it
+   * replaces (Ruling R1, spec 2026-09-02 footer redesign, Task 1). */
+  detail: DetailState | null;
+  /** Opens the ticket transcript for an issue (App.tsx `openIssueTranscript`,
+   * shared with useMainActions' own `transcript` handler for #330). Ruling R1
+   * gives the detail overlay's own `t` this same handler. */
+  openIssueTranscript: (
+    nwo: string | null | undefined,
+    issue: DashIssue | null | undefined,
+    from?: "main" | "detail",
+  ) => void;
+  /** App's help opener (Ruling R5, spec 2026-09-02 §3.2). Every overlay's
+   * keymap carries the hidden reserved `?`, so every arm below must dispatch
+   * it — otherwise the key and the pinned `? help` chip are inert there. */
+  openHelp: () => void;
+  /** useChat's opener (spec 2026-09-02 §5): `c` from an overlay attaches the
+   * chat to the overlay's OWN repo, with the thread prefilled where one is in
+   * view — `chatTargetFor` below decides both. */
+  openChat: ChatApi["openChat"];
+  /** The chat verb navigates as well as opens: full-screen chat view, focus on
+   * the composer's pane (App owns the nav spine, so it hands these in). */
+  setView: (v: View) => void;
+  setPane: (p: 1 | 2 | 3) => void;
+  /** The open PR-detail overlay's frozen PR, and the PRs view's selection —
+   * read-only, the same way `detail` is: they name the chat verb's target.
+   * (`null` is App's own "nothing selected"; `undefined` is what an index past
+   * a shrunk list yields — both mean the same thing here.) */
+  prDetail: PrDetailState | null;
+  selectedPr: DashPr | null | undefined;
+}
+
+/** What `c` chats about from an overlay (spec 2026-09-02 §5, D6/D7): the
+ * overlay's repo, with the issue/PR thread prefilled where one is in view.
+ * Null → no repo in context → the caller toasts and the pill is absent. */
+export function chatTargetFor(
+  view: View,
+  s: {
+    detail: DetailState | null;
+    prDetail: PrDetailState | null;
+    selectedPr: DashPr | null | undefined;
+    transcript: TranscriptState | null;
+    reviewState: ReviewState;
+    repoDetailTarget: UnifiedRepo | null;
+  },
+): { key: string; composer?: string } | null {
+  switch (view) {
+    case "detail":
+      return s.detail
+        ? { key: s.detail.nwo.toLowerCase(), composer: `/issue ${s.detail.issue.number}` }
+        : null;
+    case "prDetail":
+      return s.prDetail
+        ? { key: s.prDetail.pr.nwo.toLowerCase(), composer: `/pr ${s.prDetail.pr.number}` }
+        : null;
+    // Ruling R8 (spec 2026-09-02 D7): the rail's UnifiedRepo.key IS already
+    // the chat key (nwo lowercased or a resolved local path) — no second
+    // lowercase pass here.
+    case "repoDetail":
+      return s.repoDetailTarget ? { key: s.repoDetailTarget.key } : null;
+    case "prs":
+      return s.selectedPr
+        ? { key: s.selectedPr.nwo.toLowerCase(), composer: `/pr ${s.selectedPr.number}` }
+        : null;
+    case "transcript":
+      return s.transcript?.repoKey ? { key: s.transcript.repoKey } : null;
+    case "review": {
+      // The combined list's cursor walks batches, then comment drafts, then
+      // chat drafts (useViewActions' own `selectedChatDraft` order) — each
+      // carries the repo it belongs to.
+      const { batches, drafts, chatDrafts, cursor } = s.reviewState;
+      if (cursor < batches.length) return { key: batches[cursor]!.nwo.toLowerCase() };
+      if (cursor < batches.length + drafts.length)
+        return { key: drafts[cursor - batches.length]!.nwo.toLowerCase() };
+      const d = chatDrafts[cursor - batches.length - drafts.length];
+      return d ? { key: d.key } : null;
+    }
+    default:
+      return null;
+  }
 }
 
 /** The chat draft `submit`/`edit`/`route`/`discard` act on: the open preview's
@@ -84,6 +168,14 @@ export function useViewActions({
   setReviewState,
   chatDraftActions,
   chatHandlers,
+  detail,
+  openIssueTranscript,
+  openHelp,
+  openChat,
+  setView,
+  setPane,
+  prDetail,
+  selectedPr,
 }: ViewActionsInput): Record<string, () => void> {
   const reviewActions = useMemo((): Record<string, () => void> => {
     // Chat-draft verb dispatch: a no-op unless a chat draft is actually
@@ -227,14 +319,51 @@ export function useViewActions({
   }, [close, client, aliveRef, showToast, reviewState, setReviewState, chatDraftActions]);
 
   return useMemo((): Record<string, () => void> => {
+    // Spec 2026-09-02 §5 (D6/D7): ONE chat verb for every overlay that has a
+    // repo in context — same predicate as Task 2's footer pill, so a rendered
+    // pill and a live `c` can never disagree. No target ⇒ toast, never a chat
+    // about whatever the rail happens to be parked on.
+    const chat = (): void => {
+      const t = chatTargetFor(view, {
+        detail,
+        prDetail,
+        selectedPr,
+        transcript,
+        reviewState,
+        repoDetailTarget,
+      });
+      // The hint names the key that gets you somewhere a repo IS selectable
+      // FROM HERE: inside an overlay that is `esc` (spec §5's `(←)` is the
+      // main view's own wording, which useMainActions keeps — `←` does
+      // nothing under an overlay).
+      if (t === null) return void showToast("info", "select a repo first (esc)");
+      openChat(t.key, t.composer === undefined ? undefined : { composer: t.composer });
+      setView("chat");
+      setPane(2);
+    };
     switch (view) {
       case "detail":
-        return { browser: openDetailIssueInBrowser, close };
+        return {
+          browser: openDetailIssueInBrowser,
+          chat,
+          close,
+          help: openHelp,
+          // Ruling R1: `transcript` now derives on `t` here (viewActions.ts's
+          // VIEW_OPTIONS.detail), so App's layer-3d dispatch reaches this
+          // handler before the view cascade's own key checks ever run — this
+          // replaces the raw `if (input === "t")` line that used to live
+          // there. Same nwo/issue freshness as that line: read straight off
+          // the frozen `detail` snapshot, not a stale closure.
+          transcript: () =>
+            openIssueTranscript(detail?.nwo ?? null, detail?.issue ?? null, "detail"),
+        };
       case "prDetail":
-        return { browser: openPrDetailInBrowser, close };
+        return { browser: openPrDetailInBrowser, chat, close, help: openHelp };
       case "repoDetail":
         return {
           close,
+          help: openHelp,
+          chat,
           browser: () => {
             const nwo = repoDetailTarget?.nwo;
             if (nwo !== null && nwo !== undefined) openRepoBrowser(nwo);
@@ -242,17 +371,20 @@ export function useViewActions({
           },
         };
       case "prs":
-        return { browser: openSelectedPr, close };
+        return { browser: openSelectedPr, chat, close, help: openHelp };
       case "cmdOutput":
         return {
           close,
+          help: openHelp,
           ...(cmd && !cmd.running
             ? { reRun: () => runPaletteCommand(cmd.name, cmd.extraArgs) }
             : {}),
         };
       case "transcript":
         return {
+          chat,
           close,
+          help: openHelp,
           thinking: toggleTranscriptThinking,
           ...(transcript?.summary?.live
             ? {
@@ -266,16 +398,18 @@ export function useViewActions({
             : {}),
         };
       case "review":
-        return reviewActions;
+        return { ...reviewActions, chat, help: openHelp };
       case "chat":
-        return chatHandlers;
+        return { ...chatHandlers, help: openHelp };
       case "palette":
       case "addRepo":
       case "config":
       case "help":
       // `main` is useMainActions' arm — App picks between the two.
       case "main":
-        return {};
+        // Their contexts are structuralOnly (empty keymap), so `help` here is
+        // unreachable by key — it is kept for the uniform arm shape.
+        return { help: openHelp };
     }
   }, [
     view,
@@ -293,6 +427,15 @@ export function useViewActions({
     setTranscriptFollow,
     toEnd,
     reviewActions,
+    reviewState,
     chatHandlers,
+    detail,
+    openIssueTranscript,
+    openHelp,
+    openChat,
+    setView,
+    setPane,
+    prDetail,
+    selectedPr,
   ]);
 }

@@ -9,6 +9,7 @@ import { agentStart, runEnd, runStart, turnEndFull } from "./helpers/transcriptF
 const state = (over: Partial<TranscriptState> = {}): TranscriptState => ({
   id: "t-1",
   path: null,
+  repoKey: null,
   expectLive: false,
   loading: false,
   error: null,

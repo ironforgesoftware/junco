@@ -55,7 +55,6 @@ function makeSpies() {
     githubSetRefreshing: vi.fn(),
     setReviewState: vi.fn(),
     loadReview: vi.fn(async () => undefined),
-    resetPalette: vi.fn(),
     setAddRepoError: vi.fn(),
     showToast: vi.fn(),
     forceLocalRefresh: vi.fn(async () => undefined),
@@ -68,6 +67,7 @@ function makeSpies() {
     askConfirm: vi.fn(),
     openChat: vi.fn(),
     openIssueTranscript: vi.fn(),
+    openHelp: vi.fn(),
   };
 }
 
@@ -103,6 +103,7 @@ function mount(
     currentRepoKey: "acme/widgets",
     openChat: spies.openChat,
     openIssueTranscript: spies.openIssueTranscript,
+    openHelp: spies.openHelp,
     currentIssue: ISSUE,
     currentRepo: MAPPING,
     selectedPane3Pr: null,
@@ -117,7 +118,6 @@ function mount(
     githubSetRefreshing: spies.githubSetRefreshing,
     setReviewState: spies.setReviewState,
     loadReview: spies.loadReview,
-    resetPalette: spies.resetPalette,
     setAddRepoError: spies.setAddRepoError,
     showToast: spies.showToast,
     forceLocalRefresh: spies.forceLocalRefresh,
@@ -143,7 +143,6 @@ const ALL_IDS = [
   "assessAutoPlan",
   "browser",
   "chat",
-  "commands",
   "delete",
   "dispatch",
   "dispatchAsk",
@@ -169,6 +168,17 @@ describe("useMainActions — the main view's action table", () => {
     unmount();
   });
 
+  // Ruling R5: help no longer calls setView("help") directly — App's openHelp
+  // records WHICH surface the modal was opened from, so any-key close returns
+  // there and the modal lists that surface's own keys.
+  it("help defers to App's openHelp, never a bare setView", () => {
+    const { api, spies, unmount } = mount();
+    api["help"]?.();
+    expect(spies.openHelp).toHaveBeenCalledTimes(1);
+    expect(spies.setView).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it("quit exits ink then the host", () => {
     const { api, spies, unmount } = mount();
     api["quit"]?.();
@@ -177,23 +187,45 @@ describe("useMainActions — the main view's action table", () => {
     unmount();
   });
 
+  // Spec 2026-09-02 §5: `c` is pane-aware the way `o` (browser) is — the rail
+  // opens the bare session, the issue list and pane 3 prefill the thread the
+  // cursor is on. Nothing is SENT: the operator still owns the send key.
   it("chat opens the selected row's session and focuses the chat pane, or toasts on a system row", () => {
     const { api, spies, unmount } = mount({ pane: 1 });
     api["chat"]?.();
-    expect(spies.openChat).toHaveBeenCalledWith("acme/widgets");
+    expect(spies.openChat).toHaveBeenCalledWith("acme/widgets", undefined);
     expect(spies.setView).toHaveBeenCalledWith("chat");
     expect(spies.setPane).toHaveBeenCalledWith(2);
     unmount();
     const sys = mount({ currentRepoKey: null });
     sys.api["chat"]?.();
     expect(sys.spies.openChat).not.toHaveBeenCalled();
-    expect(sys.spies.showToast).toHaveBeenCalledWith("info", "no repo selected");
+    expect(sys.spies.showToast).toHaveBeenCalledWith("info", "select a repo first (←)");
     sys.unmount();
   });
 
-  // `t`'s other reading (#330): the same derived letter, a separate verb —
-  // viewActions' `bodyVerbs` decides which one the pane offers (R27), so this
-  // handler carries no pane branch of its own.
+  it("chat prefills /issue N on the issues body and /pr N on pane 3", () => {
+    const issues = mount({ pane: 2 });
+    issues.api["chat"]?.();
+    expect(issues.spies.openChat).toHaveBeenCalledWith("acme/widgets", { composer: "/issue 42" });
+    issues.unmount();
+
+    const prs = mount({ pane: 3, selectedPane3Pr: PR });
+    prs.api["chat"]?.();
+    expect(prs.spies.openChat).toHaveBeenCalledWith("acme/widgets", { composer: "/pr 9" });
+    prs.unmount();
+
+    // A system row's body (no issue, no PR) keeps the bare session even on
+    // pane 2 — the prefill follows the SELECTION, not the pane number.
+    const section = mount({ pane: 2, body: { kind: "section", section: "queue" } });
+    section.api["chat"]?.();
+    expect(section.spies.openChat).toHaveBeenCalledWith("acme/widgets", undefined);
+    section.unmount();
+  });
+
+  // The issue list's own `t` (#330) — chat moved to the MAIN_GLOBAL `c`
+  // (spec 2026-09-02 D5, Ruling R27 withdrawn), so this handler no longer
+  // shares a letter with `chat` and carries no pane branch of its own.
   it("transcript opens the selected issue's ticket transcript", () => {
     const { api, spies, unmount } = mount({ pane: 2 });
     api["transcript"]?.();
@@ -235,14 +267,6 @@ describe("useMainActions — the main view's action table", () => {
     ).toMatchObject({ loading: true, error: null, open: null, cursor: 0 });
     expect(spies.setView).toHaveBeenCalledWith("review");
     expect(spies.loadReview).toHaveBeenCalledTimes(1);
-    unmount();
-  });
-
-  it("commands resets the palette before showing it", () => {
-    const { api, spies, unmount } = mount();
-    api["commands"]?.();
-    expect(spies.resetPalette).toHaveBeenCalledTimes(1);
-    expect(spies.setView).toHaveBeenCalledWith("palette");
     unmount();
   });
 

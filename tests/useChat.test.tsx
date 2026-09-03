@@ -185,6 +185,33 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     expect(c.calls).toEqual(expect.arrayContaining(["abort", "fresh"]));
   });
 
+  // Spec 2026-09-02 §5 (the chat verb): `c` from a surface with an issue/PR in
+  // view opens the repo's chat with the thread already TYPED — prefilled and
+  // focused, never sent. The operator still owns the send key.
+  it("openChat with a composer prefill lands the text in the composer, focused, and sends nothing", async () => {
+    const c = makeClient();
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    api.openChat("acme/api", { composer: "/issue 46" });
+    await until(() => api.chat?.composer === "/issue 46");
+    expect(api.chat!.composerFocused).toBe(true);
+    expect(c.calls.filter((x) => x.startsWith("prompt:"))).toEqual([]);
+  });
+
+  // R32's restore ref is written by every composer writer — the prefill
+  // included. Out of sync, the first failed POST would restore the ref's stale
+  // "" over the prefilled thread and swallow it silently.
+  it("a prefill keeps R32's restore ref in sync: a failed send puts the prefilled text back", async () => {
+    const c = makeClient({ prompt: async () => ({ ok: false as const, error: "no_checkout" }) });
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    api.openChat("acme/api", { composer: "/pr 12" });
+    await until(() => api.chat?.composer === "/pr 12");
+    await api.send("/pr 12");
+    await until(() => api.chat?.error === "no_checkout");
+    expect(api.chat!.composer).toBe("/pr 12");
+  });
+
   it("a failed send keeps the operator's text, raises `error`, and clearError clears it (R32)", async () => {
     const c = makeClient({
       prompt: async () => ({ ok: false as const, error: "no_checkout" }),

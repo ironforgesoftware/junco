@@ -41,7 +41,10 @@ export interface ChatState {
 
 export interface ChatApi {
   chat: ChatState | null;
-  openChat(key: string): void;
+  /** Spec 2026-09-02 §5: `opts.composer` PREFILLS the composer (focused, and
+   *  NOT sent) — the chat verb types the thread for the operator, who still
+   *  owns the send key. */
+  openChat(key: string, opts?: { composer?: string }): void;
   closeChat(): void;
   send(text: string): Promise<void>;
   abort(): Promise<void>;
@@ -290,10 +293,15 @@ export function useChat({
   }, []);
 
   const openChat = useCallback(
-    (key: string): void => {
+    (key: string, opts?: { composer?: string }): void => {
       closeChat();
       keyRef.current = key;
-      setChat(freshState(key));
+      const composer = opts?.composer ?? "";
+      // R32's restore ref is written by EVERY composer writer, the prefill
+      // included: out of sync, the first failed POST would restore the ref's
+      // stale "" over the prefilled thread.
+      composerRef.current = composer;
+      setChat({ ...freshState(key), composer }); // freshState focuses the composer already
       connect(key, null);
       void reloadDrafts();
     },

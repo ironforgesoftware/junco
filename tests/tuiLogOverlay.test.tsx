@@ -53,7 +53,10 @@ describe("LOCAL full-screen log overlay", () => {
     // Enter opens the full overlay (its follow chip is overlay-only wording);
     // Enter is unbound inside the overlay, so re-sending it is idempotent.
     await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
-    expect(frame(r)).toContain("esc close"); // the overlay footer hint
+    // The overlay's navigate-row hint. Structural chips render a padded
+    // keycap plus a label with its own leading space (spec 2026-09-02 §3.4),
+    // so the stripped frame shows ` esc  close`.
+    expect(frame(r)).toContain("esc  close");
     // esc closes it — the follow chip disappears, back on the compact section.
     r.stdin.write(ESC);
     await until(() => !frame(r).includes("following"));
@@ -256,16 +259,18 @@ describe("overlay hint dedup (#238)", () => {
     const r = await openToLogs(deps, "seed-x");
     await fireUntil(r.stdin, ENTER, () => frame(r).includes("following"));
     const f = frame(r);
-    // One source of truth for the overlay's key hints: the footer chip row
-    // (which carries the clickable esc). LogView's internal duplicate is gone
-    // — the mnemonic chips render bare labels, so the old "l level" key-first
-    // pair must not appear anywhere, and each label renders exactly once in
-    // the footer row.
+    // One source of truth for the overlay's key hints: the two footer rows —
+    // its mnemonic verbs on the ACTIONS row, its structural vocabulary (with
+    // the clickable esc) on the NAVIGATE row below. LogView's internal
+    // duplicate is gone — the mnemonic chips render bare labels, so the old
+    // "l level" key-first pair must not appear anywhere, and each label
+    // renders exactly once in the footer.
     expect(f.split("l level").length - 1).toBe(0);
-    const footerRow = f.split("\n").at(-1) ?? "";
+    const lines = f.split("\n");
+    const actionsRow = lines[lines.length - 2] ?? "";
     for (const label of ["follow", "level", "ticket"]) {
-      expect(footerRow.split(label).length - 1).toBe(1);
+      expect(actionsRow.split(label).length - 1).toBe(1);
     }
-    expect(f.split("esc close").length - 1).toBe(1);
+    expect(f.split("esc  close").length - 1).toBe(1);
   });
 });

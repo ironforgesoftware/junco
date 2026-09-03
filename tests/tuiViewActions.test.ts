@@ -7,9 +7,10 @@ import {
 
 const km = (c: BindingContext): Record<string, string> =>
   Object.fromEntries(buildContextBindings(c, "wide").keymap);
-/** The main context is pane-scoped (Ruling R27): only the issues body reads
- * the pane (t = transcript on the list, chat everywhere else), so the other
- * bodies pin at pane 2 and mean the same thing on any pane. */
+/** The main context is pane-scoped for CHIP rendering only (Ruling R27's
+ * pane-scoped `t` KEYMAP swap is withdrawn — spec 2026-09-02 D5): the keymap
+ * is the same on every pane of a body, so the other bodies pin at pane 2 and
+ * mean the same thing on any pane. */
 const main = (body: MainBody, pane: 1 | 2 | 3 = 2): BindingContext => ({
   kind: "main",
   body,
@@ -22,6 +23,7 @@ const main = (body: MainBody, pane: 1 | 2 | 3 = 2): BindingContext => ({
 // review to 'v' — a label edit that re-binds, exactly as this file's own
 // docstring warns.
 const GLOBALS = {
+  c: "chat",
   a: "addRepo",
   U: "unwatch",
   b: "browser",
@@ -30,10 +32,11 @@ const GLOBALS = {
   e: "queue",
   v: "review",
   p: "prs",
-  c: "commands",
   q: "quit",
   "?": "help",
 };
+/** The go-somewhere globals, in chip order (spec 2026-09-02 §3.1, right of `│`). */
+const GO = ["queue", "review", "prs"];
 
 describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", () => {
   it("main:issues (pane 2 — the issue list)", () => {
@@ -63,18 +66,70 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
   it("main:logs is globals-only", () => {
     expect(km(main("logs"))).toEqual(GLOBALS);
   });
-  it("t is pane-scoped in the issues body: transcript on the list, chat off it (R27)", () => {
-    // Same slot, same derived letter, one honest label per pane (#330 owns the
-    // issue row; spec 2026-09-01 §8.1 owns the repo row).
-    expect(km(main("issues", 2))).toMatchObject({ t: "transcript" });
-    expect(km(main("issues", 1))).toMatchObject({ t: "chat" });
-    expect(km(main("issues", 3))).toMatchObject({ t: "chat" });
-    // Off the issues body the pane changes nothing.
+  it("c is chat on every pane of every main body; t is the transcript on the issue list only (spec 2026-09-02 D5)", () => {
     for (const pane of [1, 2, 3] as const) {
-      expect(km(main("repoDetail", pane))).toEqual({ ...GLOBALS, t: "chat" });
-      expect(km(main("queue", pane))).toMatchObject({ t: "retry" });
-      expect(km(main("logs", pane))).toEqual(GLOBALS);
+      expect(km(main("issues", pane))).toMatchObject({ c: "chat", t: "transcript" });
+      expect(km(main("repoDetail", pane))).toEqual({ ...GLOBALS });
+      expect(km(main("queue", pane))).toMatchObject({ c: "chat", t: "retry" });
     }
+  });
+  it("the palette has no mnemonic — `:` is structural, `c` belongs to chat", () => {
+    for (const body of [
+      "issues",
+      "repoDetail",
+      "queue",
+      "outbox",
+      "worktrees",
+      "daemon",
+      "logs",
+    ] as const)
+      expect(Object.values(km(main(body)))).not.toContain("commands");
+  });
+  it("overlays with a repo in context derive c → chat, appended after their existing keys", () => {
+    expect(km({ kind: "view", view: "detail" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+      t: "transcript",
+    });
+    expect(km({ kind: "view", view: "prDetail" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
+    expect(km({ kind: "view", view: "prs" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
+    expect(km({ kind: "view", view: "review" })).toEqual({
+      a: "all",
+      n: "none",
+      f: "file",
+      D: "discard",
+      q: "close",
+      "?": "help",
+      s: "submit",
+      e: "edit",
+      r: "route",
+      c: "chat",
+    });
+    expect(km({ kind: "view", view: "transcript" })).toEqual({
+      t: "thinking",
+      f: "follow",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
+    expect(km({ kind: "view", view: "cmdOutput" })).toEqual({
+      r: "reRun",
+      q: "close",
+      "?": "help",
+    });
+    expect(km({ kind: "view", view: "chat" })).not.toHaveProperty("c");
   });
   it("chat view (composer blurred) and chatCompose (focused)", () => {
     expect(km({ kind: "view", view: "chat" })).toEqual({
@@ -85,6 +140,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       t: "thinking",
       f: "follow",
       q: "close",
+      "?": "help",
     });
     expect(km({ kind: "structuralOnly", view: "chatCompose" })).toEqual({});
     const chips = buildContextBindings(
@@ -93,7 +149,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
     ).chips.map((c) => c.label);
     expect(chips).toEqual(["message", "send", "newline", "commands", "blur/abort"]);
   });
-  it("review gains submit/edit/route AFTER the existing four, keys unchanged", () => {
+  it("review gains submit/edit/route AFTER the existing four, keys unchanged, chat last (spec 2026-09-02 D7)", () => {
     expect(km({ kind: "view", view: "review" })).toEqual({
       a: "all",
       n: "none",
@@ -103,32 +159,62 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       e: "edit",
       r: "route",
       q: "close",
+      "?": "help",
+      c: "chat",
     });
   });
-  it("overlay views (each with the hidden reserved q close)", () => {
-    for (const view of ["detail", "prDetail", "repoDetail", "prs"] as const) {
-      expect(km({ kind: "view", view })).toEqual({ b: "browser", q: "close" });
-    }
-    expect(km({ kind: "view", view: "cmdOutput" })).toEqual({ r: "reRun", q: "close" });
+  it("overlay views (each with the hidden reserved q close; chat appended where a repo is in context)", () => {
+    expect(km({ kind: "view", view: "detail" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+      t: "transcript",
+    });
+    expect(km({ kind: "view", view: "prDetail" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
+    // Ruling R8 (spec 2026-09-02 D7): the repoDetail OVERLAY carries a repo
+    // too, so it gets the chat pill like every other repo-scoped overlay.
+    expect(km({ kind: "view", view: "repoDetail" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
+    expect(km({ kind: "view", view: "prs" })).toEqual({
+      b: "browser",
+      q: "close",
+      "?": "help",
+      c: "chat",
+    });
+    expect(km({ kind: "view", view: "cmdOutput" })).toEqual({
+      r: "reRun",
+      q: "close",
+      "?": "help",
+    });
     expect(km({ kind: "view", view: "review" })).toEqual({
       a: "all",
       n: "none",
       f: "file",
       D: "discard",
       q: "close",
+      "?": "help",
       s: "submit",
       e: "edit",
       r: "route",
+      c: "chat",
     });
     expect(km({ kind: "view", view: "transcript" })).toEqual({
       t: "thinking",
       f: "follow",
       q: "close",
+      "?": "help",
+      c: "chat",
     });
-  });
-  it("main:queue structural chips offer enter → transcript", () => {
-    const chips = buildContextBindings(main("queue"), "wide").chips;
-    expect(chips).toContainEqual({ kind: "structural", key: "enter", label: "transcript" });
   });
   it("logOverlay", () => {
     expect(km({ kind: "logOverlay" })).toEqual({
@@ -136,6 +222,7 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       l: "level",
       t: "ticket",
       q: "close",
+      "?": "help",
     });
   });
 });
@@ -195,14 +282,65 @@ describe("invariants", () => {
     const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
     expect(ids).toEqual(expect.arrayContaining(["dispatch", "approve", "analyze", "assess"]));
     expect(ids).not.toContain("addRepo");
-    // R27: no chip may advertise `chat` where `t` opens the transcript.
-    expect(ids).not.toContain("chat");
+    // R27 is withdrawn (spec 2026-09-02 D5): chat is a global chip everywhere,
+    // including the issue list, alongside the list's own `t` transcript chip.
+    expect(ids).toContain("chat");
   });
 
-  it("chips: the repoDetail body advertises its one verb", () => {
+  it("chips: a section body advertises its own verbs, then the go-somewhere globals", () => {
+    // Spec 2026-09-02 §4 "main · queue/outbox/… body": the body's verbs, then
+    // `review` · `PRs`. No repo is in context, so no repo-scoped verb belongs.
+    const b = buildContextBindings(main("queue", 2), "wide");
+    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+    expect(ids).toEqual(["retry", "delete", "review", "prs"]);
+  });
+
+  it("chips: pane 1 on a SYSTEM row lists that section's verbs, not the rail's (R11)", () => {
+    // The bug this pins: pane 1 used to hand EVERY row the rail's repo verbs,
+    // so a queue row on the rail advertised `audit browser refresh add repo
+    // Unwatch` against the target `queue` — verbs that only toast there.
+    const b = buildContextBindings(main("queue", 1), "wide");
+    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+    expect(ids).toEqual(["retry", "delete", "review", "prs"]);
+    for (const repoVerb of ["chat", "assess", "browser", "refresh", "addRepo", "unwatch"]) {
+      expect(ids).not.toContain(repoVerb);
+    }
+  });
+
+  it("chips: pane 1 on a LOCAL-ONLY repo row (repoDetail body) keeps the rail set (R11)", () => {
+    const b = buildContextBindings(main("repoDetail", 1), "wide");
+    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+    // …including the pinned pair, which `chipOrder` carries and footerModel
+    // re-homes to `navigate.pinned` (the section orders never listed them).
+    expect(ids).toEqual([
+      "chat",
+      "assess",
+      "browser",
+      "refresh",
+      "addRepo",
+      "unwatch",
+      ...GO,
+      "quit",
+      "help",
+    ]);
+  });
+
+  it("chips: the repoDetail BODY carries the repo verbs and chat, not a bare review/PRs (R11)", () => {
+    // Spec 2026-09-02 §4 "main · repo detail body": pill · browser · refresh ·
+    // audit │ queue · review · PRs. `c` is live on this body (useMainActions'
+    // chat handler reads `currentRepoKey`, which a repoDetail row supplies),
+    // so the chip that advertises it must exist — pill ⇔ handler.
     const b = buildContextBindings(main("repoDetail", 2), "wide");
     const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
-    expect(ids).toEqual(["chat"]);
+    expect(ids).toEqual(["chat", "browser", "refresh", "assess", ...GO]);
+  });
+
+  it("chips: pane 3 keeps the PR-monitor set on every body (R11)", () => {
+    for (const body of ["issues", "repoDetail", "queue"] as const) {
+      const b = buildContextBindings(main(body, 3), "wide");
+      const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+      expect(ids, body).toEqual(["chat", "browser", "prs", "review", "quit", "help"]);
+    }
   });
 
   it("structuralOnly contexts derive nothing", () => {

@@ -3,18 +3,20 @@ import { Box, Text } from "ink";
 import type { Layout } from "../layout.js";
 import type { TerminalSize } from "../useTerminalSize.js";
 import type { ToastKind } from "../theme.js";
-import { Toast, Footer } from "./Chrome.js";
-import type { Chip } from "../viewActions.js";
+import { Footer } from "./Chrome.js";
+import type { FooterRows } from "../footerModel.js";
 import { Center } from "./Modal.js";
 
 /** The fullscreen frame: header row, body (panes OR centered modal OR
- * too-small guidance), reserved toast row, footer row. Exactly size.rows tall. */
+ * too-small guidance), then the two footer rows (spec 2026-09-02 §3 — a live
+ * toast paints over the actions row instead of claiming one of its own).
+ * Exactly size.rows tall. */
 export function Workspace({
   size,
   layout,
   header,
   toast,
-  chips,
+  footer,
   chipActions,
   modal,
   modalAlign = "center",
@@ -24,10 +26,14 @@ export function Workspace({
   layout: Layout;
   header: React.ReactNode;
   toast: { kind: ToastKind; text: string } | null;
-  /** Mnemonic + structural chips for the footer row (viewActions). */
-  chips: Chip[];
-  /** Hint KEY → handler; a chip with a matching entry is clickable. */
-  /** Chip click handlers — mnemonic chips by ID, structural by KEY. */
+  /** The two footer rows (footerModel.buildFooterRows). */
+  footer: FooterRows;
+  /** Chip click handlers — pill/mnemonic chips by ID, structural by KEY.
+   * Wired through unconditionally, modal or not: an open modal's footer IS
+   * that modal's own context (palette/addRepo/help are structuralOnly; a
+   * confirm empties the handlers), so there is nothing of the surface
+   * underneath left to click — see hooks/useFooterBindings.ts, Ruling R6'.
+   * Blanket-disarming here instead would also kill the palette's own ⏎ run. */
   chipActions?: Record<string, () => void>;
   modal: React.ReactNode | null;
   /** Vertical alignment for the modal body — "top" for modals taller than
@@ -49,8 +55,7 @@ export function Workspace({
           children
         )}
       </Box>
-      <Toast toast={toast} />
-      <Footer chips={chips} chipActions={chipActions} />
+      <Footer rows={footer} toast={toast} chipActions={chipActions} />
     </Box>
   );
 }

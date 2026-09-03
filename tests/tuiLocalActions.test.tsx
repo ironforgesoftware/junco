@@ -4,8 +4,11 @@
 // State-dependent keystrokes are separated by `await until(<marker>)`, never
 // fired as a synchronous burst: ink runs useInput against the last committed
 // render, so a second key issued before React commits would see a stale
-// closure. Markers: section-body content for the rail move, the body footer
-// ("back") for rail→body focus, and the ▌ selection glyph for the row.
+// closure. Markers: section-body content for the rail move, a body-only
+// footer verb (e.g. "flush") or the ▌ selection glyph for rail→body focus.
+// (The body footer's "back" hint is `← rail` on the two-row footer's navigate
+// row now — spec 2026-09-02 §3.2 — so a body-specific mnemonic verb or the
+// cursor glyph stays the sharper settled-render signal here.)
 import { describe, it, expect, afterEach } from "vitest";
 import { cleanup } from "ink-testing-library";
 import type { LocalCheap, LocalHeavy } from "../src/tui/localSnapshot.js";
@@ -48,7 +51,10 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await tap(r, TO_QUEUE_ROW); // rail → queue system row
     await until(() => frame(r).includes("sub-fix-typos")); // queue body up
     r.stdin.write("l"); // enter body
-    await until(() => frame(r).includes("back")); // body focus (footer)
+    // Body focus (footerModel.ts now owns the main view's "back" structural
+    // hint — the OLD footer no longer renders it; Task 3 wires it back in):
+    // the cursor landing on the RUNNING row is the settled-render signal.
+    await until(() => selOn(r, "#1 exec"));
     // The three selectable queue rows are RUNNING, then WAITING, then failed
     // RECENT. Cursor starts on the RUNNING row (index 0); move down twice onto
     // the failed RECENT row (its label is the github-derived "#9 exec", not the
@@ -119,7 +125,10 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await tap(r, TO_QUEUE_ROW);
     await until(() => frame(r).includes("sub-fix-typos"));
     r.stdin.write("l");
-    await until(() => frame(r).includes("back"));
+    // Body focus (footerModel.ts now owns the "back" structural hint — see
+    // the note above): the cursor landing on the RUNNING row is the
+    // settled-render signal.
+    await until(() => selOn(r, "#1 exec"));
     r.stdin.write("g"); // top selectable row — now the RUNNING row (running ⧺ waiting ⧺ recent)
     await until(() => selOn(r, "#1 exec"));
     r.stdin.write("t"); // re[t]ry mnemonic — guarded no-op on a running row
@@ -139,7 +148,10 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await tap(r, TO_OUTBOX_ROW); // rail → outbox system row
     await until(() => frame(r).includes("acme/api#1")); // outbox body up
     r.stdin.write("l"); // enter body
-    await until(() => frame(r).includes("back"));
+    // Body focus (footerModel.ts now owns the "back" structural hint — see
+    // the note above): the outbox body's own "flush" verb only renders in
+    // the footer once pane 2 (this section body) has focus.
+    await until(() => frame(r).includes("flush"));
     r.stdin.write("f");
     await until(() => calls.some(([n]) => n === "outbox"));
     expect(calls.find(([n]) => n === "outbox")![1]).toEqual(["flush"]);
@@ -171,7 +183,10 @@ describe("section actions spawn the real CLI (fire-and-toast)", () => {
     await tap(r, TO_DAEMON_ROW); // rail → daemon system row
     await until(() => frame(r).includes("4242")); // daemon body up
     r.stdin.write("l"); // enter the daemon body (X is a body action)
-    await until(() => frame(r).includes("back"));
+    // Body focus (footerModel.ts now owns the "back" structural hint — see
+    // the note above): the daemon body's own "flush" verb (unguarded, so its
+    // case is stable) only renders in the footer once pane 2 has focus.
+    await until(() => frame(r).includes("flush"));
     r.stdin.write("R"); // guarded Restart mnemonic
     await until(() => frame(r).includes("in-flight ticket"));
     expect(frame(r)).toMatch(/1 in-flight ticket/); // currentTickets.length === 1
@@ -267,8 +282,9 @@ describe("section cursor highlight is aligned with the x/R action target", () =>
     await tap(r, TO_QUEUE_ROW);
     await until(() => frame(r).includes("#7")); // queue body up (recent rows)
     r.stdin.write("l"); // enter body
-    await until(() => frame(r).includes("back"));
-    // Cursor starts on the DONE row (#7, visual index 0) — highlight lands there.
+    // Body focus (footerModel.ts now owns the "back" structural hint — see
+    // the note above): cursor starts on the DONE row (#7, visual index 0) —
+    // highlight landing there is the settled-render signal.
     await until(() => selOn(r, "#7"));
     expect(selOn(r, "#8")).toBe(false); // the failed row is NOT highlighted yet
     // retry while the DONE row is highlighted is a guarded no-op: a toast, and
