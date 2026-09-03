@@ -28,6 +28,9 @@ export interface ChatInputDeps {
   moveRailTo: (idx: number) => void;
   /** Rail row count — `G` from pane 1 lands on the last row. */
   railCount: number;
+  /** Body rows the transcript window shows — `ChatView`'s own
+   * `chatVisibleRows(height)`, so PgUp/PgDn move exactly one screen. */
+  visibleRows: number;
 }
 
 export interface ChatInputApi {
@@ -72,6 +75,7 @@ export function useChatInput({
   moveRail,
   moveRailTo,
   railCount,
+  visibleRows,
 }: ChatInputDeps): ChatInputApi {
   // `chatApi` is a fresh object every render; every memo/callback below closes
   // over these members (each a stable useCallback, or a value that genuinely
@@ -194,6 +198,19 @@ export function useChatInput({
 
   const handleChatKey = (input: string, key: Key): boolean => {
     if (view !== "chat" || chat === null) return false;
+    // One screen, minus a row of overlap so the line you were reading is
+    // still on screen after the jump (`less`'s own page rule).
+    const pageRows = Math.max(1, visibleRows - 1);
+    /** Scrolling up pauses follow, landing at the tail first — the log
+     * overlay's and the transcript view's shared recipe. Without the jump the
+     * paused window would fall back to a stale offset, usually 0. */
+    const scrollUp = (rows: number): void => {
+      if (chat.follow) {
+        toEnd();
+        setFollow(false);
+      }
+      scrollBy(-rows);
+    };
     // `pane === 2` is half the condition on purpose: ChatView hands the
     // Composer `focused && composerFocused`, so its useGuardedInput is live
     // only while the CHAT pane holds the focus. Reading `composerFocused`
@@ -202,6 +219,12 @@ export function useChatInput({
     // reachable: `openChat` from the rail-switch effect resets
     // `composerFocused` to true while pane 1 still holds the focus.
     if (chat.composerFocused && pane === 2) {
+      // PgUp/PgDn are not text — the Composer ignores them (its typing branch
+      // needs a non-empty `input`, and ink reports both as ""), so they stay
+      // the transcript's page keys while the composer holds the focus: read
+      // back over the conversation without blurring to do it.
+      if (key.pageUp) return took(() => scrollUp(pageRows));
+      if (key.pageDown) return took(() => scrollBy(pageRows));
       // The Composer's own useGuardedInput handles typing/enter/chords/slash.
       // Only esc is App's: streaming → abort, idle → blur (spec §8.3). Every
       // other key is swallowed so no cascade layer below sees typed prose.
@@ -234,23 +257,21 @@ export function useChatInput({
     // toggles them, keeping the help modal's "←/→ · h/l · tab" line true here.
     if (input === "h" || key.leftArrow) return took(() => setPane(1));
     if (input === "l" || key.rightArrow) return took(() => setPane(2));
-    if (key.tab) return took(() => setPane(pane === 1 ? 2 : 1));
-    if (input === "j" || key.downArrow) return took(() => moveCursor(1));
-    if (input === "k" || key.upArrow) return took(() => moveCursor(-1));
+    // `tab` walks the CARDS (this brief supersedes spec §8.3's pane door):
+    // ↑/↓ scroll now, so the anchor cursor needs a key of its own. Ink reports
+    // shift+tab as `tab` with the shift modifier set. With no anchors
+    // `moveCursor` simply has nowhere to go — a silent no-op, not a toast.
+    if (key.tab) return took(() => moveCursor(key.shift ? -1 : 1));
     if (key.return || input === " ") return took(toggleExpanded);
-    if (input === "]") return took(() => scrollBy(1));
-    if (input === "[")
-      return took(() => {
-        // Scrolling up pauses follow, landing at the tail first — the log
-        // overlay's and the transcript view's shared recipe.
-        if (chat.follow) {
-          toEnd();
-          setFollow(false);
-        }
-        scrollBy(-1);
-      });
+    // Chat-shaped scrolling (this brief supersedes spec §8.3's cursor
+    // movement): the transcript is prose, so ↑/↓ walk it a row at a time —
+    // `j`/`k` and `[`/`]` are aliases, and the cards move on `tab`.
+    if (input === "j" || key.downArrow || input === "]") return took(() => scrollBy(1));
+    if (input === "k" || key.upArrow || input === "[") return took(() => scrollUp(1));
+    if (key.pageDown) return took(() => scrollBy(pageRows));
+    if (key.pageUp) return took(() => scrollUp(pageRows));
     if (input === "G" || key.end) return took(() => setFollow(true));
-    if (input === "g")
+    if (input === "g" || key.home)
       return took(() => {
         setFollow(false);
         scrollBy(-1_000_000); // clamps to 0

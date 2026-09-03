@@ -59,7 +59,7 @@ import { CommandOutput } from "./components/CommandOutput.js";
 import { QueueView } from "./components/QueueView.js";
 import { ReviewView } from "./components/ReviewView.js";
 import { TranscriptView } from "./components/TranscriptView.js";
-import { ChatView } from "./components/ChatView.js";
+import { ChatView, chatVisibleRows } from "./components/ChatView.js";
 import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
@@ -1328,6 +1328,7 @@ export function App(props: AppProps): React.JSX.Element {
     moveRail,
     moveRailTo,
     railCount: railRows.length,
+    visibleRows: chatVisibleRows(layout.bodyRows),
   });
   // Spec §8.1: the rail stays the nav spine while the chat is open, so moving
   // its selection switches the subscription to the newly selected row.

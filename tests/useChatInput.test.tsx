@@ -93,6 +93,7 @@ function mount(
     currentNwo?: string;
     draft?: PendingDraft | null;
     prContextFails?: boolean;
+    visibleRows?: number;
   } = {},
 ): { readonly api: ChatInputApi; calls: string[]; setChat: (c: ChatState | null) => void } {
   const calls: string[] = [];
@@ -143,6 +144,8 @@ function mount(
     moveRail: (d) => void calls.push(`rail:${d}`),
     moveRailTo: (i) => void calls.push(`railTo:${i}`),
     railCount: 7,
+    // A 10-row body ⇒ a page is 9 rows (visibleRows - 1, one row of overlap).
+    visibleRows: o.visibleRows ?? 10,
   };
   const holder: { api: ChatInputApi | null } = { api: null };
   function Probe({ chat }: { chat: ChatState | null }): React.JSX.Element {
@@ -189,52 +192,89 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     expect(h.calls).toEqual(["rail:1", "focus:true", "pane:2"]);
   });
 
-  it("blurred: the movement/scroll/expand keys and the pane doors", () => {
+  it("blurred: ↑/↓ (and j/k, [/]) scroll the transcript a row at a time", () => {
     const h = mount();
     const api = h.api;
     api.handleChatKey("i", K());
     api.handleChatKey("j", K());
+    api.handleChatKey("k", K());
+    api.handleChatKey("", K({ downArrow: true }));
     api.handleChatKey("", K({ upArrow: true }));
-    api.handleChatKey("", K({ return: true }));
-    api.handleChatKey(" ", K());
     api.handleChatKey("]", K());
     api.handleChatKey("[", K());
+    api.handleChatKey("", K({ return: true }));
+    api.handleChatKey(" ", K());
     api.handleChatKey("h", K());
     api.handleChatKey("", K({ leftArrow: true }));
     api.handleChatKey("", K({ rightArrow: true }));
-    api.handleChatKey("", K({ tab: true }));
     api.handleChatKey("G", K());
     api.handleChatKey("g", K());
+    api.handleChatKey("", K({ end: true }));
+    api.handleChatKey("", K({ home: true }));
     expect(h.calls).toEqual([
       // `i` takes the pane back with the focus (the Composer's hook is gated
       // on both), which is why this reads as two calls.
       "focus:true",
       "pane:2",
-      "cursor:1",
-      "cursor:-1",
-      "expand",
-      "expand",
       "scroll:1",
       "scroll:-1",
+      "scroll:1",
+      "scroll:-1",
+      "scroll:1",
+      "scroll:-1",
+      "expand",
+      "expand",
       "pane:1",
       "pane:1",
       "pane:2",
-      "pane:1", // tab toggles: this mount sits on pane 2
+      "follow:true",
+      "follow:false",
+      "scroll:-1000000",
       "follow:true",
       "follow:false",
       "scroll:-1000000",
     ]);
-    // …and back the other way from pane 1, so the help modal's "tab switches
-    // panes" line holds in this view too.
-    const t = mount({ pane: 1 });
-    t.api.handleChatKey("", K({ tab: true }));
-    expect(t.calls).toEqual(["pane:2"]);
   });
 
-  it("blurred: [ on a followed chat lands at the tail first, then steps up", () => {
+  it("blurred: PgUp/PgDn move a page — visibleRows minus one row of overlap", () => {
+    const h = mount();
+    h.api.handleChatKey("", K({ pageDown: true }));
+    h.api.handleChatKey("", K({ pageUp: true }));
+    expect(h.calls).toEqual(["scroll:9", "scroll:-9"]);
+    // A one-row body still pages by a row, never by zero.
+    const tiny = mount({ visibleRows: 1 });
+    tiny.api.handleChatKey("", K({ pageDown: true }));
+    expect(tiny.calls).toEqual(["scroll:1"]);
+  });
+
+  it("blurred: scrolling up on a followed chat lands at the tail first, then steps", () => {
+    for (const key of [K({ upArrow: true }), K({ pageUp: true })]) {
+      const h = mount({ chat: chatState({ follow: true }) });
+      h.api.handleChatKey("", key);
+      expect(h.calls.slice(0, 2)).toEqual(["toEnd", "follow:false"]);
+    }
     const h = mount({ chat: chatState({ follow: true }) });
     h.api.handleChatKey("[", K());
     expect(h.calls).toEqual(["toEnd", "follow:false", "scroll:-1"]);
+  });
+
+  it("blurred: tab walks the cards forward, shift+tab back", () => {
+    const h = mount();
+    h.api.handleChatKey("", K({ tab: true }));
+    // Ink reports shift+tab as tab with the shift modifier set.
+    h.api.handleChatKey("", K({ tab: true, shift: true }));
+    expect(h.calls).toEqual(["cursor:1", "cursor:-1"]);
+  });
+
+  it("focused: PgUp/PgDn scroll the transcript — they are keys, not text", () => {
+    const h = mount({ chat: chatState({ composerFocused: true }) });
+    expect(h.api.handleChatKey("", K({ pageUp: true }))).toBe(true);
+    h.api.handleChatKey("", K({ pageDown: true }));
+    expect(h.calls).toEqual(["scroll:-9", "scroll:9"]);
+    // …pausing follow first, exactly as the blurred recipe does.
+    const f = mount({ chat: chatState({ composerFocused: true, follow: true }) });
+    f.api.handleChatKey("", K({ pageUp: true }));
+    expect(f.calls).toEqual(["toEnd", "follow:false", "scroll:-9"]);
   });
 
   it("blurred: esc leaves the view, and an unbound key is swallowed", () => {

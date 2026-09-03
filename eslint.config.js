@@ -53,8 +53,10 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // reading of the spine, not the header's crumb tail, so App names the
   // overlay/selection sources once (`targetArgs`, reusing `chatArgs` for the
   // overlay half) and calls hooks/useFooterTarget.ts — the derivation itself
-  // is entirely in the hook.
-  { file: "src/tui/App.tsx", max: 1891 },
+  // is entirely in the hook. +1 for the chat-scroll brief's page keys (1,891 →
+  // 1,892): `useChatInput` gains `visibleRows: chatVisibleRows(layout.bodyRows)`
+  // so PgUp/PgDn move exactly the window ChatView paints.
+  { file: "src/tui/App.tsx", max: 1892 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
