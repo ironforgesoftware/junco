@@ -3,36 +3,15 @@ import type { MutableRefObject } from "react";
 import type { DashboardClient } from "../ghClient.js";
 import type { CliRunResult } from "../cliRunner.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
+import { submitArgv, draftTicketIds } from "../../chat/submitArgv.js";
 import type { ToastKind } from "../theme.js";
+
+export { submitArgv };
 
 export type RouteOverride = PendingDraft["routeOverride"];
 
 export function nextRoute(r: RouteOverride): RouteOverride {
   return r === "auto" ? "inbox" : r === "inbox" ? "issue" : "auto";
-}
-
-/** One argv per CLI invocation, in order (spec §6.1 table, §6.4 override).
- * audit/investigate replay the argv derived at park time; every other kind
- * submits the file on disk, so the CLI does the routing and identity handling
- * exactly as it does for the skill. */
-export function submitArgv(d: PendingDraft, filePath: (name: string) => string): string[][] {
-  if (d.kind === "audit" || d.kind === "investigate") return d.commandArgs ? [d.commandArgs] : [];
-  const asIssue = (f: PendingDraft["files"][number]): boolean =>
-    d.routeOverride === "issue" || (d.routeOverride === "auto" && f.route?.destination === "issue");
-  if (d.kind === "planSet") {
-    const f = d.files[0]!;
-    return [
-      [
-        "submit",
-        ...(asIssue(f) ? ["--as-issue"] : []),
-        "--plan",
-        filePath(f.name),
-        "--repo",
-        d.cwd,
-      ],
-    ];
-  }
-  return d.files.map((f) => ["submit", ...(asIssue(f) ? ["--as-issue"] : []), filePath(f.name)]);
 }
 
 /** Ruling R34: every verb RESOLVES. Each call site is a `void fn(d)` (the
@@ -125,7 +104,7 @@ export function useChatDrafts(opts: {
         draftId: d.id,
         kind: d.kind,
         status: "submitted",
-        ids: d.files.map((f) => f.name.replace(/\.md$/, "")),
+        ids: draftTicketIds(d),
         destination,
       });
       if (!aliveRef.current) return;
