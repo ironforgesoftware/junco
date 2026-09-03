@@ -147,7 +147,18 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       { kind: "structuralOnly", view: "chatCompose" },
       "wide",
     ).chips.map((c) => c.label);
-    expect(chips).toEqual(["message", "send", "newline", "commands", "blur/abort"]);
+    // The composer's own keys are the ACTIONS row (footerModel.ts); what is
+    // left as structural vocabulary is what still works WHILE typing.
+    expect(chips).toEqual(["scroll", "blur"]);
+    const blurred = buildContextBindings({ kind: "view", view: "chat" }, "wide").chips;
+    expect(blurred.filter((c) => c.kind === "structural").map((c) => [c.key, c.label])).toEqual([
+      ["↑/↓", "scroll"],
+      ["pgup/pgdn", "page"],
+      ["tab", "card"],
+      ["enter", "expand"],
+      ["i", "compose"],
+      ["esc", "back"],
+    ]);
   });
   it("review gains submit/edit/route AFTER the existing four, keys unchanged, chat last (spec 2026-09-02 D7)", () => {
     expect(km({ kind: "view", view: "review" })).toEqual({

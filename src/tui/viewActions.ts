@@ -243,11 +243,16 @@ function viewStructural(view: OverlayView): Chip[] {
     case "transcript":
       return [s("↑/↓", "tool"), s("enter", "expand"), s("[/]", "scroll"), s("esc", "back")];
     case "chat":
+      // The chat-scroll brief (2026-09-02) supersedes spec §8.3's vocabulary:
+      // ↑/↓ scroll the transcript, PgUp/PgDn page it, and `tab` is what walks
+      // the draft cards. `[/]` is still an alias, but a row this long has no
+      // space for aliases — the help modal lists them.
       return [
-        s("i", "compose"),
-        s("↑/↓", "move"),
+        s("↑/↓", "scroll"),
+        s("pgup/pgdn", "page"),
+        s("tab", "card"),
         s("enter", "expand"),
-        s("[/]", "scroll"),
+        s("i", "compose"),
         s("esc", "back"),
       ];
   }
@@ -268,14 +273,10 @@ function structuralOnly(view: StructuralOnlyView): Chip[] {
       return [s("any key", "close")];
     case "chatCompose":
       // The composer owns every key while focused (spec §8.3), so no mnemonic
-      // may derive here — these five chips are the whole surface.
-      return [
-        s("type", "message"),
-        s("enter", "send"),
-        s("ctrl+j", "newline"),
-        s("/", "commands"),
-        s("esc", "blur/abort"),
-      ];
+      // may derive here. Its own keys are the ACTIONS row (footerModel.ts);
+      // this is the navigate row, so it lists only what still works WHILE
+      // typing — PgUp/PgDn are not text, so they still page the transcript.
+      return [s("pgup/pgdn", "scroll"), s("esc", "blur")];
   }
 }
 

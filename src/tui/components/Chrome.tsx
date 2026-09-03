@@ -243,7 +243,7 @@ function SegmentText({ chip }: { chip: FooterChip }): React.JSX.Element {
 /** A run of chips. One with a `chipActions` entry is clickable — pill and
  * mnemonic chips by their mnemonic ID, structural chips by their KEY (which
  * IS their `FooterChip.id`, footerModel.ts); the rest render inert. A
- * separator and a `note` dispatch nothing at all: neither names a key. */
+ * separator dispatches nothing at all: it names no key. */
 function ChipRun({
   chips,
   chipActions,
@@ -254,8 +254,7 @@ function ChipRun({
   return (
     <>
       {chips.map((chip, i) => {
-        const run =
-          chip.kind === "separator" || chip.kind === "note" ? undefined : chipActions?.[chip.id];
+        const run = chip.kind === "separator" ? undefined : chipActions?.[chip.id];
         const body = <SegmentText chip={chip} />;
         return (
           <Box key={`${chip.id}-${i}`} flexShrink={0} marginRight={2}>

@@ -6,9 +6,8 @@
  * is the HEADER's vocabulary — the scope you are inside, most-general first.
  * The two disagree wherever a pane narrows the scope: the issue list read
  * `acme/api` when the verbs act on `issue #46`, pane 3 read `acme/api` when
- * they act on `PR #12`, the chat view read the bare session key rather than
- * `chat · <key>`, and a local-only checkout (`UnifiedRepo.nwo === null`) read
- * `no repo` next to a live chat pill. This hook is the footer's own reading,
+ * they act on `PR #12`, and a local-only checkout (`UnifiedRepo.nwo === null`)
+ * read `no repo` next to a live chat pill. This hook is the footer's own reading,
  * derived from the same spine App already holds — never from the chips.
  *
  * Pure apart from the memo; every case is pinned by tests/useFooterTarget.
@@ -86,8 +85,10 @@ export function useFooterTarget(
         return "review";
       case "cmdOutput":
         return cmd ? cmd.title : "command";
+      // Bare key, not `chat · <key>` (chat-scroll brief): the header crumb
+      // already says "chat", and the repeat cost the repo name its room.
       case "chat":
-        return chatState ? `chat · ${chatState.key}` : "chat";
+        return chatState ? chatState.key : "chat";
       case "repoDetail":
         return repoDetailTarget ? repoLabel(repoDetailTarget) : "repo";
       case "palette":

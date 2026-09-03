@@ -225,6 +225,12 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
     const r = rows({ kind: "main", body: "issues", pane: 1 }, { target: "x".repeat(40) });
     expect(r.actions.label).toHaveLength(TARGET_WIDTH);
     expect(r.actions.label.endsWith("…")).toBe(true);
+    // 24 columns: wide enough for a real owner/name, which the chat view's
+    // label now is in full (the header crumb already says "chat").
+    expect(TARGET_WIDTH).toBe(24);
+    expect(
+      rows({ kind: "view", view: "chat" }, { target: "alxedelweiss/junco" }).actions.label,
+    ).toBe("alxedelweiss/junco");
   });
 
   // Compact coverage: the remaining main body arms of mainBodyNav, each on
@@ -317,35 +323,27 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       texts(rows({ kind: "view", view: "review" }, { chatReachable: false }).actions.chips)[0],
     ).toBe("mnemonic:all:all");
   });
-  it("chat view, composer focused: ⏎ send is the pill; navigate is the blurred-keys reminder", () => {
-    const r = rows({ kind: "structuralOnly", view: "chatCompose" }, { target: "chat · acme/api" });
+  it("chat view, composer focused: ⏎ send is the pill; navigate lists what still works while typing", () => {
+    const r = rows({ kind: "structuralOnly", view: "chatCompose" }, { target: "acme/api" });
     expect(texts(r.actions.chips)).toEqual([
       "pill:enter:send",
       "structural:ctrl+j:newline",
       "structural:/:commands",
       "structural:esc:blur/abort",
     ]);
-    expect(r.navigate.label).toBe("");
-    // Spec §4 calls this row "a dim one-line reminder", not a chip: encoding
-    // it as a structural chip with an empty key painted a two-column keycap
-    // blob in front of it and left the text in the default foreground. It is
-    // its own `note` kind — one dim segment, no keycap, nothing to click.
-    expect(texts(r.navigate.chips)).toEqual([
-      "note::esc, then ↑↓ move · ⏎ expand · [ ] scroll · s e r D on a draft · t thinking · f follow",
-    ]);
-    expect(footerSegments(r.navigate.chips[0]!)).toEqual([
-      {
-        text: "esc, then ↑↓ move · ⏎ expand · [ ] scroll · s e r D on a draft · t thinking · f follow",
-        accent: false,
-        underline: false,
-        keycap: false,
-        pill: false,
-        dim: true,
-      },
-    ]);
+    // The chat-scroll brief replaced spec §4's "esc, then …" prose reminder
+    // (which listed keys the composer swallows) with the two that are really
+    // live here: PgUp/PgDn scroll the transcript under it, esc blurs.
+    expect(texts(r.navigate.chips)).toEqual(["structural:pgup/pgdn:scroll", "structural:esc:blur"]);
+    expect(r.navigate.pinned).toEqual([]);
+    // Real keycaps, not prose: the glyph pair sits in a keycap segment.
+    expect(footerSegments(r.navigate.chips[0]!)[0]).toMatchObject({
+      text: " ⇞ ⇟ ",
+      keycap: true,
+    });
   });
-  it("chat view, blurred: draft verbs on actions, i compose + movement on navigate", () => {
-    const r = rows({ kind: "view", view: "chat" }, { target: "chat · acme/api" });
+  it("chat view, blurred: draft verbs on actions, the chat's own scrolling on navigate", () => {
+    const r = rows({ kind: "view", view: "chat" }, { target: "acme/api" });
     expect(texts(r.actions.chips)).toEqual([
       "mnemonic:submit:submit",
       "mnemonic:edit:edit",
@@ -355,10 +353,11 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       "mnemonic:follow:follow",
     ]);
     expect(texts(r.navigate.chips)).toEqual([
-      "structural:i:compose",
-      "structural:↑/↓:move",
+      "structural:↑/↓:scroll",
+      "structural:pgup/pgdn:page",
+      "structural:tab:card",
       "structural:enter:expand",
-      "structural:[/]:scroll",
+      "structural:i:compose",
       "structural:esc:back",
     ]);
     // Verified: useViewActions' "chat" case returns chatHandlers directly,
@@ -408,6 +407,8 @@ describe("keyGlyph and footerSegments (spec §3.4)", () => {
     expect(keyGlyph("[/]")).toBe("[ ]");
     expect(keyGlyph("esc/p")).toBe("esc·p");
     expect(keyGlyph("g/G")).toBe("g G");
+    expect(keyGlyph("pgup/pgdn")).toBe("⇞ ⇟");
+    expect(keyGlyph("tab")).toBe("⇥");
     expect(keyGlyph("esc")).toBe("esc");
   });
   it("a mnemonic lights one letter: accent + underline; the rest plain", () => {
