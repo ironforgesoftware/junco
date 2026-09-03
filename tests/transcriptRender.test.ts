@@ -405,6 +405,27 @@ describe("chat rows (spec 2026-09-01 §1.3)", () => {
     expect(at).toBeGreaterThan(0);
     expect(texts.slice(at, at + 3)).toEqual(["junco: first line", "", "  second paragraph"]);
   });
+
+  it("a tool-only chat turn (empty text) gets no bare label row", () => {
+    // The live transcript's exploring turns carry text "" with tool calls —
+    // labelling those printed a lone `junco:` above every ▸ row.
+    const s = summarizeTranscript([
+      metaLine({ ticketId: "acme__api" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({
+        thinking: null,
+        text: "",
+        calls: [{ id: "c1", name: "read", args: { path: "x" }, result: "ok" }],
+      }),
+      turnEndFull({ thinking: null, text: "done", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const texts = renderTranscriptRows(s, opts({ width: 80 })).map((r) => r.text);
+    expect(texts.filter((t) => t.startsWith("junco:"))).toEqual(["junco: done"]);
+  });
   it("a note landing before any run opens a synthetic, prompt-less run — its header is suppressed, only the note row renders (R23)", () => {
     const s = summarizeTranscript([metaLine(), chatTurnRejected()]);
     const rows = renderTranscriptRows(s, opts({ width: 80 }));

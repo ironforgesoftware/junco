@@ -253,8 +253,9 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
         // rest indented under it. The label is wrapped WITH the text so the
         // first row fits the width like every other; ticket transcripts have
         // no dialogue to label.
-        const chat = run.flow === "chat";
-        const lines = proseLines(chat ? `junco: ${turn.text}` : turn.text, width - 2);
+        // A tool-only turn carries "" (not null): no prose, so no label either.
+        const chat = run.flow === "chat" && turn.text.trim() !== "";
+        const lines = proseLines(chat ? `junco: ${turn.text.trim()}` : turn.text, width - 2);
         lines.forEach((l, li) => {
           if (chat && li === 0) push(l, "accent");
           else push(l === "" ? "" : `  ${l}`);

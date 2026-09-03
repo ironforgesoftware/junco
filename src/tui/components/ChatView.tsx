@@ -127,7 +127,7 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
     // first row accent, the rest indented — so nothing jumps when the turn
     // ends and the renderer takes over.
     if (state.liveText !== "")
-      wrapText(`junco: ${state.liveText}`, textWidth - 2).forEach((l, i) =>
+      wrapText(`junco: ${state.liveText.trimStart()}`, textWidth - 2).forEach((l, i) =>
         out.push(i === 0 ? { text: l, tone: "accent" } : { text: l === "" ? "" : `  ${l}` }),
       );
     return out;
