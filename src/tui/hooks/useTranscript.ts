@@ -24,6 +24,9 @@ export interface TranscriptState {
   follow: boolean;
   /** Index into `toolCallIds(summary)`; clamped on every read. */
   cursor: number;
+  /** A cursor move owes the window a nudge onto the anchor — TranscriptBody
+   * paints it once and acks through `ackReveal` (see useChat's twin). */
+  reveal: boolean;
   expanded: ReadonlySet<string>;
 }
 
@@ -36,6 +39,8 @@ export interface TranscriptApi {
   /** Move the tool-call cursor; clamps; pauses follow. */
   moveCursor: (delta: number) => void;
   setCursor: (idx: number) => void;
+  /** The view painted the reveal a cursor move owed (TranscriptBody onReveal). */
+  ackReveal: () => void;
   /** Expand/collapse the cursor's tool result. */
   toggleExpanded: () => void;
 }
@@ -139,6 +144,7 @@ export function useTranscript({
         showThinking: false,
         follow: opts.expectLive,
         cursor: 0,
+        reveal: false,
         expanded: new Set(),
       });
       void readOnce(id, null);
@@ -197,7 +203,7 @@ export function useTranscript({
         if (s === null || s.summary === null) return s;
         const n = toolCallIds(s.summary).length;
         const cursor = n === 0 ? s.cursor : Math.max(0, Math.min(idx, n - 1));
-        return { ...s, cursor, follow: false };
+        return { ...s, cursor, follow: false, reveal: n > 0 };
       }),
     [],
   );
@@ -211,8 +217,14 @@ export function useTranscript({
         // moved, and stepping from it jumped to the top of the transcript.
         const from = s.follow ? n - 1 : s.cursor;
         const cursor = n === 0 ? s.cursor : Math.max(0, Math.min(from + delta, n - 1));
-        return { ...s, cursor, follow: false };
+        // A tool-less transcript has nothing to reveal; the pause alone is
+        // the point of the press there.
+        return { ...s, cursor, follow: false, reveal: n > 0 };
       }),
+    [],
+  );
+  const ackReveal = useCallback(
+    (): void => setTranscript((s) => (s === null || !s.reveal ? s : { ...s, reveal: false })),
     [],
   );
   const toggleExpanded = useCallback(
@@ -237,6 +249,7 @@ export function useTranscript({
     setFollow,
     moveCursor,
     setCursor,
+    ackReveal,
     toggleExpanded,
   };
 }

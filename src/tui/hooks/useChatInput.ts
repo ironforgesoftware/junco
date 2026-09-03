@@ -42,6 +42,10 @@ export interface ChatInputApi {
    * (ChatView is memoized) and follow-pausing — a jump under `follow` would
    * otherwise snap straight back to the tail. */
   onScrollTo(offset: number): void;
+  /** ChatView's reveal ack: the window painted a cursor move's nudge at
+   * `start` — commit it as the scroll offset and clear the owed reveal, so the
+   * next render paints the same window from `scroll` alone. Stable. */
+  onReveal(start: number): void;
 }
 
 /** A slash command's issue/PR number: digits and nothing else, so `/pr 7abc`
@@ -84,6 +88,7 @@ export function useChatInput({
   const {
     chat,
     abort,
+    ackReveal,
     clearError,
     closeChat,
     focusComposer,
@@ -197,6 +202,15 @@ export function useChatInput({
     },
     [setFollow, scrollTo],
   );
+  // No `setFollow(false)` here: the cursor move that owed the reveal already
+  // paused follow, and the ack must not re-touch state it did not change.
+  const onReveal = useCallback(
+    (start: number): void => {
+      scrollTo(start);
+      ackReveal();
+    },
+    [scrollTo, ackReveal],
+  );
 
   /** Run one recipe and claim the key — the `return void f()` idiom of App's
    * own cascade, adapted to a handler that reports whether it consumed. */
@@ -290,5 +304,5 @@ export function useChatInput({
     return true;
   };
 
-  return { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo };
+  return { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo, onReveal };
 }

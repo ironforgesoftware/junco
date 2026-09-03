@@ -70,7 +70,7 @@ function Probe({
     <Text>
       {t === null
         ? "closed"
-        : `id:${t.id}:loading:${t.loading}:live:${t.summary?.live ?? "none"}:err:${t.error ?? "none"}:cursor:${t.cursor}:follow:${t.follow}:exp:${[...t.expanded].join(",")}`}
+        : `id:${t.id}:loading:${t.loading}:live:${t.summary?.live ?? "none"}:err:${t.error ?? "none"}:cursor:${t.cursor}:follow:${t.follow}:reveal:${t.reveal}:exp:${[...t.expanded].join(",")}`}
     </Text>
   );
 }
@@ -179,6 +179,20 @@ describe("useTranscript", () => {
     await until(() => m.frame().includes("cursor:0:follow:true"));
     m.api().moveCursor(1);
     await until(() => m.frame().includes("cursor:2:follow:false"));
+  });
+
+  it("a cursor move owes the window a reveal until the view acks it", async () => {
+    const { c } = client([{ kind: "read", size: 1, summary: THREE }]);
+    const m = mount(c);
+    m.api().openTranscript("t-1", { expectLive: true });
+    await until(() => m.frame().includes("loading:false"));
+    expect(m.frame()).toContain("reveal:false");
+    m.api().moveCursor(-1);
+    await until(() => m.frame().includes("cursor:1:follow:false:reveal:true"));
+    m.api().ackReveal();
+    await until(() => m.frame().includes("reveal:false"));
+    m.api().setCursor(0);
+    await until(() => m.frame().includes("cursor:0:follow:false:reveal:true"));
   });
 
   it("an arrow pauses the tail even when the transcript has no tool calls", async () => {

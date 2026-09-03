@@ -86,6 +86,8 @@ export interface ChatViewProps {
   onRowPress?: (anchorIdx: number) => void;
   /** Scrollbar click/drag (stable callback — this component is memoized). */
   onScrollTo?: (offset: number) => void;
+  /** A cursor move's reveal, painted: commit the start and ack (stable). */
+  onReveal?: (start: number) => void;
   onComposerChange: (v: string) => void;
   onComposerSubmit: (v: string) => void;
 }
@@ -132,6 +134,7 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
     anchors,
     cursor: state.cursor,
     follow: state.follow,
+    reveal: state.reveal,
     scroll: p.scroll,
     visible,
   });
@@ -161,12 +164,14 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
         anchors={anchors}
         cursor={state.cursor}
         follow={state.follow}
+        reveal={state.reveal}
         scroll={p.scroll}
         visible={visible}
         focused={p.focused && !state.composerFocused}
         onScrollMax={p.onScrollMax}
         onRowPress={p.onRowPress}
         onScrollTo={p.onScrollTo}
+        onReveal={p.onReveal}
       />
       <Text dimColor wrap="truncate">
         {state.composerFocused

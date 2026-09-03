@@ -70,10 +70,15 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // have cost 1 line is not an option. +3 for the held-key run fix (2026-09-03,
   // 1,891 → 1,894): `moveSectionCursor` steps from the PENDING cursor inside a
   // functional `setSectionCursor` (a `last` local plus the two-line resolver)
-  // so a burst that useGuardedInput replays inside one closure composes.
-  // Lowering this further is the render body's extraction (#387), not shaving
-  // these.
-  { file: "src/tui/App.tsx", max: 1894 },
+  // so a burst that useGuardedInput replays inside one closure composes. +10
+  // for the cursor reveal (same day, 1,894 → 1,904): a cursor move now OWES
+  // the window one nudge instead of the body re-nudging every render, and the
+  // ack that commits the painted start is App's for the ticket transcript —
+  // `ackReveal` on the useTranscript destructure (+1), the stable
+  // `transcriptReveal` useCallback (+7, the memoized-view rule again), and
+  // `onReveal` on both views (+2). Lowering this further is the render body's
+  // extraction (#387), not shaving these.
+  { file: "src/tui/App.tsx", max: 1904 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

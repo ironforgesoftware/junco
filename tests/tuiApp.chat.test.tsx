@@ -35,8 +35,10 @@ import {
   chatDraft,
   chatPrompt,
   chatTurnAborted,
+  chatTurnEnd,
   chatTurnStart,
   metaLine,
+  turnEndFull,
 } from "./helpers/transcriptFixtures.js";
 
 const DRAFT: PendingDraft = {
@@ -175,6 +177,41 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     expect(ran[0]![1]).toMatch(/add-cache\.md$/);
     r.stdin.write("i");
     await until(() => r.lastFrame()!.includes("esc blur/abort"));
+  });
+
+  // The live bug (QA 2026-09-03): with a card near the top and a long answer
+  // below it, one ↑ from the tail jumped to the card and ↓ then did nothing —
+  // bodyWindow re-nudged the window onto the cursor's anchor on every render.
+  it("scroll keys move by rows; a card is revealed only by tab, and scrolls away again", async () => {
+    const c = chatClient();
+    const r = renderApp({ client: c.client });
+    await until(() => r.lastFrame()!.includes(LOADED));
+    r.stdin.write("c");
+    await until(() => r.lastFrame()!.includes("chat · acme/api"));
+    c.push(10, metaLine({ ticketId: "acme__api" }));
+    // Turn 1 parks the card (the anchor, near the top); turn 2 is a long
+    // answer that pushes the tail well below it.
+    c.push(20, chatPrompt());
+    c.push(30, chatTurnStart());
+    c.push(40, chatDraft());
+    c.push(50, chatTurnEnd());
+    c.push(60, chatPrompt({ text: "and then?" }));
+    c.push(70, chatTurnStart());
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 10}`);
+    c.push(80, turnEndFull({ text: lines.join("\n") }));
+    c.push(90, chatTurnEnd());
+    await until(() => r.lastFrame()!.includes("line 49")); // following the tail
+    expect(r.lastFrame()).not.toContain("draft parked"); // 40 rows: the card is off the top
+    r.stdin.write("\x1b"); // blur
+    await until(() => r.lastFrame()!.includes("i compose"));
+    r.stdin.write("\x1b[A"); // ↑ — one row, NOT a jump to the card
+    await until(() => !r.lastFrame()!.includes("line 49"));
+    expect(r.lastFrame()).toContain("line 48");
+    expect(r.lastFrame()).not.toContain("draft parked");
+    r.stdin.write("\t"); // tab → the card: the one move that reveals it
+    await until(() => r.lastFrame()!.includes("draft parked"));
+    r.stdin.write("\x1b[B"); // ↓ — the card scrolls off again (the reveal was acked)
+    await until(() => !r.lastFrame()!.includes("draft parked"));
   });
 
   it("/pr N injects the fetched context as a user message; /abort maps to its verb", async () => {

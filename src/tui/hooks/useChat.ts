@@ -33,6 +33,9 @@ export interface ChatState {
   composerFocused: boolean;
   cursor: number; // index into anchorIds(summary)
   follow: boolean;
+  /** A cursor move that landed owes the window a nudge onto the anchor —
+   * TranscriptBody paints it once and acks through `ackReveal`. */
+  reveal: boolean;
   showThinking: boolean;
   expanded: ReadonlySet<string>;
   lastOffset: number | null;
@@ -53,6 +56,8 @@ export interface ChatApi {
   setComposer(text: string): void;
   focusComposer(on: boolean): void;
   moveCursor(delta: number): void;
+  /** The view painted the reveal a cursor move owed (TranscriptBody onReveal). */
+  ackReveal(): void;
   toggleExpanded(): void;
   toggleThinking(): void;
   setFollow(on: boolean): void;
@@ -76,6 +81,7 @@ const freshState = (key: string): ChatState => ({
   composerFocused: true,
   cursor: 0,
   follow: true,
+  reveal: false,
   showThinking: false,
   expanded: new Set(),
   lastOffset: null,
@@ -394,8 +400,19 @@ export function useChat({
         // anchors at all: dropping follow here unpinned the window from the
         // tail and, with a never-scrolled offset of 0, jumped it to the top.
         if (n === 0) return s;
-        return { ...s, cursor: Math.max(0, Math.min(s.cursor + delta, n - 1)), follow: false };
+        // `reveal` even when the clamp leaves the index alone: tab on the last
+        // card after scrolling away from it should still bring it back.
+        return {
+          ...s,
+          cursor: Math.max(0, Math.min(s.cursor + delta, n - 1)),
+          follow: false,
+          reveal: true,
+        };
       }),
+    [],
+  );
+  const ackReveal = useCallback(
+    (): void => setChat((s) => (s === null || !s.reveal ? s : { ...s, reveal: false })),
     [],
   );
   const toggleExpanded = useCallback(
@@ -438,6 +455,7 @@ export function useChat({
     setComposer,
     focusComposer,
     moveCursor,
+    ackReveal,
     toggleExpanded,
     toggleThinking,
     setFollow,

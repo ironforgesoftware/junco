@@ -491,8 +491,14 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     await until(() => (api.chat!.summary ? anchorIds(api.chat!.summary).length === 2 : false));
 
     // moveCursor's clamp branch: jump past the end, clamp to the last anchor.
+    // A move that lands owes the window a reveal (the view nudges onto the
+    // anchor once, then acks); the n === 0 no-op above owed nothing.
+    expect(api.chat!.reveal).toBe(false);
     api.moveCursor(5);
     await until(() => api.chat!.cursor === 1);
+    expect(api.chat!.reveal).toBe(true);
+    api.ackReveal();
+    await until(() => api.chat!.reveal === false);
     // toggleExpanded's draft-anchor early return: no-op on a draft anchor.
     api.toggleExpanded();
     expect(api.chat!.expanded.size).toBe(0);

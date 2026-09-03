@@ -400,6 +400,7 @@ export function App(props: AppProps): React.JSX.Element {
     setFollow: setTranscriptFollow,
     moveCursor: moveTranscriptCursor,
     setCursor: setTranscriptCursor,
+    ackReveal: ackTranscriptReveal,
     toggleExpanded: toggleTranscriptExpanded,
   } = useTranscript({ client, aliveRef, pollMs: transcriptPollMs });
   const [filter, setFilter] = useState("");
@@ -1320,7 +1321,7 @@ export function App(props: AppProps): React.JSX.Element {
   // (2026-09-02) removed the pane doors, and with no door there is no in-view
   // rail move: the rail-switch effect of Ruling R7 went with them, so a chat
   // is opened fresh by `c` and stays on the repo it was opened for. ──
-  const { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo } = useChatInput({
+  const { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo, onReveal } = useChatInput({
     view,
     pane,
     chatApi,
@@ -2240,6 +2241,15 @@ export function App(props: AppProps): React.JSX.Element {
     },
     [setTranscriptFollow, scrollTo],
   );
+  // useChatInput's `onReveal`, for the ticket transcript: commit the nudged
+  // start, clear the owed reveal (follow is already paused by the move).
+  const transcriptReveal = useCallback(
+    (start: number): void => {
+      scrollTo(start);
+      ackTranscriptReveal();
+    },
+    [scrollTo, ackTranscriptReveal],
+  );
   // Transcript tool-row click: anchor the cursor there, then expand/collapse
   // it — the mouse form of `↑/↓` + `enter` in one press.
   const transcriptRowPress = useCallback(
@@ -2467,6 +2477,7 @@ export function App(props: AppProps): React.JSX.Element {
             onScrollMax={onScrollMax}
             onRowPress={transcriptRowPress}
             onScrollTo={transcriptScrollTo}
+            onReveal={transcriptReveal}
           />
         </ClickableBox>
       ) : view === "chat" && chatState ? (
@@ -2494,6 +2505,7 @@ export function App(props: AppProps): React.JSX.Element {
             onScrollMax={onScrollMax}
             onRowPress={chatRowPress}
             onScrollTo={onScrollTo}
+            onReveal={onReveal}
             onComposerChange={chatApi.setComposer}
             onComposerSubmit={onComposerSubmit}
           />

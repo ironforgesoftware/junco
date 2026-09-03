@@ -63,6 +63,7 @@ const chatState = (over: Partial<ChatState> = {}): ChatState => ({
   composerFocused: false,
   cursor: 0,
   follow: false,
+  reveal: false,
   showThinking: false,
   expanded: new Set(),
   lastOffset: null,
@@ -111,6 +112,7 @@ function mount(
     setComposer: () => {},
     focusComposer: (on) => void calls.push(`focus:${String(on)}`),
     moveCursor: (d) => void calls.push(`cursor:${d}`),
+    ackReveal: rec("ackReveal"),
     toggleExpanded: rec("expand"),
     toggleThinking: rec("thinking"),
     setFollow: (on) => void calls.push(`follow:${String(on)}`),
@@ -295,6 +297,12 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     // No `toEnd` here, unlike a step up: the offset IS the destination, so
     // landing at the tail first would only paint a frame nobody asked for.
     expect(h.calls).toEqual(["follow:false", "scrollTo:12"]);
+  });
+
+  it("onReveal (a painted cursor nudge) commits the start and acks, leaving follow alone", () => {
+    const h = mount({ chat: chatState({ follow: false, reveal: true }) });
+    h.api.onReveal(3);
+    expect(h.calls).toEqual(["scrollTo:3", "ackReveal"]);
   });
 
   it("the pane doors are gone: h/l and ←/→ are swallowed, and the rail never moves", () => {
