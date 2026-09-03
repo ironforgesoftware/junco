@@ -129,6 +129,27 @@ export interface ChatDraftRecord {
   destination: "inbox" | "issue" | "command" | null;
   ts: string;
 }
+/** The chat's one action tool (spec 2026-09-03): a `junco_submit` call is
+ * PROPOSED (the operator's card), then settled by exactly one terminal
+ * record with the same `commandId` — the SDK's toolCallId. */
+export interface ChatCommandRecord {
+  type: "junco_chat_command";
+  commandId: string;
+  command: "submit";
+  draftId: string;
+  /** The draft's ticket ids (file stems), for the row. */
+  ids: string[];
+  /** Effective destination for this submission. */
+  route: "inbox" | "issue";
+  status: "proposed" | "ran" | "failed" | "declined" | "expired" | "aborted";
+  /** ran/failed only. */
+  exitCode: number | null;
+  /** ran/failed only; the CLI's merged output, ≤ 4 KiB tail. */
+  output: string | null;
+  /** Human context — "no decision in 10m", "daemon restarted", "draft no longer parked". */
+  detail: string | null;
+  ts: string;
+}
 export interface ChatSessionResetRecord {
   type: "junco_chat_session_reset";
   reason: "corrupt" | "missing" | "operator_new";
@@ -145,6 +166,7 @@ export type ChatRecord =
   | ChatTurnAbortedRecord
   | ChatTurnRejectedRecord
   | ChatDraftRecord
+  | ChatCommandRecord
   | ChatSessionResetRecord
   | ChatTranscriptDegradedRecord;
 

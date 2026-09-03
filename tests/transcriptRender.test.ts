@@ -7,7 +7,7 @@ import {
   wrapText,
   TOOL_BODY_MAX_LINES,
 } from "../src/transcriptRender.js";
-import { summarizeTranscript, type RunSummary } from "../src/transcriptSummary.js";
+import { commandAnchor, summarizeTranscript, type RunSummary } from "../src/transcriptSummary.js";
 import {
   agentEnd,
   agentStart,
@@ -487,5 +487,65 @@ describe("chat rows (spec 2026-09-01 §1.3)", () => {
     const rows = renderTranscriptRows(s, opts({ width: 80 }));
     expect(rows.some((r) => r.text.includes("compacting context…"))).toBe(true);
     expect(rows.some((r) => r.text.includes("context compacted"))).toBe(true);
+  });
+});
+
+describe("junco_chat_command rows", () => {
+  const lines = (over: Record<string, unknown>, expanded: string[] = []) => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      JSON.stringify({
+        type: "junco_chat_command",
+        commandId: "call_1",
+        command: "submit",
+        draftId: "d1",
+        ids: ["add-readme"],
+        route: "inbox",
+        status: "proposed",
+        exitCode: null,
+        output: null,
+        detail: null,
+        ts: "2026-09-03T10:00:00.000Z",
+        ...over,
+      }),
+    ]);
+    return renderTranscriptRows(s, opts({ width: 100, expanded: new Set(expanded) }));
+  };
+  const row = (rows: ReturnType<typeof lines>) =>
+    rows.find((r) => r.anchor === commandAnchor("call_1"))!;
+
+  it("renders one row per status, anchored, in the spec's tone", () => {
+    expect(row(lines({}))).toMatchObject({
+      text: "   ▸ submit add-readme → inbox — awaiting you · y submit · n keep parked",
+      tone: "accent",
+    });
+    expect(row(lines({ status: "ran", exitCode: 0, output: "ok" }))).toMatchObject({
+      text: "   ✓ submitted → inbox · add-readme · exit 0",
+      tone: "success",
+    });
+    expect(row(lines({ status: "failed", exitCode: 1, output: "boom" }))).toMatchObject({
+      text: "   ✗ submit failed · exit 1 · add-readme — draft stays parked",
+      tone: "error",
+    });
+    expect(row(lines({ status: "declined" }))).toMatchObject({ tone: "dim" });
+    expect(row(lines({ status: "expired", detail: "no decision in 10m" })).text).toBe(
+      "   ⌛ submit expired · no decision in 10m · draft stays parked",
+    );
+    expect(row(lines({ status: "aborted" })).text).toContain("aborted with the turn");
+  });
+
+  it("expands the CLI output under a ran/failed row, dim and indented", () => {
+    const rows = lines({ status: "ran", exitCode: 0, output: "queued add-readme\ninbox: 1" }, [
+      commandAnchor("call_1"),
+    ]);
+    const at = rows.findIndex((r) => r.anchor === commandAnchor("call_1"));
+    expect(rows[at + 1]).toEqual({ text: "      queued add-readme", tone: "dim" });
+    expect(rows[at + 2]).toEqual({ text: "      inbox: 1", tone: "dim" });
+    // Not expanded → no output rows.
+    expect(
+      lines({ status: "ran", exitCode: 0, output: "x" }).some((r) => r.text.includes("      x")),
+    ).toBe(false);
   });
 });

@@ -8,8 +8,8 @@
  * tool bodies are word-wrapped, everything else is truncated — so a surface
  * can render rows with `wrap="truncate-end"` and lose nothing.
  */
-import type { GuardDecisionRecord } from "./agent/transcriptSchema.js";
-import { draftAnchor } from "./transcriptSummary.js";
+import type { ChatCommandRecord, GuardDecisionRecord } from "./agent/transcriptSchema.js";
+import { commandAnchor, draftAnchor } from "./transcriptSummary.js";
 import type { RunSummary, ToolResultSummary, TranscriptSummary } from "./transcriptSummary.js";
 
 export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success";
@@ -308,6 +308,35 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
             n.status === "lint_failed" ? "warn" : n.status === "submitted" ? "success" : "bold",
             draftAnchor(n.draftId),
           );
+          break;
+        }
+        case "command": {
+          const what = n.ids.join(", ") || n.draftId;
+          const anchor = commandAnchor(n.commandId);
+          const rows: Record<ChatCommandRecord["status"], [string, RowTone]> = {
+            proposed: [
+              `   ▸ submit ${what} → ${n.route} — awaiting you · y submit · n keep parked`,
+              "accent",
+            ],
+            ran: [`   ✓ submitted → ${n.route} · ${what} · exit ${n.exitCode ?? "?"}`, "success"],
+            failed: [
+              `   ✗ submit failed · exit ${n.exitCode ?? "?"} · ${what} — draft stays parked`,
+              "error",
+            ],
+            declined: [`   – submit declined · ${what} · draft stays parked`, "dim"],
+            expired: [
+              `   ⌛ submit expired · ${n.detail ?? "no decision"} · draft stays parked`,
+              "warn",
+            ],
+            aborted: [`   – submit aborted with the turn · ${what} · draft stays parked`, "dim"],
+          };
+          const [text, tone] = rows[n.status];
+          push(truncate(text, width), tone, anchor);
+          if (o.expanded.has(anchor) && n.output !== null) {
+            const body = n.output === "" ? ["(no output)"] : n.output.split("\n");
+            for (const raw of body.slice(0, TOOL_BODY_MAX_LINES))
+              for (const l of wrapText(raw, width - 6)) push(`      ${l}`, "dim");
+          }
           break;
         }
         case "reset":

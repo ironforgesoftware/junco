@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   anchorIds,
+  commandAnchor,
   draftAnchor,
   summarizeTranscript,
   toolCallIds,
@@ -352,5 +353,57 @@ describe("chat records (spec 2026-09-01 §1.3)", () => {
       { kind: "reset", reason: "operator_new", ts: expect.any(String) },
       { kind: "degraded", ts: "2026-09-01T00:00:00.000Z" },
     ]);
+  });
+});
+
+describe("junco_chat_command", () => {
+  const cmd = (over: Record<string, unknown>): string =>
+    JSON.stringify({
+      type: "junco_chat_command",
+      commandId: "call_1",
+      command: "submit",
+      draftId: "acme__api-20260903-1",
+      ids: ["add-readme"],
+      route: "inbox",
+      status: "proposed",
+      exitCode: null,
+      output: null,
+      detail: null,
+      ts: "2026-09-03T10:00:00.000Z",
+      ...over,
+    });
+
+  it("a proposed command is a note with an anchor; its terminal record REPLACES it in place", () => {
+    const s = summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart(), cmd({})]);
+    const run = s.runs[0]!;
+    expect(run.notes).toHaveLength(1);
+    expect(run.notes[0]).toMatchObject({
+      kind: "command",
+      status: "proposed",
+      ids: ["add-readme"],
+    });
+    expect(anchorIds(s)).toEqual([commandAnchor("call_1")]);
+
+    const done = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      cmd({}),
+      cmd({ status: "ran", exitCode: 0, output: "queued add-readme\n" }),
+    ]);
+    expect(done.runs[0]!.notes).toHaveLength(1);
+    expect(done.runs[0]!.notes[0]).toMatchObject({ kind: "command", status: "ran", exitCode: 0 });
+    expect(anchorIds(done)).toEqual([commandAnchor("call_1")]);
+  });
+
+  it("a terminal record for an UNKNOWN command id is kept as its own note (forward compat)", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      cmd({ commandId: "call_9", status: "expired", detail: "daemon restarted" }),
+    ]);
+    expect(s.runs[0]!.notes).toHaveLength(1);
+    expect(s.runs[0]!.notes[0]).toMatchObject({ status: "expired", detail: "daemon restarted" });
   });
 });
