@@ -431,35 +431,52 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
     expect(c.subs).toEqual(["acme/api"]);
   });
 
-  // The queue row's transcript carries the TICKET's checkout path
-  // (QueueRow.repoPath) — a Q&A ticket has none, and `c` there has nothing to
-  // chat about.
-  it("a queue-row transcript chats about the ticket's checkout, and toasts when it has none", async () => {
-    const withRepo = {
-      ...CHEAP,
-      queue: { ...CHEAP.queue, running: [{ ...CHEAP.queue.running[0]!, repoPath: "/c/api" }] },
-    };
-    const c = verbClient();
-    const r = renderApp({ client: c.client, localCheapFn: async () => withRepo });
+  // The queue row's transcript chats about the TICKET's repo, keyed the way
+  // src/chat/chatKey.ts defines the key (Ruling R13): the watched nwo when the
+  // row carries one, the resolved checkout path only for a local-only row, and
+  // nothing at all for a Q&A ticket with neither.
+  /** CHEAP's running row with its GitHub side removed — a local-only ticket. */
+  const localRow = (repoPath: string | null) => ({
+    ...CHEAP.queue.running[0]!,
+    github: null,
+    repoPath,
+  });
+  const withRunning = (row: (typeof CHEAP.queue.running)[number]) => ({
+    ...CHEAP,
+    queue: { ...CHEAP.queue, running: [row] },
+  });
+  /** rail → queue row → into the body → enter on the running row → its
+   * transcript. The row label is `#N exec` for a bridged ticket (queueFmt) and
+   * the bare id otherwise. */
+  async function openQueueTranscript(
+    r: ReturnType<typeof renderApp>,
+    rowLabel: string,
+  ): Promise<void> {
     await until(() => frame(r).includes(LOADED));
     await tap(r, TO_QUEUE_ROW);
     await until(() => frame(r).includes("sub-fix-typos"));
     r.stdin.write("l");
-    await until(() => selOn(r, "#1 exec"));
-    r.stdin.write("\r"); // enter — the running row's transcript
+    await until(() => selOn(r, rowLabel));
+    r.stdin.write("\r");
     await until(() => frame(r).includes("transcript ▸"));
+  }
+
+  it("a LOCAL-ONLY queue row's transcript chats about its checkout, and toasts when it has none", async () => {
+    const c = verbClient();
+    const r = renderApp({
+      client: c.client,
+      localCheapFn: async () => withRunning(localRow("/c/api")),
+    });
+    await openQueueTranscript(r, "gh-acme-api-1");
     r.stdin.write("c");
     await until(() => frame(r).includes("chat · /c/api"));
 
     const bare = verbClient();
-    const r2 = renderApp({ client: bare.client }); // CHEAP's running row: repoPath null
-    await until(() => frame(r2).includes(LOADED));
-    await tap(r2, TO_QUEUE_ROW);
-    await until(() => frame(r2).includes("sub-fix-typos"));
-    r2.stdin.write("l");
-    await until(() => selOn(r2, "#1 exec"));
-    r2.stdin.write("\r");
-    await until(() => frame(r2).includes("transcript ▸"));
+    const r2 = renderApp({
+      client: bare.client,
+      localCheapFn: async () => withRunning(localRow(null)),
+    });
+    await openQueueTranscript(r2, "gh-acme-api-1");
     r2.stdin.write("c");
     await until(() => frame(r2).includes("select a repo first"));
   });
@@ -468,20 +485,75 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
   // or relative — and must be normalised the same way every other consumer
   // resolves it (runOnce.ts / repoContext.ts), not passed through verbatim.
   it("a queue-row transcript normalises a ~-relative repoPath before chatting about it", async () => {
-    const withHomeRepo = {
-      ...CHEAP,
-      queue: { ...CHEAP.queue, running: [{ ...CHEAP.queue.running[0]!, repoPath: "~/dev/foo" }] },
-    };
     const c = verbClient();
-    const r = renderApp({ client: c.client, localCheapFn: async () => withHomeRepo });
-    await until(() => frame(r).includes(LOADED));
-    await tap(r, TO_QUEUE_ROW);
-    await until(() => frame(r).includes("sub-fix-typos"));
-    r.stdin.write("l");
-    await until(() => selOn(r, "#1 exec"));
-    r.stdin.write("\r"); // enter — the running row's transcript
-    await until(() => frame(r).includes("transcript ▸"));
+    const r = renderApp({
+      client: c.client,
+      localCheapFn: async () => withRunning(localRow("~/dev/foo")),
+    });
+    await openQueueTranscript(r, "gh-acme-api-1");
     r.stdin.write("c");
     await until(() => frame(r).includes(`chat · ${resolve(expandHome("~/dev/foo"))}`));
+  });
+
+  // Ruling R13: chatKey.ts keys a WATCHED repo by nwo. A bridged ticket's row
+  // carries both a `github.nwo` and a checkout path — often an external-fork
+  // clone under the clones dir, which is not a chattable repo at all
+  // (`not_a_repo`). Keying by the path opened a SECOND session beside the
+  // rail's nwo one, for the same repo.
+  it("a bridged queue row's transcript chats about its nwo, not its clone path (R13)", async () => {
+    const bridged = {
+      ...CHEAP.queue.running[0]!,
+      id: TICKET_46,
+      github: { nwo: "acme/api", issue: 46, kind: "pr" as const, external: true },
+      repoPath: "/x/state/repos/acme-api-fork",
+    };
+    const c = verbClient();
+    const r = renderApp({
+      client: c.client,
+      localCheapFn: async () => withRunning(bridged),
+    });
+    await openQueueTranscript(r, "#46 exec");
+    r.stdin.write("c");
+    await until(() => frame(r).includes("chat · acme/api"));
+    expect(frame(r)).not.toContain("acme-api-fork");
+  });
+
+  // …and the two doors to that one transcript must land on that one session:
+  // `t` on the issue list (openIssueTranscript, which has always keyed by nwo)
+  // and `enter` on the queue row (queueTranscriptOpts).
+  it("both doors to a ticket's transcript reach the SAME chat key (R13)", async () => {
+    const bridged = {
+      ...CHEAP.queue.running[0]!,
+      id: TICKET_46,
+      github: { nwo: "acme/api", issue: 46, kind: "pr" as const, external: false },
+      repoPath: "/c/api",
+    };
+    const props = {
+      queueFn: async () => ({ ...EMPTY_QUEUE, running: [bridged] }),
+      localCheapFn: async () => withRunning(bridged),
+    };
+
+    const viaIssue = renderApp({ client: verbClient().client, ...props });
+    await until(() => frame(viaIssue).includes(LOADED));
+    viaIssue.stdin.write("l");
+    await until(() => frame(viaIssue).includes("investigate"));
+    viaIssue.stdin.write("t");
+    await until(() => frame(viaIssue).includes("transcript ▸"));
+    viaIssue.stdin.write("c");
+    await until(() => frame(viaIssue).includes("chat · "));
+    const keyLine = frame(viaIssue)
+      .split("\n")
+      .find((l) => l.includes("chat · "))!;
+
+    const viaQueue = renderApp({ client: verbClient().client, ...props });
+    await openQueueTranscript(viaQueue, "#46 exec");
+    viaQueue.stdin.write("c");
+    await until(() => frame(viaQueue).includes("chat · "));
+    expect(
+      frame(viaQueue)
+        .split("\n")
+        .find((l) => l.includes("chat · ")),
+    ).toBe(keyLine);
+    expect(keyLine).toContain("chat · acme/api");
   });
 });

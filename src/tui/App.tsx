@@ -294,18 +294,25 @@ const localCheapKey = (c: LocalCheap | null): unknown =>
     : { ...c, daemon: { ...c.daemon, uptimeSeconds: wholeMinutes(c.daemon.uptimeSeconds) } };
 
 /** `enter` on a queue row opens its transcript: live for a RUNNING row, and
- * carrying the TICKET's own checkout (QueueRow.repoPath) so the transcript's
- * `c` chats about that repo (spec 2026-09-02 §5/D7). A Q&A ticket has no
- * checkout — null, and `c` there toasts. Module scope: the snapshot row is the
- * only place the path exists, and LocalRow deliberately carries just the id. */
+ * carrying the TICKET's own repo so the transcript's `c` chats about it (spec
+ * 2026-09-02 §5/D7). The key follows src/chat/chatKey.ts's contract exactly
+ * (Ruling R13): a bridged row's watched `github.nwo`, lowercased, and the
+ * resolved checkout path ONLY for a local-only ticket. Keying by the path
+ * whenever one existed opened a second, path-keyed session beside the rail's
+ * nwo one for the same repo — and for an external fork, whose `repoPath` is a
+ * clone under the clones dir, the chat was refused outright (`not_a_repo`).
+ * A Q&A ticket has neither — null, and `c` there toasts. Module scope: the
+ * snapshot row is the only place either field exists, and LocalRow
+ * deliberately carries just the id. */
 function queueTranscriptOpts(
   q: LocalCheap["queue"] | undefined,
   row: { kind: "running" | "recent"; id: string },
 ): { expectLive: boolean; repoKey: string | null } {
   const found = [...(q?.running ?? []), ...(q?.recent ?? [])].find((r) => r.id === row.id);
+  const nwo = found?.github?.nwo;
   return {
     expectLive: row.kind === "running",
-    repoKey: found?.repoPath ? resolve(expandHome(found.repoPath)) : null,
+    repoKey: nwo ? nwo.toLowerCase() : found?.repoPath ? resolve(expandHome(found.repoPath)) : null,
   };
 }
 
