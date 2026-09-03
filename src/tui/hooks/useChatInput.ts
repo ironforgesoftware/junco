@@ -96,6 +96,7 @@ export function useChatInput({
     ackReveal,
     clearError,
     closeChat,
+    decide,
     focusComposer,
     fresh,
     moveCursor,
@@ -197,6 +198,35 @@ export function useChatInput({
           });
           return;
         }
+        case "submit": {
+          // Spec 2026-09-03 §4.4: the operator's own path — the card's `s`,
+          // no model turn. Resolution is findChatDraft's (§3.1) re-read off
+          // the drafts the dashboard already has in memory.
+          if (chat?.pending)
+            return void showToast("info", "a submit is already awaiting your confirmation (y/n)");
+          const mine = chat?.drafts ?? [];
+          const ref = arg?.trim() || undefined;
+          const hit =
+            ref === undefined
+              ? mine
+              : mine.filter(
+                  (d) =>
+                    d.id === ref || d.files.some((f) => f.name === ref || f.name === `${ref}.md`),
+                );
+          const names = (ds: PendingDraft[]): string =>
+            ds
+              .map((d) => d.files.map((f) => f.name.replace(/\.md$/, "")).join(", ") || d.id)
+              .join("; ");
+          if (mine.length === 0) return void showToast("error", "nothing is parked — /draft first");
+          if (hit.length === 0)
+            return void showToast(
+              "error",
+              `no parked draft named "${ref}" — parked: ${names(mine)}`,
+            );
+          if (hit.length > 1)
+            return void showToast("error", `several drafts are parked — name one: ${names(hit)}`);
+          return void chatDraftActions.submit(hit[0]!);
+        }
         case "abort":
           return void abort();
         case "new":
@@ -205,7 +235,18 @@ export function useChatInput({
           showToast("error", `unknown command /${cmd}`);
       }
     },
-    [send, abort, fresh, showToast, client, currentNwo, aliveRef],
+    [
+      send,
+      abort,
+      fresh,
+      showToast,
+      client,
+      currentNwo,
+      aliveRef,
+      chat?.pending,
+      chat?.drafts,
+      chatDraftActions,
+    ],
   );
 
   const onScrollTo = useCallback(
@@ -268,6 +309,13 @@ export function useChatInput({
     // the nav spine" no longer holds here: the view is full-screen, the rail
     // is not painted, and a chat is opened fresh by `c`.
     if (key.escape) return took(close);
+    // A junco_submit card awaits the operator (spec 2026-09-03 §4.3): y/n
+    // answer it; the draft verbs are unbound meanwhile (chatConfirm's empty
+    // keymap), so the same draft cannot also be submitted by `s`.
+    if (chat.pending !== null) {
+      if (input === "y") return took(() => void decide("run"));
+      if (input === "n") return took(() => void decide("decline"));
+    }
     if (input === "i") return took(() => focusComposer(true));
     // `tab` walks the CARDS (this brief supersedes spec §8.3's pane door):
     // ↑/↓ scroll now, so the anchor cursor needs a key of its own. Ink reports

@@ -25,6 +25,7 @@ const base: FooterBindingsInput = {
   logOverlay: false,
   filtering: false,
   composerFocused: false,
+  chatPending: false,
   mode: "wide",
   columns: 120,
   target: "acme/api",
@@ -76,6 +77,18 @@ describe("useFooterBindings", () => {
       kind: "view",
       view: "chat",
     });
+  });
+  // Spec 2026-09-03 §4.3: a junco_submit card waiting on the operator is its
+  // own context — an EMPTY keymap, so no draft verb (s/e/r/D) can fire while
+  // the daemon holds a submit of that same draft.
+  it("a pending submit takes the blurred chat into chatConfirm, with nothing derived", () => {
+    const r = run({ ...base, view: "chat", composerFocused: false, chatPending: true });
+    expect(r.bindingContext).toEqual({ kind: "structuralOnly", view: "chatConfirm" });
+    expect(r.bindings.keymap.size).toBe(0);
+    // The composer still wins: `i` focuses it and typing must derive nothing.
+    expect(
+      run({ ...base, view: "chat", composerFocused: true, chatPending: true }).bindingContext,
+    ).toEqual({ kind: "structuralOnly", view: "chatCompose" });
   });
   it("log overlay and filtering win over the view", () => {
     expect(run({ ...base, logOverlay: true }).bindingContext).toEqual({ kind: "logOverlay" });

@@ -222,8 +222,29 @@ export function buildFooterRows({
             s("esc", "blur/abort"),
           ]
         : [];
+    // Spec 2026-09-03 §4.3: the y/n of a waiting junco_submit card. `y` is the
+    // primary (the pill), and these two are the whole actions row — the draft
+    // verbs are off the keymap while the daemon holds that draft.
+    const chatConfirm =
+      context.view === "chatConfirm"
+        ? [
+            {
+              kind: "pill" as const,
+              id: "y",
+              key: "y",
+              label: "submit",
+              charIndex: null,
+              guarded: false,
+            },
+            s("n", "keep parked"),
+          ]
+        : [];
     return {
-      actions: { label, chips: chatCompose, pinned: [] },
+      actions: {
+        label,
+        chips: context.view === "chatConfirm" ? chatConfirm : chatCompose,
+        pinned: [],
+      },
       navigate: { label: "navigate", chips: structural, pinned: [] },
     };
   }

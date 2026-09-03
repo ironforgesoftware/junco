@@ -150,6 +150,20 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
     // The composer's own keys are the ACTIONS row (footerModel.ts); what is
     // left as structural vocabulary is what still works WHILE typing.
     expect(chips).toEqual(["scroll", "blur"]);
+    // A junco_submit card waiting (spec 2026-09-03 §4.3) derives nothing
+    // either: the draft verbs must not fire while the daemon holds a submit
+    // of that same draft.
+    expect(km({ kind: "structuralOnly", view: "chatConfirm" })).toEqual({});
+    expect(
+      buildContextBindings({ kind: "structuralOnly", view: "chatConfirm" }, "wide").chips.map(
+        (c) => [c.key, c.label],
+      ),
+    ).toEqual([
+      ["↑/↓", "scroll"],
+      ["pgup/pgdn", "page"],
+      ["i", "compose"],
+      ["esc", "back"],
+    ]);
     const blurred = buildContextBindings({ kind: "view", view: "chat" }, "wide").chips;
     expect(blurred.filter((c) => c.kind === "structural").map((c) => [c.key, c.label])).toEqual([
       ["↑/↓", "scroll"],

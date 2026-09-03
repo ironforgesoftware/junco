@@ -25,6 +25,9 @@ export interface FooterBindingsInput {
   logOverlay: boolean;
   filtering: boolean;
   composerFocused: boolean;
+  /** A junco_submit card is waiting on the operator (spec 2026-09-03 §4.3) →
+   * the blurred chat's context is `chatConfirm`, whose keymap is empty. */
+  chatPending: boolean;
   mode: LayoutMode;
   /** Terminal width — the navigate row fits itself to this (Ruling R10). */
   columns: number;
@@ -58,6 +61,7 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     logOverlay,
     filtering,
     composerFocused,
+    chatPending,
     mode,
     columns,
     target,
@@ -81,7 +85,9 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     if (view === "chat")
       return composerFocused
         ? { kind: "structuralOnly", view: "chatCompose" }
-        : { kind: "view", view: "chat" };
+        : chatPending
+          ? { kind: "structuralOnly", view: "chatConfirm" }
+          : { kind: "view", view: "chat" };
     switch (view) {
       case "palette":
       case "addRepo":
@@ -98,7 +104,7 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
       case "main":
         return { kind: "main", pane, body: mainBody(body) };
     }
-  }, [logOverlay, filtering, view, composerFocused, body, pane]);
+  }, [logOverlay, filtering, view, composerFocused, chatPending, body, pane]);
   const bindings = useMemo(
     () => buildContextBindings(bindingContext, mode),
     [bindingContext, mode],

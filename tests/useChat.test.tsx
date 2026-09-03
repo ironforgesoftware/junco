@@ -5,10 +5,11 @@ import { Text } from "ink";
 import { useChat, CHAT_RING } from "../src/tui/hooks/useChat.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
-import { anchorIds } from "../src/transcriptSummary.js";
-import { stubClient } from "./helpers/localFixtures.js";
+import { anchorIds, commandAnchor } from "../src/transcriptSummary.js";
+import { okv, stubClient } from "./helpers/localFixtures.js";
 import { until, wait } from "./helpers/until.js";
 import {
+  chatCommand,
   chatDraft,
   chatPrompt,
   chatTurnAborted,
@@ -443,6 +444,75 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
       }),
     );
     await until(() => api.chat!.degraded === true);
+  });
+
+  // Spec 2026-09-03 §4.1: a proposed junco_submit IS the operator's card — it
+  // blurs the composer, parks the cursor on the card's anchor and owes the
+  // window a reveal, so a confirmation can never be missed off-screen. The
+  // terminal record clears `pending` and reloads the drafts (the daemon
+  // archived the one it submitted).
+  it("a proposed junco_submit sets pending, blurs the composer, parks the cursor; a terminal record clears it", async () => {
+    const c = makeClient();
+    let listCalls = 0;
+    c.client.listChatDrafts = async () => (listCalls++, { ok: true, value: [] });
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    await until(() => listCalls === 1);
+    c.push(10, metaLine());
+    c.push(20, chatPrompt());
+    c.push(30, chatTurnStart());
+    api.focusComposer(true);
+    await until(() => api.chat!.composerFocused === true);
+    c.push(70, chatCommand({ status: "proposed" }));
+    await until(() => api.chat!.pending?.commandId === "call_1");
+    expect(api.chat!.pending).toEqual({
+      commandId: "call_1",
+      draftId: "acme__api-20260901-120000-1",
+      ids: ["add-readme"],
+      route: "inbox",
+    });
+    expect(api.chat!.composerFocused).toBe(false);
+    expect(anchorIds(api.chat!.summary!)[api.chat!.cursor]).toBe(commandAnchor("call_1"));
+    expect(api.chat!.reveal).toBe(true);
+    expect(api.chat!.follow).toBe(false);
+    c.push(80, chatCommand({ status: "ran", exitCode: 0, output: "queued add-readme" }));
+    await until(() => api.chat!.pending === null);
+    await until(() => listCalls === 2); // the drafts list reloaded
+    // ⏎ on the card expands the CLI output: the `draft:` early return is a
+    // draft-card rule, and a `cmd:` anchor has a body to show.
+    api.toggleExpanded();
+    await until(() => api.chat!.expanded.has(commandAnchor("call_1")));
+  });
+
+  it("decide() posts the pending command's id; a stale decision surfaces as an error", async () => {
+    const decisions: string[] = [];
+    const c = makeClient({
+      decide: async (_k, id, d) => (
+        decisions.push(`${id}:${d}`),
+        okv({ settled: decisions.length === 1 })
+      ),
+    });
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    // Nothing open, nothing pending: decide() is a no-op, never a POST.
+    await api.decide("run");
+    expect(decisions).toEqual([]);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    await api.decide("run");
+    expect(decisions).toEqual([]);
+    c.push(10, metaLine());
+    c.push(20, chatCommand({ status: "proposed" }));
+    await until(() => api.chat!.pending !== null);
+    await api.decide("run");
+    expect(decisions).toEqual(["call_1:run"]);
+    // The daemon had nothing pending under that id (another dashboard won the
+    // race, or it expired): `settled: false` is not an error result, but it is
+    // the operator's error to see.
+    await api.decide("decline");
+    await until(() => api.chat!.error === "that confirmation is no longer pending");
   });
 
   // Coverage: walk every remaining callback branch through one transcript

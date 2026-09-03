@@ -5,6 +5,11 @@ import { theme } from "../theme.js";
 
 export const SLASH_COMMANDS: ReadonlyArray<{ name: string; hint: string; takesArg: boolean }> = [
   { name: "draft", hint: "draft a ticket from this conversation", takesArg: false },
+  {
+    name: "submit",
+    hint: "submit [id] — submit the parked draft (the only one, or the named one)",
+    takesArg: true,
+  },
   { name: "audit", hint: "request a read-only repo audit (junco audit)", takesArg: false },
   {
     name: "investigate",

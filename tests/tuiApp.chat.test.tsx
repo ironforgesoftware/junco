@@ -32,6 +32,7 @@ import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
 import type { DashIssue } from "../src/tui/state.js";
 import {
+  chatCommand,
   chatDraft,
   chatPrompt,
   chatTurnAborted,
@@ -232,6 +233,58 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     await until(() => r.lastFrame()!.includes("draft parked"));
     r.stdin.write("\x1b[B"); // ↓ — the card scrolls off again (the reveal was acked)
     await until(() => !r.lastFrame()!.includes("draft parked"));
+  });
+
+  // Spec 2026-09-03 §4: the whole card through real frames — the proposal
+  // blurs the composer and takes the footer into `chatConfirm`, `y` POSTs the
+  // decision, and the terminal record clears the card and leaves an
+  // expandable row behind.
+  it("a proposed junco_submit shows the card, blurs the composer, y decides, the terminal record clears it", async () => {
+    const decisions: string[] = [];
+    const ran: string[][] = [];
+    const c = chatClient();
+    c.client.chat.decide = async (_k, id, d) => (
+      decisions.push(`${id}:${d}`),
+      { ok: true, value: { settled: true } }
+    );
+    const r = renderApp({
+      client: c.client,
+      runCliFn: async (n, a) => (ran.push([n, ...a]), { code: 0, output: "", timedOut: false }),
+    });
+    await until(() => r.lastFrame()!.includes(LOADED));
+    r.stdin.write("c");
+    await until(() => r.lastFrame()!.includes("chat · acme/api"));
+    c.push(10, metaLine({ ticketId: "acme__api" }));
+    c.push(20, chatPrompt({ text: "submit it" }));
+    c.push(30, chatTurnStart());
+    c.push(40, chatCommand({ status: "proposed" }));
+    // The card's own row says "y submit · n keep parked" too, so the FOOTER
+    // (the frame's last two lines) is what proves the chatConfirm context.
+    const footerActions = (): string => {
+      const rows = (r.lastFrame() ?? "").trimEnd().split("\n");
+      return rows[rows.length - 2] ?? "";
+    };
+    await until(() => footerActions().includes("keep parked"));
+    expect(r.lastFrame()).toContain("awaiting you · y submit · n keep parked");
+    expect(r.lastFrame()).toContain("◐ awaiting your confirmation");
+    expect(footerActions()).toContain("y submit");
+    expect(r.lastFrame()).not.toContain("esc blur/abort"); // composer blurred
+    // The draft verbs are OFF the keymap while the daemon holds this draft:
+    // `s` must not submit the parked draft a second time (the `y` round trip
+    // below is the bounded window a buggy dispatch would have landed in).
+    r.stdin.write("s");
+    r.stdin.write("y");
+    await until(() => decisions.length === 1);
+    expect(decisions).toEqual(["call_1:run"]);
+    expect(ran).toEqual([]);
+    c.push(50, chatCommand({ status: "ran", exitCode: 0, output: "queued add-readme" }));
+    c.push(60, chatTurnEnd());
+    await until(() => r.lastFrame()!.includes("✓ submitted → inbox · add-readme · exit 0"));
+    // Answered: the footer is the blurred chat's own actions row again.
+    await until(() => footerActions().includes("thinking"));
+    expect(footerActions()).not.toContain("keep parked");
+    r.stdin.write("\r"); // ⏎ on the card expands the CLI output
+    await until(() => r.lastFrame()!.includes("queued add-readme"));
   });
 
   it("/pr N injects the fetched context as a user message; /abort maps to its verb", async () => {

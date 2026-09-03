@@ -213,6 +213,7 @@ describe("Composer (spec 2026-09-01 §8.2, §8.4)", () => {
   it("slashMatches is pure and prefix-based", () => {
     expect(slashMatches("/").map((c) => c.name)).toEqual([
       "draft",
+      "submit",
       "audit",
       "investigate",
       "pr",
@@ -222,6 +223,7 @@ describe("Composer (spec 2026-09-01 §8.2, §8.4)", () => {
     ]);
     expect(slashMatches("/in").map((c) => c.name)).toEqual(["investigate"]);
     expect(slashMatches("/a").map((c) => c.name)).toEqual(["audit", "abort"]);
+    expect(slashMatches("/s").map((c) => c.name)).toEqual(["submit"]);
     expect(slashMatches("hello")).toEqual([]);
     expect(slashMatches("/pr 4")).toEqual([]); // an argument ends completion
   });

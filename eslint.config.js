@@ -86,8 +86,12 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // two hook calls in App (+14) against the six by-value pauses they replace
   // (the transcript's `[`, `G` and wheel, the log overlay's `[`, `G` and
   // wheel, and the chat wheel, −17). Lowering this further is the render
-  // body's extraction (#387), not shaving these.
-  { file: "src/tui/App.tsx", max: 1880 },
+  // body's extraction (#387), not shaving these. +2 for the junco_submit card
+  // (2026-09-03, 1,880 → 1,882): `chatPending` on the useFooterBindings call
+  // (+1) and `decide` in the structuralChipActions dep array (+1) — the card's
+  // y/n chip recipe replaces the chat case's `return {}` in place, and the
+  // `decide` it dispatches rides the existing chatApi destructure.
+  { file: "src/tui/App.tsx", max: 1882 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

@@ -27,6 +27,7 @@ import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
 import { summarizeTranscript } from "../src/transcriptSummary.js";
 import {
+  chatCommand,
   chatPrompt,
   chatTurnEnd,
   chatTurnStart,
@@ -415,6 +416,31 @@ describe("review view: mouse", () => {
 });
 
 describe("footer chips: mouse", () => {
+  // Spec 2026-09-03 §4.3: the junco_submit card's y/n are the ONE structural
+  // chip recipe the chat view has (App's structuralChipActions) — a mouse
+  // user has no other way to answer a waiting confirmation.
+  it("chat: clicking the 'n keep parked' chip POSTs the decline", async () => {
+    const decisions: string[] = [];
+    const c = chatClient();
+    c.client.chat.decide = async (_k, id, d) => (
+      decisions.push(`${id}:${d}`),
+      okv({ settled: true })
+    );
+    const r = renderApp({ client: c.client });
+    await until(() => (r.lastFrame() ?? "").includes("repos"));
+    await fireUntil(r.stdin, "c", () => (r.lastFrame() ?? "").includes("chat · acme/api"));
+    c.push(10, chatPrompt({ text: "submit it" }));
+    c.push(20, chatTurnStart());
+    c.push(30, chatCommand({ status: "proposed" }));
+    // The footer's actions row is the chatConfirm one once the card lands.
+    await until(() => rowAt(r.lastFrame() ?? "", actionsY(r.lastFrame() ?? "")).includes("parked"));
+    const f = r.lastFrame() ?? "";
+    const y = actionsY(f);
+    const x = rowAt(f, y).indexOf("keep parked");
+    await fireUntil(r.stdin, press(x, y), () => decisions.length > 0);
+    expect(decisions[0]).toBe("call_1:decline");
+  });
+
   it("footer chip: clicking the 'queue' mnemonic jumps to the queue row and focuses its body", async () => {
     const r = renderApp();
     // Mount lands on pane 1 (rail), whose ACTIONS row carries the bare "queue"
