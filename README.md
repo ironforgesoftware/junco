@@ -157,10 +157,11 @@ auto-forked and provisioned the same way `junco import` does.
 
 ## Chat with the agent
 
-Press `t` on a repo row in the dashboard to open an ongoing, read-only chat with the
-coding agent about that repository — ask anything ("what does this module do?", "is
-there a cheaper way to do #42?"), and when you want work done, ask for a ticket: the
-agent drafts it inline and junco parks it for you to review, the same confirm gate
+Press `c` on any repo, issue or PR in the dashboard to open an ongoing, read-only chat
+with the coding agent about that repository — from an issue or PR it prefills
+`/issue N` or `/pr N` into the composer, not sent. Ask anything ("what does this module
+do?", "is there a cheaper way to do #42?"), and when you want work done, ask for a
+ticket: the agent drafts it inline and junco parks it for you to review, the same confirm gate
 `audit`/`investigate` above use. `s` submits the draft, `e` opens it in `$EDITOR`,
 `r` cycles its route (auto → inbox → issue), `D` discards it — nothing is ever
 submitted, filed, or dispatched without that confirm. Every dispatch branch is
