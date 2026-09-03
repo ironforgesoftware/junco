@@ -264,6 +264,7 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
     author: null,
   };
   const PR_12 = makeDashPr({ number: 12, nwo: "acme/api" });
+  const PR_7_BETA = makeDashPr({ number: 7, nwo: "beta/two" });
   const TICKET_46 = githubTicketId("acme/api", 46);
 
   /** chatClient + one issue (#46) and one PR (#12), both on acme/api — the
@@ -372,6 +373,60 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
     expect(frame(r)).toContain(TICKET_46);
     r.stdin.write("c");
     await until(() => frame(r).includes("chat · acme/api"));
+  });
+
+  // ── Ruling R7: the rail switches the session on a MOVE, not on a mismatch ──
+  // `c` from an overlay legitimately opens a chat for a repo the rail is not
+  // parked on; the old effect re-opened the rail's own session on the next
+  // render and threw the prefilled composer away.
+
+  /** chatClient + a per-repo PR stub (only beta/two has one, so the PRs view's
+   *  single row is the NON-rail repo and needs no cursor move), a subscribe log,
+   *  and a health-poll counter — the "nothing happened afterwards" clock. */
+  function railClient() {
+    const base = chatClient();
+    const subs: string[] = [];
+    const state = { healths: 0 };
+    const client: DashboardClient = {
+      ...base.client,
+      listIssues: async () => okv({ issues: [ISSUE_46], staleAt: null }),
+      listPrs: async (nwo) => okv({ prs: nwo === "beta/two" ? [PR_7_BETA] : [], staleAt: null }),
+      health: async () => (state.healths++, base.client.health()),
+      chat: {
+        ...base.client.chat,
+        subscribe: (k, _s, on) => (subs.push(k), on.status("live"), () => {}),
+      },
+    };
+    return { client, subs, state };
+  }
+
+  it("a chat opened from the PRs view for a NON-rail repo stays put (R7)", async () => {
+    const c = railClient();
+    const r = renderApp({ client: c.client, healthPollMs: 20 });
+    await until(() => frame(r).includes(LOADED));
+    r.stdin.write("p"); // the PRs view — one row, beta/two#7 (the rail is on acme/api)
+    await until(() => frame(r).includes("Test PR #7"));
+    r.stdin.write("c");
+    await until(() => frame(r).includes("chat · beta/two"));
+    await until(() => frame(r).includes("/pr 7"));
+    // Two more health polls' worth of renders: the pre-R7 effect re-subscribed
+    // to the rail's repo on the very next one and wiped the prefill.
+    const seen = c.state.healths;
+    await until(() => c.state.healths >= seen + 2);
+    expect(c.subs).toEqual(["beta/two"]);
+    expect(frame(r)).toContain("chat · beta/two");
+    expect(frame(r)).toContain("/pr 7");
+  });
+
+  it("c on the rail still opens the rail repo's session exactly once (R7)", async () => {
+    const c = railClient();
+    const r = renderApp({ client: c.client, healthPollMs: 20 });
+    await until(() => frame(r).includes(LOADED));
+    r.stdin.write("c");
+    await until(() => frame(r).includes("chat · acme/api"));
+    const seen = c.state.healths;
+    await until(() => c.state.healths >= seen + 2);
+    expect(c.subs).toEqual(["acme/api"]);
   });
 
   // The queue row's transcript carries the TICKET's checkout path

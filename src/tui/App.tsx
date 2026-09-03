@@ -1321,14 +1321,20 @@ export function App(props: AppProps): React.JSX.Element {
   // its selection switches the subscription to the newly selected row.
   const chatKey = chatState?.key ?? null;
   const composerFocused = chatState?.composerFocused === true;
+  // Ruling R7 (2026-09-02 footer redesign): a rail CHANGE switches the session,
+  // a mere mismatch does not. `c` from an overlay legitimately opens a chat for
+  // a repo the rail is not parked on (a PRs-view row of another repo, a
+  // transcript's checkout path — spec 2026-09-02 §5), and the old
+  // "chatKey !== currentRepoKey" test re-opened the RAIL's session on the very
+  // next render, throwing that session and its prefilled composer away. The ref
+  // is updated on every run, chat view or not, so entering the chat later never
+  // replays a rail move the operator made while looking at something else.
+  const prevRailKey = useRef<string | null>(null);
   useEffect(() => {
-    if (
-      view === "chat" &&
-      currentRepoKey !== null &&
-      chatKey !== null &&
-      chatKey !== currentRepoKey
-    )
-      openChat(currentRepoKey);
+    const key = currentRepoKey;
+    const moved = key !== null && key !== prevRailKey.current;
+    prevRailKey.current = key;
+    if (moved && view === "chat" && chatKey !== null && chatKey !== key) openChat(key);
   }, [view, currentRepoKey, chatKey, openChat]);
   // Anchor-row click: the mouse form of ↑/↓ (a delta off the live cursor).
   const chatCursor = chatState?.cursor ?? 0;

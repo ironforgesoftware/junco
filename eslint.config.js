@@ -35,11 +35,13 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // binding-context switch, the two buildContextBindings memos and the footer
   // rows) moved to hooks/useFooterBindings.ts (footer redesign 2026-09-02,
   // Task 4), less the one line of `openHelp`'s re-entrancy guard. The cascade,
-  // the verbs and the slash router live in hooks/useChatInput.ts. +6 for the
-  // chat verb (Task 5, 1,884 → 1,890): five props naming the verb's targets to
-  // useViewActions (openChat/setView/setPane/prDetail/selectedPr) plus the one
-  // `chatTarget` line the footer pill and the overlays' own `c` share.
-  { file: "src/tui/App.tsx", max: 1890 },
+  // the verbs and the slash router live in hooks/useChatInput.ts. +4 net for the
+  // chat verb (Task 5, 1,884 → 1,888): +6 for five props naming the verb's
+  // targets to useViewActions (openChat/setView/setPane/prDetail/selectedPr)
+  // plus the one `chatTarget` line the footer pill and the overlays' own `c`
+  // share, −2 from Ruling R7 collapsing the rail-switch effect's condition onto
+  // a `prevRailKey` ref.
+  { file: "src/tui/App.tsx", max: 1888 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
