@@ -161,10 +161,12 @@ describe("ChatView", () => {
       "chat · acme/api · ◐ streaming · 2 turns · chat $0.42 since start · local/m1",
     );
     expect(f).toContain("you: why is the build slow?");
-    expect(f).toContain("because of X");
+    expect(f).toContain("junco: because of X"); // the answer carries the other label
     expect(f).toContain("▌"); // cursor on the draft card (the only anchor)
     expect(f).toContain("draft parked · ticket · add-cache");
-    expect(f).toContain("thinking about it"); // liveText trailing rows
+    // liveText trailing rows — labelled like a finished answer, so the label
+    // does not appear out of nowhere when the turn ends.
+    expect(f).toContain("junco: thinking about it");
     expect(f).toContain("type a message"); // composer placeholder (blurred still renders)
     expect(f).toContain("i compose"); // footer: composer blurred variant
   });

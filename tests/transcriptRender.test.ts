@@ -374,6 +374,9 @@ describe("chat rows (spec 2026-09-01 §1.3)", () => {
     const texts = rows.map((r) => r.text);
     expect(texts[0]).toBe("you: why is the build slow?");
     expect(texts[1]).toMatch(/^── run 1\/1 · chat · local\/m1/);
+    // The answer carries the other side's label, in the same tone as `you:`.
+    const answer = rows.find((r) => r.text.startsWith("junco:"));
+    expect(answer).toEqual({ text: "junco: because of X", tone: "accent" });
     const draftRow = rows.find((r) => r.anchor === "draft:acme__api-20260901-120000-1");
     expect(draftRow?.text).toContain("draft parked · ticket · add-cache");
     expect(
@@ -384,6 +387,44 @@ describe("chat rows (spec 2026-09-01 §1.3)", () => {
     const before = renderTranscriptRows(summarizeTranscript(v2Lines()), opts({ width: 80 }));
     expect(before[0]!.text).toMatch(/^── run 1\/1 · audit/);
     expect(before.some((r) => r.text.startsWith("you:"))).toBe(false);
+    expect(before.some((r) => r.text.startsWith("junco:"))).toBe(false); // chat-only labels
+  });
+
+  it("a multi-line chat answer is labelled on its first line only, and wraps under it", () => {
+    const s = summarizeTranscript([
+      metaLine({ ticketId: "acme__api" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: null, text: "first line\n\nsecond paragraph", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const texts = renderTranscriptRows(s, opts({ width: 80 })).map((r) => r.text);
+    const at = texts.indexOf("junco: first line");
+    expect(at).toBeGreaterThan(0);
+    expect(texts.slice(at, at + 3)).toEqual(["junco: first line", "", "  second paragraph"]);
+  });
+
+  it("a tool-only chat turn (empty text) gets no bare label row", () => {
+    // The live transcript's exploring turns carry text "" with tool calls —
+    // labelling those printed a lone `junco:` above every ▸ row.
+    const s = summarizeTranscript([
+      metaLine({ ticketId: "acme__api" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({
+        thinking: null,
+        text: "",
+        calls: [{ id: "c1", name: "read", args: { path: "x" }, result: "ok" }],
+      }),
+      turnEndFull({ thinking: null, text: "done", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const texts = renderTranscriptRows(s, opts({ width: 80 })).map((r) => r.text);
+    expect(texts.filter((t) => t.startsWith("junco:"))).toEqual(["junco: done"]);
   });
   it("a note landing before any run opens a synthetic, prompt-less run — its header is suppressed, only the note row renders (R23)", () => {
     const s = summarizeTranscript([metaLine(), chatTurnRejected()]);

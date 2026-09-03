@@ -33,6 +33,13 @@ describe("chat prompt (spec 2026-09-01 §6.5)", () => {
     expect(p).not.toContain("```junco-plan");
     expect(p).toMatch(/never claim/i);
   });
+  it("tells the model HOW a parked draft is submitted, so it points the operator at the card", () => {
+    // Without this the model invents a workflow ("copy the fence into a file
+    // and run junco submit") for a draft the dashboard already holds.
+    const p = buildChatPrompt({ cwd: "/repo", nwo: "acme/api", planSetsEnabled: false });
+    expect(p).toMatch(/draft card[\s\S]*`s` submits/);
+    expect(p).toMatch(/never tell them to copy/i);
+  });
   it("teaches the junco-plan fence only when plan sets are on; a local session names its path", () => {
     const on = buildChatPrompt({ cwd: "/repo", nwo: null, planSetsEnabled: true });
     expect(on).toContain("```junco-plan");
