@@ -175,9 +175,13 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     api.openChat("acme/api");
     await until(() => api.chat?.connection === "live");
     api.setComposer("hello");
+    // A send re-follows the tail: the operator has just written the newest
+    // row and must see it, however far back they had scrolled to read.
+    api.setFollow(false);
+    await until(() => api.chat!.follow === false);
     await api.send("hello");
     expect(c.calls).toContain("prompt:hello");
-    await until(() => api.chat!.composer === "");
+    await until(() => api.chat!.composer === "" && api.chat!.follow === true);
     c.push(60, chatTurnRejected());
     await until(() => api.chat!.blocked?.reason === "rate limited");
     await api.abort();

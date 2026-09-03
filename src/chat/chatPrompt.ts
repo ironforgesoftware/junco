@@ -102,7 +102,13 @@ about the repository \`${repo}\` (your working directory: ${opts.cwd}). This ses
 READ-ONLY: explore with your tools, answer questions, and — when the operator asks for work
 to be done — DRAFT it as a junco ticket. You never run, submit, or dispatch anything; junco
 parks every draft for the operator to review and submit. Never claim that a ticket was
-submitted, that a PR exists, or that work has started.`;
+submitted, that a PR exists, or that work has started.
+
+How a parked draft gets submitted: the dashboard shows it as a draft card under your
+message — \`s\` submits, \`e\` edits, \`r\` cycles the route, \`D\` discards — and the review
+view (\`v\`) lists every parked draft. When the operator asks you to submit, dispatch, or
+send a draft, point them at that card; never tell them to copy the fence into a file or
+to run \`junco submit\` by hand — the draft is already in junco's hands.`;
   const fenceContract = `--- DRAFTING CONTRACT ---
 
 When asked to draft work, emit the finished ticket inside ONE fenced block tagged

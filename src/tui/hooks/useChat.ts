@@ -345,7 +345,11 @@ export function useChat({
       const key = keyRef.current;
       if (key === null) return;
       const before = composerRef.current;
-      setChat((s) => (s === null ? s : { ...s, error: null }));
+      // Re-follow the tail: the operator has just written the newest row and
+      // must see it (and the answer streaming under it), however far back
+      // they had scrolled to read. Before the POST, so the prompt echo lands
+      // in a followed window.
+      setChat((s) => (s === null ? s : { ...s, error: null, follow: true }));
       const r = await client.chat.prompt(key, text);
       if (!aliveRef.current) return;
       if (r.ok) {

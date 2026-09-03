@@ -247,8 +247,19 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
       push(truncate(`turn ${turn.index + 1}${turn.provisional ? " ◐" : ""}${usage}`, width), "dim");
       if (o.showThinking && turn.thinking !== null)
         for (const l of proseLines(turn.thinking, width - 2)) push(l === "" ? "" : `  ${l}`, "dim");
-      if (turn.text !== null)
-        for (const l of proseLines(turn.text, width - 2)) push(l === "" ? "" : `  ${l}`);
+      if (turn.text !== null) {
+        // A chat answer carries the other side's label, the way the prompt
+        // carries `you:` — inline on the first line in the same tone, the
+        // rest indented under it. The label is wrapped WITH the text so the
+        // first row fits the width like every other; ticket transcripts have
+        // no dialogue to label.
+        const chat = run.flow === "chat";
+        const lines = proseLines(chat ? `junco: ${turn.text}` : turn.text, width - 2);
+        lines.forEach((l, li) => {
+          if (chat && li === 0) push(l, "accent");
+          else push(l === "" ? "" : `  ${l}`);
+        });
+      }
       for (const c of turn.toolCalls) {
         const suffix = fmtToolResult(c.result);
         push(

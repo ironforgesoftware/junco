@@ -122,8 +122,14 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
             showThinking: state.showThinking,
             expanded: state.expanded,
           });
+    // Streaming text is labelled exactly as the finished answer will be
+    // (transcriptRender.ts's chat rows): label wrapped in with the text, the
+    // first row accent, the rest indented — so nothing jumps when the turn
+    // ends and the renderer takes over.
     if (state.liveText !== "")
-      for (const l of wrapText(state.liveText, textWidth)) out.push({ text: l });
+      wrapText(`junco: ${state.liveText}`, textWidth - 2).forEach((l, i) =>
+        out.push(i === 0 ? { text: l, tone: "accent" } : { text: l === "" ? "" : `  ${l}` }),
+      );
     return out;
   }, [state.summary, state.showThinking, state.expanded, state.liveText, textWidth]);
   // Memoized: a fresh array every render would defeat TranscriptBody's
