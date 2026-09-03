@@ -4,7 +4,7 @@ import { Box, Text } from "ink";
 import { render, cleanup } from "ink-testing-library";
 import { MouseProvider, useOnMouseMiss, useOnAnyMousePress } from "../src/tui/MouseProvider.js";
 import { ClickableBox } from "../src/tui/ClickableBox.js";
-import { until } from "./helpers/until.js";
+import { until, fireUntil } from "./helpers/until.js";
 
 afterEach(cleanup);
 
@@ -146,6 +146,23 @@ describe("ClickableBox + MouseProvider", () => {
     r.stdin.write(drag(1, 1));
     await new Promise((res) => setTimeout(res, 50));
     expect(onDrag).toHaveBeenCalledTimes(1);
+  });
+
+  it("a later press clears the capture even if the release never arrived", async () => {
+    // A terminal need not deliver the release: the button can come up outside
+    // the window, focus can be lost mid-drag, a chunk can be dropped. Without
+    // this, the capture outlived the gesture and the NEXT held-button motion —
+    // anywhere on screen — kept scrolling the bar the operator had let go of.
+    const onDrag = vi.fn();
+    const r = render(<Bar onPressAt={() => {}} onDrag={onDrag} onMiss={() => {}} />);
+    await until(() => (r.lastFrame() ?? "").includes("r4"));
+    r.stdin.write(press(0, 1));
+    await fireUntil(r.stdin, drag(0, 2), () => onDrag.mock.calls.length >= 1);
+    const held = onDrag.mock.calls.length;
+    r.stdin.write(press(40, 20)); // no release first — a press that arms nothing
+    r.stdin.write(drag(0, 3));
+    await new Promise((res) => setTimeout(res, 50));
+    expect(onDrag).toHaveBeenCalledTimes(held);
   });
 
   it("drag: nothing captured (or the press missed every region) dispatches nothing", async () => {

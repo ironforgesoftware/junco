@@ -67,10 +67,13 @@ export function MouseProvider({ children }: { children: React.ReactNode }): Reac
           const hit = store.resolve(ev.x, ev.y);
           const h = hit?.handlers;
           h?.onPress?.();
-          if (hit && h?.onPressAt) {
-            h.onPressAt(...localPoint(hit.rect, ev.x, ev.y));
-            dragCaptureRef.current = hit.id;
-          }
+          // EVERY press rewrites the capture, arming or clearing it: a release
+          // is not guaranteed to arrive (button up outside the window, focus
+          // lost mid-drag, a dropped chunk), and a capture that outlived its
+          // gesture would hand the next held-button motion anywhere on screen
+          // to a scrollbar the operator had already let go of.
+          dragCaptureRef.current = hit && h?.onPressAt ? hit.id : null;
+          if (hit && h?.onPressAt) h.onPressAt(...localPoint(hit.rect, ev.x, ev.y));
           // A region answering EITHER press form is a hit; only a press that
           // reached nothing at all is a miss.
           if (!h?.onPress && !h?.onPressAt) missRef.current?.();
