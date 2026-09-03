@@ -241,7 +241,10 @@ export function useMainActions({
         setPane(2);
       },
       // `t` on an ISSUE row (#330): the transcript of the ticket the bridge
-      // built for it. Only the issues LIST derives this verb.
+      // built for it. The ISSUES BODY derives this verb — the keymap carries
+      // it on every pane of that body (viewActions' BODY_VERBS.issues) — but
+      // only the issue LIST renders it as a chip (ISSUES_CHIP_ORDER), and with
+      // no issue under the cursor it is a no-op.
       transcript: () => openIssueTranscript(currentNwo, currentIssue),
     }),
     [

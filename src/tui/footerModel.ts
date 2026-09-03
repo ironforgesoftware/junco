@@ -18,7 +18,9 @@ import type { BindingContext, Chip, ContextBindings, MainBody } from "./viewActi
 import type { DerivedMnemonic } from "./mnemonics.js";
 import type { LayoutMode } from "./layout.js";
 
-export type FooterChipKind = "pill" | "mnemonic" | "structural" | "separator";
+/** `note` is prose, not a key: one dim run with no keycap and nothing to
+ * click (spec §4's "dim one-line reminder" on the chat composer's row 2). */
+export type FooterChipKind = "pill" | "mnemonic" | "structural" | "separator" | "note";
 export interface FooterChip {
   kind: FooterChipKind;
   /** Dispatch key: mnemonic/pill → derived letter; structural → the Chip.key STRING. */
@@ -123,6 +125,16 @@ const s = (key: string, label: string): FooterChip => ({
   charIndex: null,
   guarded: false,
 });
+/** A row of prose. Empty `key`/`id` on purpose: nothing dispatches it, so
+ * `chipActions` can never find a handler for it either. */
+const note = (label: string): FooterChip => ({
+  kind: "note",
+  id: "",
+  key: "",
+  label,
+  charIndex: null,
+  guarded: false,
+});
 function fromChip(c: Chip): FooterChip {
   return c.kind === "structural"
     ? s(c.key, c.label)
@@ -217,8 +229,7 @@ export function buildFooterRows({
       navigate: {
         label: "",
         chips: [
-          s(
-            "",
+          note(
             "esc, then ↑↓ move · ⏎ expand · [ ] scroll · s e r D on a draft · t thinking · f follow",
           ),
         ],
@@ -296,6 +307,8 @@ export function footerSegments(chip: FooterChip): Segment[] {
   switch (chip.kind) {
     case "separator":
       return [seg("│", { dim: true })];
+    case "note":
+      return [seg(chip.label, { dim: true })];
     case "structural":
       return [seg(` ${keyGlyph(chip.key)} `, { keycap: true }), seg(` ${chip.label}`)];
     case "pill": {

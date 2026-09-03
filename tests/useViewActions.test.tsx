@@ -710,7 +710,9 @@ describe("the overlay chat handler (spec 2026-09-02 §5)", () => {
     });
     bare.api["chat"]!();
     expect(bare.spies.openChat).not.toHaveBeenCalled();
-    expect(bare.spies.showToast).toHaveBeenCalledWith("info", "select a repo first (←)");
+    // `esc`, not `←`: inside an overlay the left arrow does nothing, so the
+    // hint names the key that actually gets you back to the rail.
+    expect(bare.spies.showToast).toHaveBeenCalledWith("info", "select a repo first (esc)");
     bare.unmount();
   });
 

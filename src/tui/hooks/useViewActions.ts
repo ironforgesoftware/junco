@@ -332,7 +332,11 @@ export function useViewActions({
         reviewState,
         repoDetailTarget,
       });
-      if (t === null) return void showToast("info", "select a repo first (←)");
+      // The hint names the key that gets you somewhere a repo IS selectable
+      // FROM HERE: inside an overlay that is `esc` (spec §5's `(←)` is the
+      // main view's own wording, which useMainActions keeps — `←` does
+      // nothing under an overlay).
+      if (t === null) return void showToast("info", "select a repo first (esc)");
       openChat(t.key, t.composer === undefined ? undefined : { composer: t.composer });
       setView("chat");
       setPane(2);

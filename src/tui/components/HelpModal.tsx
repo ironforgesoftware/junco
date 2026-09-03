@@ -36,8 +36,9 @@ export function HelpModal({
   pane: 1 | 2 | 3;
   mode: LayoutMode;
   trigger: string;
-  /** The bindings of the surface UNDER the modal (App passes the main-body
-   * context — help opens from the main view only). */
+  /** The bindings of the surface UNDER the modal: `?` opens help from every
+   * overlay (Ruling R5, spec 2026-09-02 §3.2), so App passes the context it
+   * captured when the key was pressed — the main body's own before any open. */
   bindings: ContextBindings;
   /** Latest npm version when newer than the running one; null/absent → no line. */
   updateLatest?: string | null;
@@ -50,7 +51,11 @@ export function HelpModal({
     c.kind === "structural" ? [[c.key, c.label] as [string, string]] : [],
   );
   const visible = bindings.all.filter((d) => !d.hidden);
-  const hidden = bindings.all.filter((d) => d.hidden && d.id !== "close");
+  // The hidden set is the SHIFT VARIANTS (import-as-ask, audit auto-plan…).
+  // `close` and `help` are hidden for a different reason — they are the
+  // reserved `q`/`?` the footer pins right (Ruling R5) — and the "system"
+  // section below documents both, so neither belongs in the variant list.
+  const hidden = bindings.all.filter((d) => d.hidden && d.id !== "close" && d.id !== "help");
   const thisView: [string, string][] = [
     ...structural,
     ...visible.map((d): [string, string] => [

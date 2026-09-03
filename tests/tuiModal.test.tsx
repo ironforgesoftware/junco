@@ -81,6 +81,28 @@ describe("HelpModal", () => {
     expect(f).not.toContain("t on a repo row"); // the withdrawn reading
     expect(f).toContain("chat with the agent about the repo under the cursor");
   });
+  it("an OVERLAY context lists its own keys, with no hidden-variant rows for ? help / q close", () => {
+    // Ruling R5 gave every overlay a hidden reserved `?` → help beside the
+    // hidden `q` → close, so the footer's pinned "? help" chip is real. The
+    // hidden filter excluded only `close`, so `help` fell through the
+    // shift-variant arm and every overlay's help listed a bogus
+    // `? help (shift variant)` — `?` is neither shifted nor a variant.
+    const f = render(
+      <HelpModal
+        pane={2}
+        mode="wide"
+        trigger="junco"
+        bindings={buildContextBindings({ kind: "view", view: "detail" }, "wide")}
+      />,
+    ).lastFrame()!;
+    const rows = f.split("\n").map((l) => l.replace(/║/g, "").trim());
+    expect(rows.filter((l) => /^c\s/.test(l) && l.includes("chat"))).toHaveLength(1);
+    expect(f).not.toContain("(shift variant)");
+    expect(f).not.toMatch(/║\s*q\s+close/); // hidden: `esc back` is the listed one
+    expect(f).toMatch(/║\s*esc\s+back/);
+    expect(f).toContain("navigate"); // the shared structural reference still renders
+  });
+
   it("the navigate section is generated from the footer vocabulary, not a second hand-written list", () => {
     const f = render(
       <HelpModal

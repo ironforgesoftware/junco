@@ -326,7 +326,23 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       "structural:esc:blur/abort",
     ]);
     expect(r.navigate.label).toBe("");
-    expect(r.navigate.chips.map((c) => c.label).join(" ")).toContain("esc, then");
+    // Spec §4 calls this row "a dim one-line reminder", not a chip: encoding
+    // it as a structural chip with an empty key painted a two-column keycap
+    // blob in front of it and left the text in the default foreground. It is
+    // its own `note` kind — one dim segment, no keycap, nothing to click.
+    expect(texts(r.navigate.chips)).toEqual([
+      "note::esc, then ↑↓ move · ⏎ expand · [ ] scroll · s e r D on a draft · t thinking · f follow",
+    ]);
+    expect(footerSegments(r.navigate.chips[0]!)).toEqual([
+      {
+        text: "esc, then ↑↓ move · ⏎ expand · [ ] scroll · s e r D on a draft · t thinking · f follow",
+        accent: false,
+        underline: false,
+        keycap: false,
+        pill: false,
+        dim: true,
+      },
+    ]);
   });
   it("chat view, blurred: draft verbs on actions, i compose + movement on navigate", () => {
     const r = rows({ kind: "view", view: "chat" }, { target: "chat · acme/api" });
