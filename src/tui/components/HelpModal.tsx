@@ -4,6 +4,7 @@ import { theme } from "../theme.js";
 import { Modal } from "./Modal.js";
 import type { LayoutMode } from "../layout.js";
 import type { ContextBindings } from "../viewActions.js";
+import { NAV_HELP_ROWS } from "../footerModel.js";
 
 function Section({ title, rows }: { title: string; rows: [string, string][] }): React.JSX.Element {
   return (
@@ -52,7 +53,10 @@ export function HelpModal({
   const hidden = bindings.all.filter((d) => d.hidden && d.id !== "close");
   const thisView: [string, string][] = [
     ...structural,
-    ...visible.map((d): [string, string] => [d.key, d.label]),
+    ...visible.map((d): [string, string] => [
+      d.key,
+      d.id === "chat" ? "chat with the agent about the repo under the cursor" : d.label,
+    ]),
     ...hidden.map((d): [string, string] => [d.key, `${d.label} (shift variant)`]),
   ];
   return (
@@ -62,28 +66,12 @@ export function HelpModal({
         trigger label is `{trigger}`)
       </Text>
       <Text dimColor>
-        keys are mnemonics: the highlighted letter in each footer chip IS the key; an uppercase
-        letter means shift (guarded/destructive).
+        keys are mnemonics: the underlined letter in each footer chip IS the key; an uppercase
+        letter means shift (guarded/destructive). The filled chip is chat — c on any screen with a
+        repo in context.
       </Text>
       <Section title="this view" rows={thisView} />
-      <Section
-        title="navigate"
-        rows={[
-          ["↑/↓ · j/k", "move selection / scroll"],
-          ["←/→ · h/l · tab", "switch panes"],
-          ["[ / ]", "scroll (alias of ↑/↓ in views)"],
-          ["g/G", "first / last"],
-          ["enter", "open detail — repo (rail), issue (list), PR (monitor / PRs view)"],
-          ["t on an issue", "transcript of the ticket junco built for it (live while it runs)"],
-          [
-            "t on a repo row",
-            "chat with the agent about that repo (rail / PR pane, or a local repo body)",
-          ],
-          ["/", "filter issues (esc clears)"],
-          [",", "config editor"],
-          [":", "command palette (alias of the commands chip)"],
-        ]}
-      />
+      <Section title="navigate" rows={[...NAV_HELP_ROWS]} />
       <Section
         title="system rows"
         rows={[

@@ -89,6 +89,22 @@ export function keyGlyph(key: string): string {
   return GLYPHS[key] ?? key;
 }
 
+/** The navigate row's vocabulary as help rows (spec 2026-09-02 §3.2). The
+ * modal renders THIS list, so the footer and the help cannot disagree about
+ * what a structural key does. Keys are shown in their footer glyph form. */
+export const NAV_HELP_ROWS: ReadonlyArray<[string, string]> = [
+  [`${keyGlyph("↑/↓")} · j/k`, "move selection / scroll"],
+  [`${keyGlyph("←/→")} · h/l · tab`, "switch panes (rail ⇄ issues ⇄ PR monitor)"],
+  [keyGlyph("[/]"), "scroll (alias of ↑↓ in views)"],
+  [keyGlyph("g/G"), "first / last"],
+  [keyGlyph("enter"), "open — repo detail (rail), issue preview (list), PR (monitor / PRs view)"],
+  ["t on an issue", "transcript of the ticket junco built for it (live while it runs)"],
+  ["/", "filter issues (esc clears)"],
+  [",", "config editor"],
+  [":", "command palette"],
+  ["esc", "back / close"],
+];
+
 const s = (key: string, label: string): FooterChip => ({
   kind: "structural",
   id: key,
