@@ -53,6 +53,7 @@ import { cloneHarness, run, type GitHarness } from "../helpers/gitHarness.js";
 import { ghCases } from "../helpers/ghScript.js";
 import { TICKET_FRONTMATTER_JSON_SCHEMA } from "../../src/ticketSchema.js";
 import { parseTranscriptLine, type ParsedLine } from "../../src/agent/transcriptSchema.js";
+import { chatSlug } from "../../src/chat/chatKey.js";
 import { startStubModel, type RecordedRequest, type StubModel, type Turn } from "./stubModel.js";
 
 // ---------------------------------------------------------------------------
@@ -612,6 +613,48 @@ export function transcript(sb: Sandbox, id: string): ParsedLine[] {
     .split("\n")
     .filter((l) => l.trim() !== "")
     .map(parseTranscriptLine);
+}
+
+/**
+ * One dashboard-chat session's transcript lines, parsed — the daemon-side
+ * record of a chat turn (`junco_chat_*`) plus the SDK events it interleaves.
+ * Simpler than consuming `/chat/events` from a scenario, and it reads exactly
+ * what `junco transcript --chat` reads.
+ *
+ * The slug comes from the product (`chatSlug`), never guessed, and the
+ * directory probe is the same v2-then-flat one `transcript()` uses.
+ */
+export function chatTranscript(sb: Sandbox, key: string): ParsedLine[] {
+  const dir = firstExisting([join(sb.dataDir, "data", "chats"), join(sb.dataDir, "chats")]);
+  if (dir === null) return [];
+  const p = join(dir, chatSlug(key), "transcript.jsonl");
+  if (!existsSync(p)) return [];
+  return readFileSync(p, "utf8")
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map(parseTranscriptLine);
+}
+
+/** The chat drafts parked right now (`<chat-drafts>/<id>.json`), by draft id.
+ *  Same v2-then-flat probe; `[]` before the first draft parks. */
+export function chatDrafts(sb: Sandbox): string[] {
+  const dir = firstExisting([
+    join(sb.dataDir, "data", "chat-drafts"),
+    join(sb.dataDir, "chat-drafts"),
+  ]);
+  if (dir === null) return [];
+  return readdirSync(dir)
+    .filter((n) => n.endsWith(".json"))
+    .map((n) => n.replace(/\.json$/, ""));
+}
+
+/** Where `archiveChatDraft` moves a submitted draft's JSON (draftStore.ts). */
+export function chatDraftArchivePath(sb: Sandbox, draftId: string): string | null {
+  const dir = firstExisting([
+    join(sb.dataDir, "data", "chat-drafts"),
+    join(sb.dataDir, "chat-drafts"),
+  ]);
+  return dir === null ? null : join(dir, "submitted", `${draftId}.json`);
 }
 
 export function ghLog(sb: Sandbox): string[] {
