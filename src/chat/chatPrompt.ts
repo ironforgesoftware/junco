@@ -92,7 +92,15 @@ function withoutPlanSetExample(skillSections: string): string {
 }
 
 export function buildChatPrompt(
-  opts: { cwd: string; nwo: string | null; planSetsEnabled: boolean },
+  opts: {
+    cwd: string;
+    nwo: string | null;
+    planSetsEnabled: boolean;
+    /** Spec 2026-09-03 §5: whether the `junco_submit` tool is registered for
+     *  this session. Threaded through by chatSession.ts; the clause it
+     *  selects lands with the rest of the prompt work (plan task 8). */
+    submitTool?: boolean;
+  },
   deps: { readFileFn?: (p: string) => string } = {},
 ): string {
   const repo = opts.nwo ?? opts.cwd;

@@ -26,6 +26,7 @@ import {
 import {
   TRANSCRIPT_VERSION,
   parseTranscriptLine,
+  type ChatCommandRecord,
   type ChatRecord,
   type MetaRecord,
 } from "../agent/transcriptSchema.js";
@@ -33,8 +34,17 @@ import type { ProviderFailureClass } from "../providerFailure.js";
 import { READ_ONLY_TOOLS } from "../runOnce.js";
 import { log } from "../logging.js";
 import { chatSlug } from "./chatKey.js";
-import { runChatTurn, type ChatTurnResult } from "./chatTurn.js";
+import { TurnDeadline, runChatTurn, type ChatTurnResult } from "./chatTurn.js";
 import { buildChatPrompt } from "./chatPrompt.js";
+import { findChatDraft } from "./draftStore.js";
+import { runSubmit, type SubmitExecDeps } from "./submitExec.js";
+import {
+  makeSubmitTool,
+  SUBMIT_TOOL_NAME,
+  type Decision,
+  type SubmitProposal,
+  type SubmitToolDeps,
+} from "./submitTool.js";
 
 export interface ChatMeta {
   key: string;
@@ -87,6 +97,13 @@ export interface ChatSessionDeps {
   ) => () => Promise<ChatSessionLike>;
   fs?: Partial<ChatFs>;
   now?: () => number;
+  /** How a confirmed `junco_submit` reaches the CLI (spec 2026-09-03 §3.4).
+   *  The daemon passes nothing (real spawn, real store); tests inject
+   *  `spawnFn`/`cliPath`. */
+  submit?: SubmitExecDeps;
+  /** Test seam for the confirm wait (default
+   *  `cfg.chat.confirmTimeoutMinutes` × 60 000). */
+  confirmTimeoutMs?: number;
 }
 
 /**
@@ -179,6 +196,16 @@ export class ChatSession {
   /** Turns past prompt()'s entry but not yet on `inFlight` — the window in
    *  which the SDK session is still being built. abort() must see these. */
   private starting = 0;
+  /** The tool list the session was BUILT with (the read-only subset, plus
+   *  junco_submit when it is on) — what `turn_start.tools` must report. */
+  private toolNames: string[] | null = null;
+  /** The running turn's pausable clock (spec 2026-09-03 §3.3), owned here so
+   *  a pending confirmation can stop it. */
+  private turnDeadline: TurnDeadline | null = null;
+  /** The one `junco_submit` awaiting the operator, if any. */
+  private pending: { commandId: string; settle: (d: Decision) => void } | null = null;
+  private readonly submitDeps: SubmitExecDeps;
+  private readonly confirmTimeoutMs: number;
 
   constructor(
     opts: {
@@ -204,6 +231,8 @@ export class ChatSession {
     this.now = deps.now ?? (() => Date.now());
     this.makeSm = deps.makeSessionManager ?? makeSessionManager;
     this.factoryFor = deps.sessionFactoryFor ?? makeChatSessionFactory;
+    this.submitDeps = deps.submit ?? {};
+    this.confirmTimeoutMs = deps.confirmTimeoutMs ?? opts.cfg.chat.confirmTimeoutMinutes * 60_000;
   }
 
   get streaming(): boolean {
@@ -341,13 +370,16 @@ export class ChatSession {
       });
       if (this.size === 0) this.writeRecord({ type: "junco_meta", ticketId: this.slug, createdAt });
     }
-    this.stampCrashIfNeeded();
+    this.stampDanglingIfNeeded();
     this.metaReady = true;
   }
 
-  /** Spec §11: a transcript whose last turn record is turn_start died mid-turn. */
-  private stampCrashIfNeeded(): void {
+  /** Spec §11 + spec 2026-09-03 §3.3: a turn record left at turn_start, or a
+   *  command left at proposed, died with the daemon. */
+  private stampDanglingIfNeeded(): void {
     let lastTurn: string | null = null;
+    // commandId → the proposal no terminal record has closed yet.
+    const open = new Map<string, ChatCommandRecord>();
     for (const { line } of this.readLines(0)) {
       const p = parseTranscriptLine(line);
       if (p.kind !== "junco") continue;
@@ -358,9 +390,16 @@ export class ChatSession {
         t === "junco_chat_turn_aborted"
       )
         lastTurn = t;
+      if (p.record.type === "junco_chat_command") {
+        const c = p.record;
+        if (c.status === "proposed") open.set(c.commandId, c);
+        else open.delete(c.commandId);
+      }
     }
     if (lastTurn === "junco_chat_turn_start")
       this.writeRecord({ type: "junco_chat_turn_aborted", reason: "crash" });
+    for (const { ts: _ts, ...rest } of open.values())
+      this.writeRecord({ ...rest, status: "expired", detail: "daemon restarted" });
   }
 
   /** True once the transcript holds a completed turn — the line between
@@ -392,14 +431,22 @@ export class ChatSession {
       const meta = this.readMeta()!;
       const chatCfg = chatCfgFor(this.cfg);
       const build = async (manager: unknown): Promise<ChatSessionLike> => {
+        // Spec 2026-09-03 §3.2: the SDK enables a custom tool only when the
+        // `tools` allowlist names it, so the tool and its name go together —
+        // and `buildSandbox` skips names it does not know, so the sandboxed
+        // path is unaffected by the extra name.
+        const submitTool = this.cfg.chat.submitTool ? makeSubmitTool(this.submitToolDeps()) : null;
+        this.toolNames = submitTool ? [...chatCfg.tools, SUBMIT_TOOL_NAME] : chatCfg.tools;
         const built = await this.factoryFor(chatCfg, this.cwd, {
-          tools: chatCfg.tools,
+          tools: this.toolNames,
+          ...(submitTool ? { customTools: [submitTool] } : {}),
           thinkingLevel: this.cfg.chat.thinkingLevel ?? this.cfg.model.thinkingLevel,
           sessionManager: manager,
           appendSystemPrompt: buildChatPrompt({
             cwd: this.cwd,
             nwo: this.nwo,
             planSetsEnabled: this.cfg.planSets.enabled,
+            submitTool: submitTool !== null,
           }),
           // Ruling R14: chat is read-only by contract — the cwd is the
           // operator's live checkout, never a disposable worktree — so the
@@ -585,16 +632,24 @@ export class ChatSession {
     this.writeRecord({
       type: "junco_chat_turn_start",
       modelId: chatCfg.model.id,
-      tools: chatCfg.tools,
+      // The REAL list the session was built with — junco_submit included when
+      // it is on (spec 2026-09-03 §3.2).
+      tools: this.toolNames ?? chatCfg.tools,
       timeoutMs: opts.timeoutMs,
     });
     // Take ownership now even if `owns` was false at entry (the turn we would
     // have steered finished during the build): abort() must reach THIS turn.
     this.turnAbort = ctl;
+    // Session-owned so confirmSubmit can pause it while the operator decides
+    // (spec 2026-09-03 §3.3); runChatTurn arms and clears it exactly as it
+    // does its own.
+    const deadline = new TurnDeadline(opts.timeoutMs, this.now);
+    this.turnDeadline = deadline;
     const run = runChatTurn(sdk, {
       text,
       timeoutMs: opts.timeoutMs,
       abortGraceMs: opts.abortGraceMs,
+      deadline,
       // Already aborted when an operator abort() landed during startup;
       // runChatTurn's pre-aborted short-circuit then never prompts the SDK.
       abortSignal: ctl.signal,
@@ -638,6 +693,7 @@ export class ChatSession {
     } finally {
       this.inFlight = null;
       this.turnAbort = null;
+      this.turnDeadline = null;
     }
   }
 
@@ -670,9 +726,86 @@ export class ChatSession {
     };
   }
 
-  /** Operator abort; true when a turn was starting or in flight. */
+  // ---- the junco_submit handshake (spec 2026-09-03 §3.3) --------------------
+
+  get pendingCommandId(): string | null {
+    return this.pending?.commandId ?? null;
+  }
+
+  /**
+   * The submit tool's `confirm` dep: write the card's record, stop the turn
+   * clock, and wait for the dashboard's decision — or the turn's abort, or
+   * the confirm budget. Exactly one at a time. Always settles: every exit
+   * path clears the timer, drops the abort listener and resumes the deadline.
+   */
+  async confirmSubmit(p: SubmitProposal, signal?: AbortSignal): Promise<Decision> {
+    if (this.pending !== null)
+      throw new Error("a submit is already awaiting the operator's confirmation");
+    if (signal?.aborted) return "aborted";
+    this.writeRecord({
+      type: "junco_chat_command",
+      commandId: p.commandId,
+      command: "submit",
+      draftId: p.draftId,
+      ids: p.ids,
+      route: p.route,
+      status: "proposed",
+      exitCode: null,
+      output: null,
+      detail: null,
+    });
+    this.turnDeadline?.pause();
+    try {
+      return await new Promise<Decision>((resolve) => {
+        const settle = (d: Decision): void => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          if (this.pending?.commandId === p.commandId) this.pending = null;
+          resolve(d);
+        };
+        const timer = setTimeout(() => settle("expired"), this.confirmTimeoutMs);
+        const onAbort = (): void => settle("aborted");
+        signal?.addEventListener("abort", onAbort, { once: true });
+        this.pending = { commandId: p.commandId, settle };
+      });
+    } finally {
+      this.turnDeadline?.resume();
+    }
+  }
+
+  /** The dashboard's answer (POST /chat/decide). False when nothing with that
+   * id is pending — a stale card, or a decision that raced the timeout. */
+  decide(commandId: string, decision: "run" | "decline"): boolean {
+    if (this.pending === null || this.pending.commandId !== commandId) return false;
+    this.pending.settle(decision);
+    return true;
+  }
+
+  private submitToolDeps(): SubmitToolDeps {
+    return {
+      findDraft: (ref) => findChatDraft(this.cfg, this.key, ref, this.submitDeps.store),
+      confirm: (p, signal) => this.confirmSubmit(p, signal),
+      run: (draft, route) => runSubmit(this.cfg, draft, route, this.submitDeps),
+      record: (rec) => this.writeRecord(rec),
+      confirmTimeoutMinutes: this.cfg.chat.confirmTimeoutMinutes,
+    };
+  }
+
+  /** Tests only: a turn deadline without a turn, so the pause is observable. */
+  deadlineForTest(ms: number): TurnDeadline {
+    const deadline = new TurnDeadline(ms, this.now);
+    deadline.arm(() => {});
+    this.turnDeadline = deadline;
+    return deadline;
+  }
+
+  /** Operator abort; true when a turn was starting or in flight — or when a
+   *  submit confirmation was pending (Ruling R1: it is turn-like state an
+   *  abort must always reach, and the SDK aborts the tool's own signal too). */
   async abort(): Promise<boolean> {
-    if (!this.inFlight && this.starting === 0) return false;
+    const hadPending = this.pending !== null;
+    this.pending?.settle("aborted");
+    if (!this.inFlight && this.starting === 0) return hadPending;
     this.turnAbort?.abort();
     // Nothing to await while a turn is only starting: the pending build is
     // reset()/drain()'s to await (this.sdkPending), and an operator abort
