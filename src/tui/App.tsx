@@ -95,6 +95,7 @@ import { useChatInput } from "./hooks/useChatInput.js";
 import { useSuspend } from "./useSuspend.js";
 import { useMainActions, type LocalRow } from "./hooks/useMainActions.js";
 import { useFooterBindings } from "./hooks/useFooterBindings.js";
+import { useFooterTarget } from "./hooks/useFooterTarget.js";
 import { summarizeUnwatchPlan } from "./unwatchSummary.js";
 // Type-only: unwatchCmd is a pure module, but the dashboard drives it through
 // the CLI (spawned), never in-process — nothing here may pull it into the bundle.
@@ -1360,6 +1361,15 @@ export function App(props: AppProps): React.JSX.Element {
   // not know.
   const chatArgs = { detail, prDetail, selectedPr, transcript, reviewState, repoDetailTarget };
   const chatTarget = chatTargetFor(view, chatArgs);
+  // Row 1's target label (spec §3.1, Ruling R12) — the FOOTER's reading of
+  // what the verbs act on (`issue #46`, `PR #12`, `chat · acme/api`), which is
+  // narrower than the header's crumb trail and never says "no repo" beside a
+  // live pill. hooks/useFooterTarget.ts owns every case. `chatArgs` is spread
+  // in because the two readings name the same overlay state (its `reviewState`
+  // is simply unread here — the review overlay's label is the constant
+  // "review"), which keeps this call site off the printWidth wrap.
+  const targetArgs = { currentIssue, selectedPane3Pr, cmd, chatState, ...chatArgs };
+  const footerTarget = useFooterTarget(view, pane, body, targetArgs);
 
   // ── Derived-mnemonic bindings + the two footer rows (mnemonic spec §2/§4,
   // footer spec 2026-09-02 §6): ONE context table drives the footer, the help
@@ -1387,7 +1397,7 @@ export function App(props: AppProps): React.JSX.Element {
     composerFocused,
     mode: layout.mode,
     columns: size.columns,
-    target: crumbs[crumbs.length - 1] ?? "",
+    target: footerTarget,
     chatReachable: view === "main" ? currentRepoKey !== null : chatTarget !== null,
     helpContext: helpCtx.current,
   });

@@ -48,8 +48,13 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // useMainActions call. +1 for Ruling R10 (Task 2 fix round 2, stays a
   // single line): `useFooterBindings` gains `columns: size.columns` so
   // `buildFooterRows` can fit the navigate row to the terminal width instead
-  // of a fixed medium/wide breakpoint (1,888 → 1,889).
-  { file: "src/tui/App.tsx", max: 1889 },
+  // of a fixed medium/wide breakpoint (1,888 → 1,889). +2 for Ruling R12 (the
+  // final fix wave, 1,889 → 1,891): the footer's row-1 target label is its own
+  // reading of the spine, not the header's crumb tail, so App names the
+  // overlay/selection sources once (`targetArgs`, reusing `chatArgs` for the
+  // overlay half) and calls hooks/useFooterTarget.ts — the derivation itself
+  // is entirely in the hook.
+  { file: "src/tui/App.tsx", max: 1891 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
