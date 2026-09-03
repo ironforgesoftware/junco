@@ -23,12 +23,15 @@ function Probe({
    * (unreported) `maxRef`, which is 0 until a render reports it. */
   report?: boolean;
 }) {
-  const { scroll, scrollBy, onScrollMax, toEnd } = useScroll(k);
+  const { scroll, scrollBy, onScrollMax, toEnd, scrollTo } = useScroll(k);
   if (report) onScrollMax(Math.max(0, total - height));
   useInput((input) => {
     if (input === "]") scrollBy(1);
     if (input === "[") scrollBy(-1);
     if (input === "e") toEnd();
+    if (input === "j") scrollTo(2); // a scrollbar jump: an absolute offset
+    if (input === "J") scrollTo(999); // past the end
+    if (input === "N") scrollTo(-5); // and before the start
   });
   return <Text>scroll={scroll}</Text>;
 }
@@ -105,6 +108,17 @@ describe("useScroll", () => {
     r.stdin.write("e");
     await new Promise((res) => setTimeout(res, 40));
     expect(r.lastFrame()).toContain("scroll=0");
+  });
+
+  it("scrollTo() lands on an absolute offset, clamped at both ends", async () => {
+    const r = render(<Probe k="a" total={8} height={4} />); // max = 4
+    await until(() => (r.lastFrame() ?? "").includes("scroll=0"));
+    r.stdin.write("j");
+    await until(() => (r.lastFrame() ?? "").includes("scroll=2"));
+    r.stdin.write("J"); // past the end clamps to the last-reported max
+    await until(() => (r.lastFrame() ?? "").includes("scroll=4"));
+    r.stdin.write("N"); // and a negative offset clamps to the top
+    await until(() => (r.lastFrame() ?? "").includes("scroll=0"));
   });
 
   it("a surface that shrinks under the offset self-heals on the next press", async () => {

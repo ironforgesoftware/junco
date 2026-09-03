@@ -165,7 +165,7 @@ describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => 
     expect(f.actions).toMatch(/browser\s+refresh\s+audit\s+│\s+queue\s+review\s+PRs/);
   });
 
-  it("issue detail overlay: #N, and the chat view: chat · <key> (R12)", async () => {
+  it("issue detail overlay: #N, and the chat view: the bare session key (R12)", async () => {
     const r = mount();
     await until(() => frame(r).includes(LOADED));
     r.stdin.write("l");
@@ -174,9 +174,16 @@ describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => 
     await until(() => footer(r).navigate.includes("back"));
     expect(footer(r).actions.trimStart().startsWith("#1")).toBe(true);
     r.stdin.write("c");
-    await until(() => footer(r).actions.includes("chat · acme/api"));
-    // The composer owns the keyboard: row 2 is the dim blurred-keys reminder,
-    // with no keycap blob in front of it (minor 5's `note` chip).
-    expect(footer(r).navigate.trimStart().startsWith("esc, then")).toBe(true);
+    // The chat view's label is the session key alone — the header crumb
+    // already says "chat" (chat-scroll brief).
+    await until(() => footer(r).actions.trimStart().startsWith("acme/api"));
+    // The composer owns the keyboard, so row 2 lists only what still works
+    // while typing: real keycaps, no prose reminder, nothing pinned.
+    const nav = footer(r).navigate;
+    expect(nav).toContain("⇞ ⇟");
+    expect(nav).toContain("scroll");
+    expect(nav).toContain("blur");
+    expect(nav).not.toContain("esc, then");
+    expect(nav).not.toContain("? help");
   });
 });

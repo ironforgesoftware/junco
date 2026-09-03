@@ -135,7 +135,11 @@ describe("Sparkline", () => {
   });
 });
 
-import { Scrollbar, scrollbarCells } from "../src/tui/components/primitives/Scrollbar.js";
+import {
+  Scrollbar,
+  scrollbarCells,
+  scrollbarOffsetAt,
+} from "../src/tui/components/primitives/Scrollbar.js";
 import { Button } from "../src/tui/components/primitives/Button.js";
 import { TableHeader, headerCell } from "../src/tui/components/primitives/TableHeader.js";
 import { Preview } from "../src/tui/components/Preview.js";
@@ -159,6 +163,38 @@ describe("scrollbarCells", () => {
   it("Scrollbar renders null when content fits", () => {
     const { lastFrame } = render(<Scrollbar offset={0} viewport={10} total={5} height={10} />);
     expect(lastFrame()).toBe("");
+  });
+});
+
+describe("scrollbarOffsetAt (click/drag to scroll)", () => {
+  // 100 rows in a 10-row viewport ⇒ maxOffset 90, over a 10-cell track whose
+  // last addressable row is 9: the ends must land exactly on 0 and 90, or a
+  // drag to the bottom would stop short of the tail.
+  it("maps the track's top and bottom rows to the offset extremes", () => {
+    expect(scrollbarOffsetAt(0, 10, 10, 100)).toBe(0);
+    expect(scrollbarOffsetAt(9, 10, 10, 100)).toBe(90);
+    expect(scrollbarOffsetAt(5, 10, 10, 100)).toBe(50);
+  });
+  it("is 0 for any row when everything fits (nothing to scroll)", () => {
+    expect(scrollbarOffsetAt(3, 10, 10, 8)).toBe(0);
+    expect(scrollbarOffsetAt(0, 10, 10, 10)).toBe(0);
+  });
+  it("a one-row track never divides by zero", () => {
+    expect(scrollbarOffsetAt(0, 1, 1, 5)).toBe(0);
+  });
+  it("Scrollbar with onScrollTo still renders nothing when the content fits", () => {
+    const { lastFrame } = render(
+      <Scrollbar offset={0} viewport={10} total={5} height={10} onScrollTo={() => {}} />,
+    );
+    expect(lastFrame()).toBe("");
+  });
+  it("paints the same track with or without onScrollTo", () => {
+    const bare = render(<Scrollbar offset={0} viewport={5} total={10} height={4} />).lastFrame();
+    const live = render(
+      <Scrollbar offset={0} viewport={5} total={10} height={4} onScrollTo={() => {}} />,
+    ).lastFrame();
+    expect(bare).toBe("█\n█\n│\n│");
+    expect(live).toBe(bare);
   });
 });
 

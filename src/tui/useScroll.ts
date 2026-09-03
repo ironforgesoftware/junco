@@ -10,6 +10,9 @@ export interface ScrollHandle {
   /** Called by the mounted surface DURING its render with its own
    * `maxScroll(total, height)`. Writes a ref, never state, so it cannot loop. */
   onScrollMax: (max: number) => void;
+  /** Jump to an absolute first-row offset, clamped into `[0, max]` — the
+   * scrollbar's click/drag, where the pointer's row IS the offset. */
+  scrollTo: (offset: number) => void;
   /** Jump to the bottom — the last reported max. Used by the log overlay to
    * land at the tail BEFORE pausing follow, so the paused window doesn't snap
    * to the top; 0 after a key change until the new surface re-reports its max. */
@@ -47,11 +50,15 @@ export function useScroll(key: string): ScrollHandle {
     setScroll((s) => Math.max(0, Math.min(s + d, maxRef.current)));
   }, []);
 
+  const scrollTo = useCallback((offset: number) => {
+    setScroll(Math.max(0, Math.min(offset, maxRef.current)));
+  }, []);
+
   const onScrollMax = useCallback((max: number) => {
     maxRef.current = max;
   }, []);
 
   const toEnd = useCallback(() => setScroll(maxRef.current), []);
 
-  return { scroll: current, scrollBy, onScrollMax, toEnd };
+  return { scroll: current, scrollBy, scrollTo, onScrollMax, toEnd };
 }

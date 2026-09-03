@@ -18,9 +18,7 @@ import type { BindingContext, Chip, ContextBindings, MainBody } from "./viewActi
 import type { DerivedMnemonic } from "./mnemonics.js";
 import type { LayoutMode } from "./layout.js";
 
-/** `note` is prose, not a key: one dim run with no keycap and nothing to
- * click (spec §4's "dim one-line reminder" on the chat composer's row 2). */
-export type FooterChipKind = "pill" | "mnemonic" | "structural" | "separator" | "note";
+export type FooterChipKind = "pill" | "mnemonic" | "structural" | "separator";
 export interface FooterChip {
   kind: FooterChipKind;
   /** Dispatch key: mnemonic/pill → derived letter; structural → the Chip.key STRING. */
@@ -52,7 +50,11 @@ export interface FooterInput {
   columns: number;
 }
 
-export const TARGET_WIDTH = 16;
+/** Row-1 target label slot. 24, not spec §3.1's 16: the chat view's label is
+ * the bare session key now (hooks/useFooterTarget.ts dropped the `chat · `
+ * prefix the header crumb already carries), and a real `owner/name` has to
+ * fit it whole — a truncated repo name is the one label nobody can read. */
+export const TARGET_WIDTH = 24;
 /** Navigate chips dropped, in this order, one at a time, until the row fits
  * `columns` (Ruling R10) — they stay in the keymap + help regardless. Keyed
  * on dispatch key, not id: every chip here is structural. */
@@ -95,6 +97,8 @@ const GLYPHS: Record<string, string> = {
   "[/]": "[ ]",
   "esc/p": "esc·p",
   "g/G": "g G",
+  "pgup/pgdn": "⇞ ⇟",
+  tab: "⇥",
 };
 /** Key string → display glyph (dispatch keys never change). */
 export function keyGlyph(key: string): string {
@@ -121,16 +125,6 @@ const s = (key: string, label: string): FooterChip => ({
   kind: "structural",
   id: key,
   key,
-  label,
-  charIndex: null,
-  guarded: false,
-});
-/** A row of prose. Empty `key`/`id` on purpose: nothing dispatches it, so
- * `chipActions` can never find a handler for it either. */
-const note = (label: string): FooterChip => ({
-  kind: "note",
-  id: "",
-  key: "",
   label,
   charIndex: null,
   guarded: false,
@@ -206,40 +200,30 @@ export function buildFooterRows({
   );
   const verbs = mnemonics.filter((m) => !PINNED_IDS.includes(m.id));
 
-  if (context.kind === "structuralOnly" && context.view === "chatCompose") {
-    // Spec §4: the composer owns the keys; ⏎ send is the view's primary.
-    return {
-      actions: {
-        label,
-        chips: [
-          {
-            kind: "pill",
-            id: "enter",
-            key: "enter",
-            label: "send",
-            charIndex: null,
-            guarded: false,
-          },
-          s("ctrl+j", "newline"),
-          s("/", "commands"),
-          s("esc", "blur/abort"),
-        ],
-        pinned: [],
-      },
-      navigate: {
-        label: "",
-        chips: [
-          note(
-            "esc, then ↑↓ move · ⏎ expand · [ ] scroll · s e r D on a draft · t thinking · f follow",
-          ),
-        ],
-        pinned: [],
-      },
-    };
-  }
   if (context.kind === "structuralOnly") {
+    // Spec §4: the composer owns the keys; ⏎ send is the view's primary. The
+    // chat-scroll brief (2026-09-02) supersedes §4's second row here: it was a
+    // dim "esc, then …" reminder listing keys the composer swallows, and is
+    // now the ordinary navigate row of what genuinely works while typing
+    // (viewActions' `structuralOnly("chatCompose")` — PgUp/PgDn and esc).
+    const chatCompose =
+      context.view === "chatCompose"
+        ? [
+            {
+              kind: "pill" as const,
+              id: "enter",
+              key: "enter",
+              label: "send",
+              charIndex: null,
+              guarded: false,
+            },
+            s("ctrl+j", "newline"),
+            s("/", "commands"),
+            s("esc", "blur/abort"),
+          ]
+        : [];
     return {
-      actions: { label, chips: [], pinned: [] },
+      actions: { label, chips: chatCompose, pinned: [] },
       navigate: { label: "navigate", chips: structural, pinned: [] },
     };
   }
@@ -256,9 +240,9 @@ export function buildFooterRows({
     actions = [...pill, ...rest];
   }
   const navRaw = context.kind === "main" ? navigateChips(context, mode) : structural;
-  // Chrome.tsx's Footer computes ONE labelWidth from both rows' labels; this
-  // row's label is always the literal "navigate" past this point (the two
-  // structuralOnly branches above, where it can differ, already returned).
+  // Chrome.tsx's Footer computes ONE labelWidth from both rows' labels, and
+  // every navigate row's label is the literal "navigate" — the structuralOnly
+  // branch above uses it too, so this is the width there as well.
   const labelWidth = Math.max(label.length, "navigate".length);
   const navigate = fitNavigate(navRaw, pinned, labelWidth, columns);
   return {
@@ -307,8 +291,6 @@ export function footerSegments(chip: FooterChip): Segment[] {
   switch (chip.kind) {
     case "separator":
       return [seg("│", { dim: true })];
-    case "note":
-      return [seg(chip.label, { dim: true })];
     case "structural":
       return [seg(` ${keyGlyph(chip.key)} `, { keycap: true }), seg(` ${chip.label}`)];
     case "pill": {

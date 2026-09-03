@@ -49,6 +49,9 @@ export interface TranscriptBodyProps {
   focused: boolean;
   onScrollMax?: (max: number) => void;
   onRowPress?: (anchorIdx: number) => void;
+  /** Scrollbar click/drag: an absolute first-row offset. Must be a STABLE
+   * callback — a fresh arrow every render would defeat this component's memo. */
+  onScrollTo?: (offset: number) => void;
 }
 
 /** Window math mirrors QueueView: base at `scroll` (or the tail while
@@ -104,7 +107,13 @@ export const TranscriptBody = React.memo(function TranscriptBody(
           );
         })}
       </Box>
-      <Scrollbar offset={start} viewport={p.visible} total={p.rows.length} height={p.visible} />
+      <Scrollbar
+        offset={start}
+        viewport={p.visible}
+        total={p.rows.length}
+        height={p.visible}
+        onScrollTo={p.onScrollTo}
+      />
     </Box>
   );
 });

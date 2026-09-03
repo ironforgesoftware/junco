@@ -23,6 +23,8 @@ export interface TranscriptViewProps {
   onScrollMax?: (max: number) => void;
   /** Mouse press on a tool row: its index in `toolCallIds(summary)`. */
   onRowPress?: (anchorIdx: number) => void;
+  /** Scrollbar click/drag (stable callback — this component is memoized). */
+  onScrollTo?: (offset: number) => void;
 }
 
 function headerStatus(s: TranscriptState): { text: string; tone?: RowTone } {
@@ -47,6 +49,7 @@ export const TranscriptView = React.memo(function TranscriptView({
   focused,
   onScrollMax,
   onRowPress,
+  onScrollTo,
 }: TranscriptViewProps): React.JSX.Element {
   bumpRender("TranscriptView");
   // Reserved rows: borders ×2, header, footer.
@@ -106,6 +109,7 @@ export const TranscriptView = React.memo(function TranscriptView({
         focused={focused}
         onScrollMax={onScrollMax}
         onRowPress={onRowPress}
+        onScrollTo={onScrollTo}
       />
       <Text dimColor wrap="truncate">
         ↑/↓ tool · enter expand · [/] scroll · t thinking{live ? " · f follow" : ""}

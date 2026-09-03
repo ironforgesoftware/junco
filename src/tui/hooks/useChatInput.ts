@@ -23,11 +23,11 @@ export interface ChatInputDeps {
   setView: (v: View) => void;
   setPane: (p: Pane) => void;
   scrollBy: (delta: number) => void;
+  scrollTo: (offset: number) => void;
   toEnd: () => void;
-  moveRail: (delta: number) => void;
-  moveRailTo: (idx: number) => void;
-  /** Rail row count — `G` from pane 1 lands on the last row. */
-  railCount: number;
+  /** Body rows the transcript window shows — `ChatView`'s own
+   * `chatVisibleRows(height)`, so PgUp/PgDn move exactly one screen. */
+  visibleRows: number;
 }
 
 export interface ChatInputApi {
@@ -38,6 +38,10 @@ export interface ChatInputApi {
   chatHandlers: Record<string, () => void>;
   /** ChatView's composer submit: the slash router, or a plain prompt. */
   onComposerSubmit(raw: string): void;
+  /** ChatView's scrollbar click/drag: jump to an absolute row offset. Stable
+   * (ChatView is memoized) and follow-pausing — a jump under `follow` would
+   * otherwise snap straight back to the tail. */
+  onScrollTo(offset: number): void;
 }
 
 /** A slash command's issue/PR number: digits and nothing else, so `/pr 7abc`
@@ -50,8 +54,10 @@ function issueNumber(arg: string | undefined): number | null {
 /**
  * The chat view's input half (Ruling R15), lifted out of App so the nav spine
  * keeps only the wiring: the esc state machine and the blurred key recipes
- * (spec 2026-09-01 §8.3), the draft-card verbs (§8.6), and the composer's
- * slash router (§8.2).
+ * (spec 2026-09-01 §8.3, whose movement recipe and pane doors the chat-scroll
+ * brief of 2026-09-02 supersedes — ↑/↓ scroll, `tab` walks the cards, and
+ * there is no door to the rail), the draft-card verbs (§8.6), and the
+ * composer's slash router (§8.2).
  *
  * NOT to be confused with `../viewActions.ts`, which derives WHICH key means
  * which verb; this hook is what those verbs do.
@@ -68,10 +74,9 @@ export function useChatInput({
   setView,
   setPane,
   scrollBy,
+  scrollTo,
   toEnd,
-  moveRail,
-  moveRailTo,
-  railCount,
+  visibleRows,
 }: ChatInputDeps): ChatInputApi {
   // `chatApi` is a fresh object every render; every memo/callback below closes
   // over these members (each a stable useCallback, or a value that genuinely
@@ -185,6 +190,14 @@ export function useChatInput({
     [send, abort, fresh, showToast, client, currentNwo, aliveRef],
   );
 
+  const onScrollTo = useCallback(
+    (offset: number): void => {
+      setFollow(false);
+      scrollTo(offset);
+    },
+    [setFollow, scrollTo],
+  );
+
   /** Run one recipe and claim the key — the `return void f()` idiom of App's
    * own cascade, adapted to a handler that reports whether it consumed. */
   const took = (fn: () => void): true => {
@@ -194,14 +207,33 @@ export function useChatInput({
 
   const handleChatKey = (input: string, key: Key): boolean => {
     if (view !== "chat" || chat === null) return false;
+    // One screen, minus a row of overlap so the line you were reading is
+    // still on screen after the jump (`less`'s own page rule).
+    const pageRows = Math.max(1, visibleRows - 1);
+    /** Scrolling up pauses follow, landing at the tail first — the log
+     * overlay's and the transcript view's shared recipe. Without the jump the
+     * paused window would fall back to a stale offset, usually 0. */
+    const scrollUp = (rows: number): void => {
+      if (chat.follow) {
+        toEnd();
+        setFollow(false);
+      }
+      scrollBy(-rows);
+    };
     // `pane === 2` is half the condition on purpose: ChatView hands the
     // Composer `focused && composerFocused`, so its useGuardedInput is live
     // only while the CHAT pane holds the focus. Reading `composerFocused`
     // alone here would claim the keys for a hook that isn't listening —
-    // every key swallowed, nothing typed, only esc out. That state is
-    // reachable: `openChat` from the rail-switch effect resets
-    // `composerFocused` to true while pane 1 still holds the focus.
+    // every key swallowed, nothing typed, only esc out. Every door into the
+    // chat takes pane 2 with it (useMainActions/useViewActions both
+    // `setPane(2)`), so this is defence in depth rather than a live state.
     if (chat.composerFocused && pane === 2) {
+      // PgUp/PgDn are not text — the Composer ignores them (its typing branch
+      // needs a non-empty `input`, and ink reports both as ""), so they stay
+      // the transcript's page keys while the composer holds the focus: read
+      // back over the conversation without blurring to do it.
+      if (key.pageUp) return took(() => scrollUp(pageRows));
+      if (key.pageDown) return took(() => scrollBy(pageRows));
       // The Composer's own useGuardedInput handles typing/enter/chords/slash.
       // Only esc is App's: streaming → abort, idle → blur (spec §8.3). Every
       // other key is swallowed so no cascade layer below sees typed prose.
@@ -211,46 +243,43 @@ export function useChatInput({
       }
       return true;
     }
-    // Blurred. The rail is still the nav spine (spec §8.1), so while pane 1
-    // holds focus the movement keys drive the RAIL — App's rail-switch effect
-    // then re-subscribes the chat to the newly selected row.
-    if (pane === 1) {
-      if (input === "j" || key.downArrow) return took(() => moveRail(1));
-      if (input === "k" || key.upArrow) return took(() => moveRail(-1));
-      if (input === "g") return took(() => moveRailTo(0));
-      if (input === "G") return took(() => moveRailTo(railCount - 1));
-    }
+    // Blurred. Every key below is the CHAT's — the chat-scroll brief
+    // (2026-09-02) removed the pane doors, so spec §8.1's "the rail is still
+    // the nav spine" no longer holds here: the view is full-screen, the rail
+    // is not painted, and a chat is opened fresh by `c`.
     if (key.escape) return took(close);
     // `i` composes — which means the CHAT pane, not just the composer flag:
-    // focusing it from the rail without taking the pane back would leave the
-    // Composer's hook inactive (see the pane check above).
+    // setting the flag without taking the pane back would leave the Composer's
+    // hook inactive (see the pane check above).
     if (input === "i")
       return took(() => {
         focusComposer(true);
         setPane(2);
       });
-    // The pane doors: this view swallows ↑/↓ for its own cursor (as every
-    // overlay does), so the rail needs an explicit way in and back out. `tab`
-    // toggles them, keeping the help modal's "←/→ · h/l · tab" line true here.
-    if (input === "h" || key.leftArrow) return took(() => setPane(1));
-    if (input === "l" || key.rightArrow) return took(() => setPane(2));
-    if (key.tab) return took(() => setPane(pane === 1 ? 2 : 1));
-    if (input === "j" || key.downArrow) return took(() => moveCursor(1));
-    if (input === "k" || key.upArrow) return took(() => moveCursor(-1));
-    if (key.return || input === " ") return took(toggleExpanded);
-    if (input === "]") return took(() => scrollBy(1));
-    if (input === "[")
+    // `tab` walks the CARDS (this brief supersedes spec §8.3's pane door):
+    // ↑/↓ scroll now, so the anchor cursor needs a key of its own. Ink reports
+    // shift+tab as `tab` with the shift modifier set. With no anchors
+    // `moveCursor` simply has nowhere to go — a silent no-op, not a toast.
+    if (key.tab)
       return took(() => {
-        // Scrolling up pauses follow, landing at the tail first — the log
-        // overlay's and the transcript view's shared recipe.
-        if (chat.follow) {
-          toEnd();
-          setFollow(false);
-        }
-        scrollBy(-1);
+        // A move that lands pauses follow (useChat.moveCursor), so the window
+        // must be AT the tail first — the same recipe every scroll-up key
+        // uses, or the paused window falls back to a stale offset. A move that
+        // does not land leaves follow alone, and this jump is then a no-op:
+        // the followed window is already at the tail.
+        if (chat.follow) toEnd();
+        moveCursor(key.shift ? -1 : 1);
       });
+    if (key.return || input === " ") return took(toggleExpanded);
+    // Chat-shaped scrolling (this brief supersedes spec §8.3's cursor
+    // movement): the transcript is prose, so ↑/↓ walk it a row at a time —
+    // `j`/`k` and `[`/`]` are aliases, and the cards move on `tab`.
+    if (input === "j" || key.downArrow || input === "]") return took(() => scrollBy(1));
+    if (input === "k" || key.upArrow || input === "[") return took(() => scrollUp(1));
+    if (key.pageDown) return took(() => scrollBy(pageRows));
+    if (key.pageUp) return took(() => scrollUp(pageRows));
     if (input === "G" || key.end) return took(() => setFollow(true));
-    if (input === "g")
+    if (input === "g" || key.home)
       return took(() => {
         setFollow(false);
         scrollBy(-1_000_000); // clamps to 0
@@ -261,5 +290,5 @@ export function useChatInput({
     return true;
   };
 
-  return { handleChatKey, chatHandlers, onComposerSubmit };
+  return { handleChatKey, chatHandlers, onComposerSubmit, onScrollTo };
 }

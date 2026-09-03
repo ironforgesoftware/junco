@@ -172,8 +172,10 @@ describe("useFooterTarget — overlays (spec §3.1)", () => {
   it("command output: the command's title", () => {
     expect(target("cmdOutput", 2, ISSUES, { cmd: CMD })).toBe("junco status");
   });
-  it("chat: chat · <session key>", () => {
-    expect(target("chat", 2, ISSUES, { chatState: CHAT })).toBe("chat · acme/api");
+  // The header crumb already says "chat", so the footer's target is the bare
+  // session key — the room a 24-column slot buys goes to the repo name.
+  it("chat: the bare session key", () => {
+    expect(target("chat", 2, ISSUES, { chatState: CHAT })).toBe("acme/api");
   });
   it("repo detail overlay: the nwo, or the basename for a local-only checkout", () => {
     expect(target("repoDetail", 2, ISSUES, { repoDetailTarget: WATCHED })).toBe("acme/api");

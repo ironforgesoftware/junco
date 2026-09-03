@@ -8,7 +8,7 @@
 export const MOUSE_ENABLE = "\u001b[?1000;1003;1006h";
 export const MOUSE_DISABLE = "\u001b[?1000;1003;1006l";
 
-export type MouseEventKind = "press" | "release" | "wheelUp" | "wheelDown" | "move";
+export type MouseEventKind = "press" | "release" | "wheelUp" | "wheelDown" | "move" | "drag";
 
 export interface MouseEvent {
   kind: MouseEventKind;
@@ -20,9 +20,9 @@ export interface MouseEvent {
 const SGR = /\u001b\[<(\d+);(\d+);(\d+)([Mm])/g;
 
 /** Every SGR mouse event in a stdin chunk (one chunk may carry several).
- * Left button, wheel, and button-less motion; right/middle and drag-motion are dropped.
- * Wheel is bit 64 with the low bit picking the direction. Malformed sequences never throw
- * — they simply don't match. */
+ * Left button (press/release/drag), wheel, and button-less motion; right and
+ * middle are dropped, held or not. Wheel is bit 64 with the low bit picking
+ * the direction. Malformed sequences never throw — they simply don't match. */
 export function parseMouse(data: string): MouseEvent[] {
   const out: MouseEvent[] = [];
   for (const m of data.matchAll(SGR)) {
@@ -32,9 +32,11 @@ export function parseMouse(data: string): MouseEvent[] {
     if (b & 64) {
       out.push({ kind: (b & 1) === 0 ? "wheelUp" : "wheelDown", x, y });
     } else if (b & 32) {
-      // Motion (1003). Button bits 3 = no button held → hover move; a held
-      // button (drag, bits 0-2) stays dropped like right/middle clicks.
+      // Motion (1003). Button bits 3 = no button held → hover move; bits 0 =
+      // LEFT button held → drag (the scrollbar's channel). A held middle or
+      // right button stays dropped, exactly like its click.
       if ((b & 3) === 3) out.push({ kind: "move", x, y });
+      else if ((b & 3) === 0) out.push({ kind: "drag", x, y });
     } else if ((b & 3) === 0) {
       out.push({ kind: m[4] === "M" ? "press" : "release", x, y });
     }

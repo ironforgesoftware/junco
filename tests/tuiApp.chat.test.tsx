@@ -1,9 +1,11 @@
 /**
  * App-level chat wiring (spec 2026-09-01 §8.1/§8.3/§8.6, door key updated by
- * 2026-09-02 D5): the `c` door, the esc state machine, the blurred verbs, the
- * slash router, and the rail's re-subscribe. Every domain piece has its own
- * suite (useChat, useChatDrafts, ChatView, Composer) — these five exercise
- * the COMPOSITION through real rendered frames.
+ * 2026-09-02 D5): the `c` door, the esc state machine, the blurred verbs and
+ * the slash router. The chat-scroll brief (2026-09-02) removed the pane doors
+ * and with them the rail's in-view re-subscribe, so the rail no longer steers
+ * an open chat — only Ruling R7's "stays put" guarantee below is left of it.
+ * Every domain piece has its own suite (useChat, useChatDrafts, ChatView,
+ * Composer) — these exercise the COMPOSITION through real rendered frames.
  *
  * Keystroke discipline (CLAUDE.md + tests/helpers/until.ts): every write is
  * gated on an `until` that proves the previous one committed. The opening
@@ -24,7 +26,7 @@ import {
 import { makeDashPr } from "./helpers/dashFixtures.js";
 import { githubTicketId } from "../src/githubInbox.js";
 import { expandHome } from "../src/config.js";
-import { until, fireUntil, tick } from "./helpers/until.js";
+import { until, fireUntil } from "./helpers/until.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
@@ -195,55 +197,6 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     r.stdin.write("\r");
     await until(() => c.calls.includes("abort"));
   });
-
-  it("the rail stays the nav spine: it re-subscribes on a move, and i hands the focus back to the chat", async () => {
-    // localFixtures watches acme/api then beta/two (TO_QUEUE_ROW = "jj"
-    // documents the rail order), so one rail step down lands on beta/two.
-    const c = chatClient();
-    const subs: string[] = [];
-    const client: DashboardClient = {
-      ...c.client,
-      chat: {
-        ...c.client.chat,
-        subscribe: (k, _s, on) => (subs.push(k), on.status("live"), () => {}),
-      },
-    };
-    const r = renderApp({ client });
-    await until(() => r.lastFrame()!.includes(LOADED));
-    r.stdin.write("c");
-    await until(() => r.lastFrame()!.includes("chat · acme/api"));
-    r.stdin.write("\x1b"); // blur the composer (idle)
-    await until(() => r.lastFrame()!.includes("i compose"));
-    // `h` (focus the rail) paints nothing of its own: the chat view is
-    // full-screen (spec §8.1), so pane 1 has no widget on screen, the view's
-    // chips are pane-independent, and ChatView's accent→border flip is
-    // invisible here — chalk sees ink-testing-library's non-TTY stdout and
-    // writes no color, so the frame is plain text (verified: the pane-1 and
-    // pane-2 frames are byte-identical). The RE-SUBSCRIBE is the observable,
-    // so drive both keys until it lands: `h` is idempotent once pane 1 holds
-    // the focus, and a dropped `h` leaves `j` a no-op (no records ⇒ no
-    // anchors ⇒ moveCursor cannot move) rather than a wrong move.
-    // The retry is gated on `subs` — pushed synchronously by the re-subscribe
-    // the rail move triggers — NOT on the frame: `j` is not idempotent, and a
-    // slow runner that has already moved the rail but not yet repainted would
-    // otherwise take a second step past beta/two.
-    for (let i = 0; i < 40 && subs.length === 1; i++) {
-      r.stdin.write("h");
-      await tick();
-      r.stdin.write("j");
-      for (let k = 0; k < 5 && subs.length === 1; k++) await tick();
-    }
-    await until(() => r.lastFrame()!.includes("chat · beta/two"));
-    expect(subs).toEqual(["acme/api", "beta/two"]);
-    // The re-subscribe re-opened the session, so `composerFocused` is true
-    // again while pane 1 still holds the focus — ChatView's Composer is
-    // inactive there. `i` must hand the pane back with the focus, or every
-    // key is swallowed by a hook that isn't listening and only esc recovers.
-    r.stdin.write("i");
-    await until(() => r.lastFrame()!.includes("esc blur/abort"));
-    r.stdin.write("z");
-    await until(() => r.lastFrame()!.includes("z█")); // the cursor block only renders when active
-  });
 });
 
 /**
@@ -270,9 +223,10 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
   const TICKET_46 = githubTicketId("acme/api", 46);
 
   /** chatClient + one issue (#46) and one PR (#12), both on acme/api — the
-   *  rail's OWN first row, so the §8.1 re-subscribe effect (the rail's key wins
-   *  while the chat view is open) never swaps the session out from under the
-   *  prefill. */
+   *  rail's OWN first row, which is also where the prefill cases expect the
+   *  session to be (nothing re-subscribes an open chat any more: the
+   *  chat-scroll brief removed the pane doors and the rail-switch effect with
+   *  them, so a chat stays on the repo it was opened for). */
   function verbClient() {
     const c = chatClient();
     return {
@@ -377,10 +331,13 @@ describe("the chat verb (spec 2026-09-02 §5)", () => {
     await until(() => frame(r).includes("chat · acme/api"));
   });
 
-  // ── Ruling R7: the rail switches the session on a MOVE, not on a mismatch ──
-  // `c` from an overlay legitimately opens a chat for a repo the rail is not
-  // parked on; the old effect re-opened the rail's own session on the next
-  // render and threw the prefilled composer away.
+  // ── Ruling R7, now absolute: the rail never switches an open chat's session ──
+  // R7 narrowed the old effect from "any mismatch" to "a rail MOVE"; the
+  // chat-scroll brief deleted the effect outright with the pane doors. `c` from
+  // an overlay opens a chat for a repo the rail is not parked on, and it stays
+  // there — the old behaviour re-opened the rail's own session on the very next
+  // render and threw the prefilled composer away. These two cases are what
+  // stops that regression coming back.
 
   /** chatClient + a per-repo PR stub (only beta/two has one, so the PRs view's
    *  single row is the NON-rail repo and needs no cursor move), a subscribe log,

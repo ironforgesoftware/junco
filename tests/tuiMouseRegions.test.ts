@@ -82,6 +82,36 @@ describe("createMouseStore", () => {
     expect(store2.resolve(10, 2)?.id).toBe(1);
   });
 
+  // The drag capture (the scrollbar's press-and-hold) needs two things the
+  // press path alone never asked for: the region's RECT, so the provider can
+  // turn a terminal cell into a row inside the bar, and a way back to a region
+  // by id while the pointer wanders outside it.
+  it("resolve carries the hit region's absolute rect", () => {
+    const store = createMouseStore();
+    store.register(1, () => rowA, { onPressAt: () => {} });
+    expect(store.resolve(10, 2)).toEqual({
+      id: 1,
+      handlers: expect.anything(),
+      rect: { x: 0, y: 2, width: 80, height: 1 },
+    });
+  });
+
+  it("byId returns a live region's handlers + rect, and null once it is gone", () => {
+    const store = createMouseStore();
+    const onDrag = vi.fn();
+    const off = store.register(7, () => rowB, { onDrag });
+    const hit = store.byId(7);
+    expect(hit?.rect).toEqual({ x: 0, y: 3, width: 80, height: 1 });
+    hit?.handlers.onDrag?.(0, 0);
+    expect(onDrag).toHaveBeenCalledTimes(1);
+    expect(store.byId(999)).toBeNull();
+    off();
+    expect(store.byId(7)).toBeNull();
+    // A region still registered but detached from the tree has no rect either.
+    store.register(8, () => undefined, { onDrag });
+    expect(store.byId(8)).toBeNull();
+  });
+
   it("unregistering the hovered region clears hover and notifies its subscribers", () => {
     const store = createMouseStore();
     const off = store.register(1, () => rowA, { onPress: () => {} });

@@ -16,6 +16,10 @@ let nextRegionId = 1;
 export type ClickableBoxProps = Omit<React.ComponentProps<typeof Box>, "children"> & {
   onPress?: () => void;
   onWheel?: (dir: 1 | -1) => void;
+  /** Press, with the cell's position inside this box (clamped) — and the box
+   * keeps every drag until the button comes up (MouseProvider's capture). */
+  onPressAt?: (localX: number, localY: number) => void;
+  onDrag?: (localX: number, localY: number) => void;
   hoverBg?: string;
   children?: React.ReactNode | ((hovered: boolean) => React.ReactNode);
 };
@@ -23,6 +27,8 @@ export type ClickableBoxProps = Omit<React.ComponentProps<typeof Box>, "children
 export function ClickableBox({
   onPress,
   onWheel,
+  onPressAt,
+  onDrag,
   hoverBg,
   children,
   ...boxProps
@@ -33,21 +39,27 @@ export function ClickableBox({
   if (idRef.current === 0) idRef.current = nextRegionId++;
   const id = idRef.current;
   const ref = useRef<DOMElement | null>(null);
-  const handlersRef = useRef<{ onPress?: () => void; onWheel?: (d: 1 | -1) => void }>({});
-  handlersRef.current = { onPress, onWheel };
-  // Wheel resolution filters on handler presence, so only register the keys
-  // that exist THIS render (a ref-stable trampoline would advertise onWheel
-  // even when the prop is absent).
+  const handlersRef = useRef<
+    Pick<ClickableBoxProps, "onPress" | "onWheel" | "onPressAt" | "onDrag">
+  >({});
+  handlersRef.current = { onPress, onWheel, onPressAt, onDrag };
+  // Wheel resolution filters on handler presence, and a press only captures a
+  // drag when `onPressAt` is really there, so only register the keys that
+  // exist THIS render (a ref-stable trampoline would advertise them always).
   const hasPress = onPress !== undefined;
   const hasWheel = onWheel !== undefined;
+  const hasPressAt = onPressAt !== undefined;
+  const hasDrag = onDrag !== undefined;
 
   useEffect(() => {
     if (!store) return;
     return store.register(id, () => ref.current, {
       onPress: hasPress ? () => handlersRef.current.onPress?.() : undefined,
       onWheel: hasWheel ? (d) => handlersRef.current.onWheel?.(d) : undefined,
+      onPressAt: hasPressAt ? (x, y) => handlersRef.current.onPressAt?.(x, y) : undefined,
+      onDrag: hasDrag ? (x, y) => handlersRef.current.onDrag?.(x, y) : undefined,
     });
-  }, [store, id, hasPress, hasWheel]);
+  }, [store, id, hasPress, hasWheel, hasPressAt, hasDrag]);
 
   const subscribe = useCallback(
     (cb: () => void) => (store ? store.subscribe(id, cb) : () => {}),

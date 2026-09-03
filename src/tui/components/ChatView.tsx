@@ -84,11 +84,20 @@ export interface ChatViewProps {
   focused: boolean;
   onScrollMax?: (max: number) => void;
   onRowPress?: (anchorIdx: number) => void;
+  /** Scrollbar click/drag (stable callback — this component is memoized). */
+  onScrollTo?: (offset: number) => void;
   onComposerChange: (v: string) => void;
   onComposerSubmit: (v: string) => void;
 }
 
 const COMPOSER_ROWS = 6; // border ×2 + up to 4 lines
+
+/** Transcript rows visible inside a `height`-row chat view — reserved:
+ * borders ×2, header, footer, composer. Exported because App's key cascade
+ * needs the SAME number to page by (hooks/useChatInput.ts's PgUp/PgDn). */
+export function chatVisibleRows(height: number): number {
+  return Math.max(1, height - 4 - COMPOSER_ROWS);
+}
 
 /** Memoized (perf pass #259 discipline) — same rationale as TranscriptView:
  * a chat can carry thousands of rows, and every keystroke's setState should
@@ -117,8 +126,7 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
     () => (state.summary === null ? [] : anchorIds(state.summary)),
     [state.summary],
   );
-  // Reserved: borders ×2, header, footer, composer.
-  const visible = Math.max(1, p.height - 4 - COMPOSER_ROWS);
+  const visible = chatVisibleRows(p.height);
   const { start, end } = bodyWindow({
     rows,
     anchors,
@@ -158,11 +166,12 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
         focused={p.focused && !state.composerFocused}
         onScrollMax={p.onScrollMax}
         onRowPress={p.onRowPress}
+        onScrollTo={p.onScrollTo}
       />
       <Text dimColor wrap="truncate">
         {state.composerFocused
-          ? "esc blur/abort · ctrl+j newline · / commands"
-          : "i compose · ↑/↓ move · enter expand · s submit · e edit · r route · D discard · t thinking · f follow"}
+          ? "esc blur/abort · ctrl+j newline · / commands · ⇞⇟ scroll"
+          : "i compose · ↑/↓ scroll · ⇞⇟ page · tab card · enter expand · s submit · e edit · r route · D discard · t thinking · f follow"}
         {rows.length > 0 ? ` · ${start + 1}–${end}/${rows.length}` : ""}
       </Text>
       <Composer

@@ -473,12 +473,17 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
 
     c.push(10, metaLine());
     await until(() => api.chat!.summary !== null);
-    // moveCursor's n === 0 branch: summary exists, no anchors yet.
+    // moveCursor's n === 0 branch: summary exists, no anchors yet. A true
+    // no-op — `follow` included. It used to drop follow regardless, which on
+    // an anchor-less Q&A chat (where `tab` is the cursor key now) unpinned the
+    // window from the tail and, with a never-scrolled offset of 0, jumped the
+    // view to the top of the conversation.
+    expect(api.chat!.follow).toBe(true);
     api.moveCursor(1);
-    await until(() => api.chat!.follow === false);
+    // Negative assertion: give a (buggy) state update a bounded window to land.
+    await new Promise((r) => setTimeout(r, 40));
     expect(api.chat!.cursor).toBe(0);
-    api.setFollow(true);
-    await until(() => api.chat!.follow === true);
+    expect(api.chat!.follow).toBe(true);
 
     c.push(20, toolStartId("tool-1", "read", { path: "x" }));
     c.push(30, toolEndId("tool-1", "read", "ok"));

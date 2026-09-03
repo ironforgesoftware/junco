@@ -93,6 +93,7 @@ function mount(
     currentNwo?: string;
     draft?: PendingDraft | null;
     prContextFails?: boolean;
+    visibleRows?: number;
   } = {},
 ): { readonly api: ChatInputApi; calls: string[]; setChat: (c: ChatState | null) => void } {
   const calls: string[] = [];
@@ -139,10 +140,10 @@ function mount(
     setView: (v) => void calls.push(`view:${v}`),
     setPane: (p) => void calls.push(`pane:${p}`),
     scrollBy: (d) => void calls.push(`scroll:${d}`),
+    scrollTo: (o) => void calls.push(`scrollTo:${o}`),
     toEnd: rec("toEnd"),
-    moveRail: (d) => void calls.push(`rail:${d}`),
-    moveRailTo: (i) => void calls.push(`railTo:${i}`),
-    railCount: 7,
+    // A 10-row body ⇒ a page is 9 rows (visibleRows - 1, one row of overlap).
+    visibleRows: o.visibleRows ?? 10,
   };
   const holder: { api: ChatInputApi | null } = { api: null };
   function Probe({ chat }: { chat: ChatState | null }): React.JSX.Element {
@@ -180,61 +181,102 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
   });
 
   it("the composer only owns the keys while the CHAT pane holds the focus", () => {
-    // `openChat` (the rail-switch effect) resets composerFocused while pane 1
-    // still has the focus — ChatView's Composer is inactive there, so the
-    // cascade must read it as blurred or nothing owns the keys at all.
+    // Defence in depth: ChatView hands the Composer `focused &&
+    // composerFocused`, so with pane 1 focused its useGuardedInput is inactive
+    // — reading `composerFocused` alone here would claim every key for a hook
+    // that isn't listening. The cascade must read that state as blurred.
     const h = mount({ chat: chatState({ composerFocused: true }), pane: 1 });
     expect(h.api.handleChatKey("j", K())).toBe(true);
     h.api.handleChatKey("i", K());
-    expect(h.calls).toEqual(["rail:1", "focus:true", "pane:2"]);
+    expect(h.calls).toEqual(["scroll:1", "focus:true", "pane:2"]);
   });
 
-  it("blurred: the movement/scroll/expand keys and the pane doors", () => {
+  it("blurred: ↑/↓ (and j/k, [/]) scroll the transcript a row at a time", () => {
     const h = mount();
     const api = h.api;
     api.handleChatKey("i", K());
     api.handleChatKey("j", K());
+    api.handleChatKey("k", K());
+    api.handleChatKey("", K({ downArrow: true }));
     api.handleChatKey("", K({ upArrow: true }));
-    api.handleChatKey("", K({ return: true }));
-    api.handleChatKey(" ", K());
     api.handleChatKey("]", K());
     api.handleChatKey("[", K());
-    api.handleChatKey("h", K());
-    api.handleChatKey("", K({ leftArrow: true }));
-    api.handleChatKey("", K({ rightArrow: true }));
-    api.handleChatKey("", K({ tab: true }));
+    api.handleChatKey("", K({ return: true }));
+    api.handleChatKey(" ", K());
     api.handleChatKey("G", K());
     api.handleChatKey("g", K());
+    api.handleChatKey("", K({ end: true }));
+    api.handleChatKey("", K({ home: true }));
     expect(h.calls).toEqual([
       // `i` takes the pane back with the focus (the Composer's hook is gated
       // on both), which is why this reads as two calls.
       "focus:true",
       "pane:2",
-      "cursor:1",
-      "cursor:-1",
-      "expand",
-      "expand",
       "scroll:1",
       "scroll:-1",
-      "pane:1",
-      "pane:1",
-      "pane:2",
-      "pane:1", // tab toggles: this mount sits on pane 2
+      "scroll:1",
+      "scroll:-1",
+      "scroll:1",
+      "scroll:-1",
+      "expand",
+      "expand",
+      "follow:true",
+      "follow:false",
+      "scroll:-1000000",
       "follow:true",
       "follow:false",
       "scroll:-1000000",
     ]);
-    // …and back the other way from pane 1, so the help modal's "tab switches
-    // panes" line holds in this view too.
-    const t = mount({ pane: 1 });
-    t.api.handleChatKey("", K({ tab: true }));
-    expect(t.calls).toEqual(["pane:2"]);
   });
 
-  it("blurred: [ on a followed chat lands at the tail first, then steps up", () => {
+  it("blurred: PgUp/PgDn move a page — visibleRows minus one row of overlap", () => {
+    const h = mount();
+    h.api.handleChatKey("", K({ pageDown: true }));
+    h.api.handleChatKey("", K({ pageUp: true }));
+    expect(h.calls).toEqual(["scroll:9", "scroll:-9"]);
+    // A one-row body still pages by a row, never by zero.
+    const tiny = mount({ visibleRows: 1 });
+    tiny.api.handleChatKey("", K({ pageDown: true }));
+    expect(tiny.calls).toEqual(["scroll:1"]);
+  });
+
+  it("blurred: scrolling up on a followed chat lands at the tail first, then steps", () => {
+    for (const key of [K({ upArrow: true }), K({ pageUp: true })]) {
+      const h = mount({ chat: chatState({ follow: true }) });
+      h.api.handleChatKey("", key);
+      expect(h.calls.slice(0, 2)).toEqual(["toEnd", "follow:false"]);
+    }
     const h = mount({ chat: chatState({ follow: true }) });
     h.api.handleChatKey("[", K());
     expect(h.calls).toEqual(["toEnd", "follow:false", "scroll:-1"]);
+  });
+
+  it("blurred: tab walks the cards forward, shift+tab back", () => {
+    const h = mount();
+    h.api.handleChatKey("", K({ tab: true }));
+    // Ink reports shift+tab as tab with the shift modifier set.
+    h.api.handleChatKey("", K({ tab: true, shift: true }));
+    expect(h.calls).toEqual(["cursor:1", "cursor:-1"]);
+  });
+
+  it("blurred: tab off a followed chat lands at the tail first, like every other pause", () => {
+    // `moveCursor` pauses follow when it actually moves, and a paused window
+    // falls back to the stored offset — 0 on a chat nobody has scrolled — so
+    // the cursor key needs the same toEnd() recipe the scroll keys use.
+    const h = mount({ chat: chatState({ follow: true }) });
+    h.api.handleChatKey("", K({ tab: true }));
+    expect(h.calls).toEqual(["toEnd", "cursor:1"]);
+  });
+
+  it("focused: PgUp/PgDn scroll the transcript — they are keys, not text", () => {
+    const h = mount({ chat: chatState({ composerFocused: true }) });
+    expect(h.api.handleChatKey("", K({ pageUp: true }))).toBe(true);
+    h.api.handleChatKey("", K({ pageDown: true }));
+    expect(h.calls).toEqual(["scroll:-9", "scroll:9"]);
+    // …pausing follow first, exactly as the blurred recipe does.
+    const f = mount({ chat: chatState({ composerFocused: true, follow: true }) });
+    f.api.handleChatKey("", K({ pageUp: true }));
+    expect(f.calls).toEqual(["toEnd", "follow:false", "scroll:-9"]);
   });
 
   it("blurred: esc leaves the view, and an unbound key is swallowed", () => {
@@ -247,18 +289,28 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     expect(p.calls).toEqual([]);
   });
 
-  it("pane 1 routes the movement keys to the RAIL (spec §8.1), not the chat cursor", () => {
-    const h = mount({ pane: 1 });
-    const api = h.api;
-    api.handleChatKey("j", K());
-    api.handleChatKey("k", K());
-    api.handleChatKey("", K({ downArrow: true }));
-    api.handleChatKey("g", K());
-    api.handleChatKey("G", K());
-    expect(h.calls).toEqual(["rail:1", "rail:-1", "rail:1", "railTo:0", "railTo:6"]);
-    // The doors still work from pane 1 — `l` returns focus to the chat.
-    api.handleChatKey("l", K());
-    expect(h.calls).toContain("pane:2");
+  it("onScrollTo (the scrollbar's jump) pauses follow before moving the window", () => {
+    const h = mount({ chat: chatState({ follow: true }) });
+    h.api.onScrollTo(12);
+    // No `toEnd` here, unlike a step up: the offset IS the destination, so
+    // landing at the tail first would only paint a frame nobody asked for.
+    expect(h.calls).toEqual(["follow:false", "scrollTo:12"]);
+  });
+
+  it("the pane doors are gone: h/l and ←/→ are swallowed, and the rail never moves", () => {
+    // The chat view is full-screen with no rail painted, so there is nothing
+    // to walk into: these keys are unbound here, and unbound means swallowed
+    // (never falling through to the main-view tail of App's cascade).
+    for (const [input, key] of [
+      ["h", K()],
+      ["l", K()],
+      ["", K({ leftArrow: true })],
+      ["", K({ rightArrow: true })],
+    ] as const) {
+      const h = mount();
+      expect(h.api.handleChatKey(input, key)).toBe(true);
+      expect(h.calls, input).toEqual([]);
+    }
   });
 });
 
