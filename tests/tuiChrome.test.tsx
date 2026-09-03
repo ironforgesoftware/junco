@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { Box } from "ink";
@@ -7,6 +7,9 @@ import type { HealthInfo } from "../src/tui/ghClient.js";
 import type { FooterRows } from "../src/tui/footerModel.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
 import { until, fireUntil, wait } from "./helpers/until.js";
+import { renderWide, cleanupWide } from "./helpers/renderWide.js";
+import { buildContextBindings, type BindingContext } from "../src/tui/viewActions.js";
+import { buildFooterRows } from "../src/tui/footerModel.js";
 
 const NOW = new Date("2026-07-07T10:00:00Z");
 
@@ -463,5 +466,68 @@ describe("Footer (two rows, spec 2026-09-02 §3)", () => {
     r.stdin.write(press(a!.indexOf("import"), 0));
     await wait(60);
     expect(hits).toEqual(["chat", "enter"]);
+  });
+});
+
+// The rows above are hand-built and short. These render what the app actually
+// derives — the full wide `main issues pane 2` navigate vocabulary (↑↓ / ←→ /
+// ⏎ / / / g G / : / ,) and an overlay's — at a width where the pinned chips
+// land past column 100, which is exactly where a 100-column frame buffer stops
+// telling the truth. See tests/helpers/renderWide.tsx for the mechanism.
+describe("Footer with the REAL derived rows (wide, pinned chips past col 100)", () => {
+  afterEach(cleanupWide);
+
+  const rowsFor = (context: BindingContext, target: string) =>
+    buildFooterRows({
+      context,
+      bindings: buildContextBindings(context, "wide"),
+      target,
+      chatReachable: true,
+      mode: "wide",
+    });
+
+  const navigateLine = (context: BindingContext, target: string, columns: number): string => {
+    const r = renderWide(
+      <Box width={columns} flexDirection="column">
+        <Footer rows={rowsFor(context, target)} toast={null} />
+      </Box>,
+      columns,
+    );
+    return (r.lastFrame() ?? "").split("\n")[1] ?? "";
+  };
+
+  it("main issues pane 2: ? help and quit keep their gap at the right edge", () => {
+    const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 120);
+    // Two spaces before `? help` (the spacer plus the run's own margin) and two
+    // between the pinned chips — never `? helpquit`.
+    expect(nav).toMatch(/ {2}\? help {2}quit\s*$/);
+    // …and the row really is the full wide vocabulary, not a short fixture.
+    expect(nav).toContain("g G");
+    expect(nav).toContain("palette");
+  });
+
+  it("an overlay: ? help and close keep their gap at the right edge", () => {
+    const nav = navigateLine({ kind: "view", view: "detail" }, "issue #46", 120);
+    // `close` derives the reserved `q`, which is not a letter of its label, so
+    // footerSegments renders it key-first — `q close`, not `close` (unlike
+    // main's `quit`, whose winning char IS its own first letter).
+    expect(nav).toMatch(/ {2}\? help {2}q close\s*$/);
+    expect(nav).toContain("scroll");
+  });
+
+  it("holds as the terminal widens — the spacer grows, the gaps do not change", () => {
+    for (const columns of [120, 150, 200]) {
+      const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", columns);
+      expect(nav, `columns=${columns}`).toMatch(/ {2}\? help {2}quit\s*$/);
+    }
+  });
+
+  it("clips from the right when the row genuinely does not fit", () => {
+    // The wide vocabulary needs 117 columns; at 108 the row overflows, so the
+    // LAST pinned chip is clipped away rather than wrapped onto a third line.
+    const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 108);
+    expect(nav.length).toBeLessThanOrEqual(108);
+    expect(nav).toContain("? help");
+    expect(nav).not.toContain("quit");
   });
 });
