@@ -350,9 +350,10 @@ the agent can submit a draft it parked — after you confirm in the dashboard; s
 Session state lives under the [unified data root](#unified-data-root): one directory per repo
 at `<dataDir>/data/chats/<slug>/` (`meta.json`, the transcript, and the SDK's own session
 file), and parked drafts at `<dataDir>/data/chat-drafts/` — the same `makeReviewStore` idiom
-`audit`/`investigate` findings use. A chat session's tools are the same read-only subset a Q&A
-ticket gets — the hard rule against widening that default applies here too. The chat only ever
-drafts work — it never performs it.
+`audit`/`investigate` findings use. A chat session's file tools are the same read-only subset a
+Q&A ticket gets, plus exactly one action tool, `junco_submit`, which only submits a draft the
+chat already parked and only after you confirm on the dashboard card (`chat.submitTool`); the
+hard rule against widening that default still applies to everything else.
 
 `/chat/*` is **loopback-only regardless of `healthHost`** and rejects any request carrying an
 `Origin` header — there is no additional auth to configure. See [Operations § Health &
