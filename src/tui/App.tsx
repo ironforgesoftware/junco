@@ -1347,6 +1347,15 @@ export function App(props: AppProps): React.JSX.Element {
   // bare `() => setPane(1)` in the ternary that decides whether it's mounted
   // at all — hoisting the function itself keeps IT stable across renders.
   const railPanePress = useCallback(() => setPane(1), []);
+  // #488: pane cycling shared by the `tab` key and the wide layout's combined
+  // `←/→ panes` cap, which is ONE chip for two directions — the
+  // openQueueTranscript precedent, so the cap and the key can never drift.
+  // `maxPane` is the same predicate the key branch used inline (pane 3 exists
+  // only for a wide issues body).
+  const cyclePane = useCallback((): void => {
+    const maxPane: Pane = layout.mode === "wide" && body?.kind === "issues" ? 3 : 2;
+    setPane((p) => (p >= maxPane ? 1 : ((p + 1) as Pane)));
+  }, [layout.mode, body?.kind]);
   // `assessHistory` is a stable `useState` Map (only its OWN poll replaces
   // it), but the inline `(nwo) => assessHistory.get(nwo) ?? null` arrow at the
   // JSX call site was rebuilt every render regardless — hoisted here so its
@@ -1638,6 +1647,9 @@ export function App(props: AppProps): React.JSX.Element {
           // only pane the navigate row draws it in.
           ":": openPalette,
           "→": () => setPane(2),
+          // #488: pane 2's wide layout draws ONE cap for both directions, so
+          // its id is `←/→` — neither `←` nor `→` above ever matched it.
+          "←/→": cyclePane,
           "/": () => {
             if (body?.kind !== "issues") return;
             setFiltering(true);
@@ -1674,6 +1686,7 @@ export function App(props: AppProps): React.JSX.Element {
     openDetail,
     paletteEnter,
     openPalette,
+    cyclePane,
     setLogOverlay,
     setLogSearchMode,
   ]);
@@ -2122,7 +2135,7 @@ export function App(props: AppProps): React.JSX.Element {
     }
     const maxPane: Pane = layout.mode === "wide" && body?.kind === "issues" ? 3 : 2;
     if (key.tab) {
-      return void setPane((p) => (p >= maxPane ? 1 : ((p + 1) as Pane)));
+      return void cyclePane();
     }
     if (input === "h" || key.leftArrow) return void setPane((p) => (p > 1 ? ((p - 1) as Pane) : p));
     if (input === "l" || key.rightArrow) {
