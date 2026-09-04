@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractDrafts, FRONTMATTER_ALLOWLIST } from "../src/chat/fenceExtract.js";
+import { extractPlanSetBody } from "../src/githubInbox.js";
 
 const ctx = { repo: "/repo/acme-api", nwo: "acme/api", planSetsEnabled: true };
 const fence = (fm: string, body: string, tag = "junco-ticket") =>
@@ -202,6 +203,25 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
     expect(off[0]!.blocked).toBe("plan_sets_disabled");
     const both = extractDrafts(plan + "\n" + fence("id: t", "# T"), ctx);
     expect(both.map((d) => d.kind).sort()).toEqual(["planSet", "ticket"]);
+  });
+
+  it("the parked plan.md outruns any fence inside the plan body (#451)", () => {
+    // A column-0 ``` inside the body would truncate the rewrapped plan at that
+    // line for BOTH the dashboard relint and `junco submit --plan`, which read
+    // these same bytes through extractPlanSetBody.
+    const body = [
+      "version: 1",
+      "tasks:",
+      "  - id: a",
+      "    title: A",
+      "```",
+      "an embedded block",
+      "```",
+    ].join("\n");
+    const [d] = extractDrafts("````junco-plan\n" + body + "\n````", ctx);
+    expect(d!.kind).toBe("planSet");
+    expect(d!.files[0]!.content.startsWith("````junco-plan\n")).toBe(true);
+    expect(extractPlanSetBody(d!.files[0]!.content)).toBe(body);
   });
 
   it("invalid YAML frontmatter is a problem, not a throw", () => {

@@ -8,7 +8,12 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { DraftKind } from "../agent/transcriptSchema.js";
 import { PLAN_FENCE } from "../planPrompt.js";
-import { PLAN_SET_FENCE, allFencedBlocks, extractPatchBody } from "../githubInbox.js";
+import {
+  PLAN_SET_FENCE,
+  allFencedBlocks,
+  extractPatchBody,
+  longestBacktickRun,
+} from "../githubInbox.js";
 
 export const FRONTMATTER_ALLOWLIST: ReadonlySet<string> = new Set([
   "id",
@@ -296,12 +301,18 @@ export function extractDrafts(text: string, ctx: ExtractCtx): ExtractedDraft[] {
   const ticketDraft = extractTicketDraft(text, ctx);
   if (ticketDraft) out.push(ticketDraft);
   for (const plan of allFencedBlocks(text, PLAN_SET_FENCE)) {
+    // The outer fence must outrun any fence INSIDE the body, or the rewrapped
+    // plan truncates at the inner one — for the dashboard's relint and for
+    // `junco submit --plan`, which read these same bytes through
+    // extractPlanSetBody. Min 4, the count buildPlanComment uses and the
+    // planner prompt teaches (R16).
+    const fence = "`".repeat(Math.max(4, longestBacktickRun(plan) + 1));
     out.push({
       kind: "planSet",
       files: [
         {
           name: "plan.md",
-          content: `\`\`\`${PLAN_SET_FENCE}\n${plan}\n\`\`\`\n`,
+          content: `${fence}${PLAN_SET_FENCE}\n${plan}\n${fence}\n`,
           frontmatter: {},
           body: plan,
           droppedKeys: [],
