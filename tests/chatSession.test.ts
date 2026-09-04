@@ -9,7 +9,20 @@ import type {
   SessionOverrides,
 } from "../src/agent/session.js";
 import { makeConfig, READ_ONLY_TOOLS, type ConfigSeams } from "./helpers/config.js";
-import { fakeChatSession, chatScriptText, type FakeChatSession } from "./helpers/fakeSession.js";
+import {
+  fakeChatSession,
+  chatScriptText,
+  chatScriptToolCall,
+  type FakeChatSession,
+} from "./helpers/fakeSession.js";
+import { fakeSpawn } from "./helpers/fakeSpawn.js";
+import { until } from "./helpers/until.js";
+import {
+  draftFilePath,
+  listChatDrafts,
+  writeChatDraft,
+  type PendingDraft,
+} from "../src/chat/draftStore.js";
 import { parseTranscriptLine, TRANSCRIPT_VERSION } from "../src/agent/transcriptSchema.js";
 
 /** Reusable so the junco_submit block below can vary `chat` off the same
@@ -873,5 +886,173 @@ describe("junco_submit wiring (spec 2026-09-03)", () => {
       status: "expired",
       detail: "daemon restarted",
     });
+  });
+});
+
+/**
+ * #477: every case above drives the handshake with NO turn in flight. These
+ * run it through a REAL `prompt()` — the fake session invokes the registered
+ * `junco_submit` exactly as the SDK does (tests/helpers/fakeSession.ts's
+ * `toolCall` step) — so the cross-boundary properties are pinned here rather
+ * than only in the sandbox-gated e2e: the record ORDER inside the turn, the
+ * turn deadline paused WHILE the tool blocks, and the tool's own per-call
+ * signal firing on abort.
+ */
+describe("the junco_submit handshake inside a real turn (#477)", () => {
+  const parked = (root: string): PendingDraft => ({
+    id: "acme__api-20260903-120000-1",
+    key: "acme/api",
+    slug: "acme__api",
+    kind: "ticket",
+    files: [
+      {
+        name: "add-readme.md",
+        content: "---\nid: add-readme\n---\n# T\n",
+        lint: [],
+        route: null,
+        droppedKeys: [],
+      },
+    ],
+    cwd: root,
+    nwo: "acme/api",
+    createdAt: "2026-09-03T00:00:00.000Z",
+    lintFailed: false,
+    blocked: null,
+    routeOverride: "auto",
+    commandArgs: null,
+  });
+
+  /** A ChatSession whose one scripted turn calls `junco_submit`, over a real
+   *  drafts dir and a fake CLI spawner. */
+  function toolTurn(opts: { confirmTimeoutMs?: number; exitCode?: number } = {}) {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const cfg477 = makeConfig({
+      ...cfgSeams,
+      dataDir: root,
+      queueRoot: join(root, "queue"),
+      worktreeRoot: join(root, "wt"),
+    });
+    writeChatDraft(cfg477, parked(root));
+    const { spawnFn, calls } = fakeSpawn((c) => {
+      c.stdout.emit("data", Buffer.from("queued add-readme\n"));
+      c.emit("close", opts.exitCode ?? 0);
+    });
+    let sdk: FakeChatSession | null = null;
+    const session = new ChatSession(
+      {
+        cfg: cfg477,
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        dir: join(root, "acme__api"),
+      },
+      {
+        makeSessionManager: fakeSm,
+        sessionFactoryFor: (_c, _w, o) => async () =>
+          (sdk = await fakeChatSession([chatScriptToolCall("call-1", {})], o)()),
+        submit: { spawnFn, cliPath: "/dist/cli.js" },
+        ...(opts.confirmTimeoutMs === undefined ? {} : { confirmTimeoutMs: opts.confirmTimeoutMs }),
+      },
+    );
+    const cmdRows = (): Array<{ status: string; detail: string | null }> =>
+      readFileSync(join(root, "acme__api", "transcript.jsonl"), "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((r) => r.type === "junco_chat_command")
+        .map((r) => ({ status: String(r.status), detail: (r.detail ?? null) as string | null }));
+    const types = (): string[] => records(join(root, "acme__api", "transcript.jsonl"));
+    return { session, cfg: cfg477, root, calls, cmdRows, types, sdk: () => sdk };
+  }
+
+  const prompted = { source: "operator" as const, timeoutMs: 60_000, abortGraceMs: 20 };
+
+  it("run: the tool blocks inside the turn, the deadline is paused, and the CLI runs on y", async () => {
+    const t = toolTurn();
+    const started = await t.session.startPrompt("submit it", prompted);
+    await until(() => t.session.pendingCommandId === "call-1");
+    // The pause is on the RUNNING turn's clock, not a test-made one.
+    expect(t.session.turnDeadlineForTest?.paused).toBe(true);
+    expect(t.session.streaming).toBe(true);
+    expect(t.session.decide("call-1", "run")).toBe(true);
+    const r = await started.done;
+    expect(r.status).toBe("ok");
+    expect(t.calls[0]).toEqual([
+      "/dist/cli.js",
+      "submit",
+      draftFilePath(t.cfg, "acme__api-20260903-120000-1", "add-readme.md"),
+    ]);
+    expect(t.cmdRows()).toEqual([
+      { status: "proposed", detail: null },
+      { status: "ran", detail: null },
+    ]);
+    // The draft was archived, so the card's own note is written too — and the
+    // turn ends normally after the tool returns.
+    expect(t.types()).toEqual([
+      "junco_meta",
+      "junco_chat_prompt",
+      "junco_chat_turn_start",
+      "junco_chat_command",
+      "junco_chat_draft",
+      "junco_chat_command",
+      "message_start",
+      "turn_end",
+      "agent_end",
+      "agent_settled",
+      "junco_chat_turn_end",
+    ]);
+    expect(listChatDrafts(t.cfg)).toEqual([]);
+    // The tool's text is what the model relays.
+    expect(t.sdk()!.toolCalls[0]!.text).toContain("submitted → inbox · add-readme (exit 0)");
+    // Resumed the moment the confirmation settled, and cleared with the turn.
+    expect(t.session.turnDeadlineForTest).toBeNull();
+  });
+
+  it("decline: the turn ends ok, nothing is spawned, the draft stays parked", async () => {
+    const t = toolTurn();
+    const started = await t.session.startPrompt("submit it", prompted);
+    await until(() => t.session.pendingCommandId === "call-1");
+    expect(t.session.decide("call-1", "decline")).toBe(true);
+    expect((await started.done).status).toBe("ok");
+    expect(t.calls).toEqual([]);
+    expect(t.cmdRows()).toEqual([
+      { status: "proposed", detail: null },
+      { status: "declined", detail: null },
+    ]);
+    expect(listChatDrafts(t.cfg).map((d) => d.id)).toEqual(["acme__api-20260903-120000-1"]);
+  });
+
+  it("abort while the tool blocks: command{aborted} lands BEFORE turn_aborted, tool signal fires", async () => {
+    const t = toolTurn();
+    const started = await t.session.startPrompt("submit it", prompted);
+    await until(() => t.session.pendingCommandId === "call-1");
+    expect(await t.session.abort()).toBe(true);
+    expect((await started.done).status).toBe("aborted");
+    expect(t.calls).toEqual([]);
+    const order = t.types().filter((x) => x.startsWith("junco_chat_"));
+    expect(order).toEqual([
+      "junco_chat_prompt",
+      "junco_chat_turn_start",
+      "junco_chat_command", // proposed
+      "junco_chat_command", // aborted — before the turn's own record
+      "junco_chat_turn_aborted",
+    ]);
+    expect(t.cmdRows().at(-1)).toEqual({ status: "aborted", detail: null });
+    // The SDK's per-call signal fired too (belt and braces, spec §3.3).
+    expect(t.sdk()!.toolCalls[0]!.signalAborted).toBe(true);
+    expect(t.sdk()!.toolCalls[0]!.text).toContain("the turn was aborted");
+  });
+
+  it("expiry: the confirm budget settles the tool and the turn finishes normally", async () => {
+    const t = toolTurn({ confirmTimeoutMs: 20 });
+    const started = await t.session.startPrompt("submit it", prompted);
+    expect((await started.done).status).toBe("ok");
+    expect(t.calls).toEqual([]);
+    expect(t.cmdRows()).toEqual([
+      { status: "proposed", detail: null },
+      { status: "expired", detail: "no decision in 10m" },
+    ]);
+    expect(t.session.pendingCommandId).toBeNull();
   });
 });

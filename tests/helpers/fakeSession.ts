@@ -122,6 +122,30 @@ export interface ChatScript {
   delayMs?: number;
   /** prompt() rejects with this message instead of emitting. */
   throws?: string;
+  /**
+   * Invoke the session's ONE registered custom tool (spec 2026-09-03 §3.2)
+   * instead of emitting canned text: prompt() calls
+   * `customTools[0].execute(id, args, signal)` and resolves when it returns,
+   * then emits the tool's own result text as the turn's answer.
+   */
+  toolCall?: { id: string; args?: Record<string, unknown> };
+}
+
+/** The SDK's `ToolDefinition`, the parts a `toolCall` step needs — structural
+ * on purpose so this helper stays free of any src/chat import. */
+interface FakeCustomTool {
+  name: string;
+  execute(
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ content: Array<{ type: "text"; text: string }> }>;
+}
+
+/** What the session factory was handed — `SessionOverrides` satisfies it
+ * structurally, so a test can pass the overrides straight through. */
+export interface FakeChatToolHost {
+  customTools?: unknown[];
 }
 
 export interface FakeChatSession extends ChatSessionLike {
@@ -129,6 +153,9 @@ export interface FakeChatSession extends ChatSessionLike {
   steers: string[];
   aborted: number;
   disposed: boolean;
+  /** One entry per `toolCall` step that ran: the tool's result text and
+   *  whether its per-call signal had fired by the time it returned. */
+  toolCalls: Array<{ id: string; text: string; signalAborted: boolean }>;
 }
 
 /** message_start + one text_delta + turn_end(usage, costUsd) + agent_end +
@@ -154,22 +181,38 @@ export function chatScriptText(text: string, costUsd = 0): ChatScript {
   };
 }
 
+/** A step that CALLS the registered `junco_submit` (#477) rather than
+ * emitting canned text — the only fake that crosses the SDK's tool boundary,
+ * so the handshake's in-turn properties are provable without a live model. */
+export function chatScriptToolCall(id: string, args: Record<string, unknown> = {}): ChatScript {
+  return { events: [], toolCall: { id, args } };
+}
+
 /**
  * PUSH-based (unlike makeSession above): events are emitted from prompt(), to
  * whoever is subscribed at that moment, because a chat session is prompted
  * many times over its life. `messages` grows by two per completed prompt.
+ *
+ * `host` is the `SessionOverrides` the factory was handed; a `toolCall` step
+ * runs `host.customTools[0]` with a per-call AbortSignal that abort() fires,
+ * exactly as the SDK aborts a running tool's signal.
  */
-export function fakeChatSession(scripts: ChatScript[]): () => Promise<FakeChatSession> {
+export function fakeChatSession(
+  scripts: ChatScript[],
+  host: FakeChatToolHost = {},
+): () => Promise<FakeChatSession> {
   return async () => {
     const listeners = new Set<(e: AgentEvent) => void>();
     let streaming = false;
     let resolveAbort: (() => void) | null = null;
+    let toolAbort: AbortController | null = null;
     let turn = 0;
     const s: FakeChatSession = {
       prompts: [],
       steers: [],
       aborted: 0,
       disposed: false,
+      toolCalls: [],
       messages: [],
       get isStreaming() {
         return streaming;
@@ -193,11 +236,33 @@ export function fakeChatSession(scripts: ChatScript[]): () => Promise<FakeChatSe
         let resolveAbortSignal!: () => void;
         const abortSignal = new Promise<void>((r) => (resolveAbortSignal = r));
         resolveAbort = resolveAbortSignal;
+        const ctl = new AbortController();
+        toolAbort = ctl;
         try {
           if (script.throws) throw new Error(script.throws);
           s.messages.push({ role: "user", content: text });
           await new Promise<void>((r) => queueMicrotask(r));
           for (const e of script.events) for (const l of listeners) l(e as AgentEvent);
+          if (script.toolCall) {
+            const tool = (host.customTools ?? [])[0] as FakeCustomTool | undefined;
+            if (tool === undefined)
+              throw new Error("fakeChatSession: a toolCall step needs a registered custom tool");
+            const r = await tool.execute(
+              script.toolCall.id,
+              script.toolCall.args ?? {},
+              ctl.signal,
+            );
+            const out = r.content.map((c) => c.text).join("");
+            s.toolCalls.push({
+              id: script.toolCall.id,
+              text: out,
+              signalAborted: ctl.signal.aborted,
+            });
+            // The model relays the tool result as its answer — the same
+            // message shape a plain scripted turn ends with.
+            for (const e of chatScriptText(out).events)
+              for (const l of listeners) l(e as AgentEvent);
+          }
           let timer: ReturnType<typeof setTimeout>;
           await Promise.race([
             new Promise<void>((r) => (timer = setTimeout(r, script.delayMs ?? 1))),
@@ -208,6 +273,7 @@ export function fakeChatSession(scripts: ChatScript[]): () => Promise<FakeChatSe
         } finally {
           streaming = false;
           resolveAbort = null;
+          toolAbort = null;
         }
       },
       async steer(text: string) {
@@ -215,6 +281,9 @@ export function fakeChatSession(scripts: ChatScript[]): () => Promise<FakeChatSe
       },
       async abort() {
         s.aborted++;
+        // The SDK aborts the RUNNING TOOL's own signal as well as the run —
+        // the belt to ChatSession.abort()'s braces (spec 2026-09-03 §3.3).
+        toolAbort?.abort();
         resolveAbort?.();
       },
       dispose() {

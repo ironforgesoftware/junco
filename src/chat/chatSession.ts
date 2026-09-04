@@ -791,6 +791,13 @@ export class ChatSession {
     };
   }
 
+  /** Tests only (#477): the clock the RUNNING turn is on, so a confirmation
+   *  pending inside a real `prompt()` can be observed as paused. Null between
+   *  turns. */
+  get turnDeadlineForTest(): TurnDeadline | null {
+    return this.turnDeadline;
+  }
+
   /** Tests only: a turn deadline without a turn, so the pause is observable. */
   deadlineForTest(ms: number): TurnDeadline {
     const deadline = new TurnDeadline(ms, this.now);
