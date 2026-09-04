@@ -63,6 +63,15 @@ function draftId(slug: string, now: number): string {
   return `${slug}-${ts}-${++seq}`;
 }
 
+/** A parking-time note that is not a lint verdict: today only the salvage
+ * note of #454. A WARNING, deliberately — a salvaged draft is submittable,
+ * and `draftLintFailed` counts errors only. */
+const noteRow = (message: string): LintViolation => ({
+  rule: "chat_aborted_turn",
+  severity: "warning",
+  message,
+});
+
 /** One extracted draft's files, linted and routed by the SHARED per-file pass
  * (draftLint.ts) the review surface's re-lint also runs (R26), with this
  * path's own fence-extraction problems layered in front of its violations. */
@@ -71,6 +80,7 @@ async function lintFiles(
   session: SessionRef,
   x: ExtractedDraft,
   deps: ParkDeps,
+  note: string | undefined,
 ): Promise<DraftFile[]> {
   const files: DraftFile[] = [];
   for (const [i, f] of x.files.entries()) {
@@ -90,7 +100,13 @@ async function lintFiles(
     files.push({
       name: slugifyId(f.name),
       content: f.content,
-      lint: [...problemsFor(x, i), ...lint],
+      // The note rides on the FIRST file, where a set's other set-wide rows
+      // land too — it is a property of the turn, not of one ticket.
+      lint: [
+        ...(i === 0 && note !== undefined ? [noteRow(note)] : []),
+        ...problemsFor(x, i),
+        ...lint,
+      ],
       route,
       droppedKeys: f.droppedKeys,
     });
@@ -103,11 +119,13 @@ export async function parkDrafts(
   session: SessionRef,
   extracted: ExtractedDraft[],
   deps: ParkDeps = {},
+  /** A note to carry on the draft's first file (the salvage note, #454). */
+  note?: string,
 ): Promise<PendingDraft[]> {
   const now = deps.now ?? ((): number => Date.now());
   const out: PendingDraft[] = [];
   for (const x of extracted) {
-    const files = await lintFiles(cfg, session, x, deps);
+    const files = await lintFiles(cfg, session, x, deps, note);
     const at = now();
     const draft: PendingDraft = {
       id: draftId(session.slug, at),
@@ -148,10 +166,19 @@ export function lintFollowUp(drafts: PendingDraft[]): string | null {
 /**
  * ChatManager.onTurnComplete: extract → park → record → decide the retry.
  *
- * The follow-up is offered only for an `operator` turn, so a retry that still
- * fails parks its violations and stops (the manager enforces the same rule on
- * its side — the two together make "exactly one, never chained" hold even if
- * a future caller returns a followUp from an auto_lint turn).
+ * The follow-up is offered only for an `operator` turn that ended `ok`, so a
+ * retry that still fails parks its violations and stops (the manager enforces
+ * the same rule on its side — the two together make "exactly one, never
+ * chained" hold even if a future caller returns a followUp from an auto_lint
+ * turn), and a turn the operator or the timeout just stopped never starts
+ * another one.
+ *
+ * #454: a SOFT-ABORTED turn (operator `/abort`, per-turn timeout, daemon
+ * stop) is scanned too, the way the PR flow salvages an aborted run's commits
+ * into a PR. Only a COMPLETE fence survives — `allFencedBlocks` needs the
+ * closer, so a fence the abort cut in half is not a draft — and what it parks
+ * carries a note saying the turn never finished. An `error` turn parks
+ * nothing: the model failed, it did not get interrupted.
  */
 export function makeTurnHook(
   cfg: () => Config,
@@ -170,7 +197,8 @@ export function makeTurnHook(
     // not its retry) would remove a draft the operator was still looking at.
     const previous = source === "auto_lint" ? pendingRetry.get(session.slug) : undefined;
     if (source === "auto_lint") pendingRetry.delete(session.slug);
-    if (result.mode !== "prompt" || result.status !== "ok") return;
+    if (result.mode !== "prompt") return;
+    if (result.status !== "ok" && result.status !== "aborted") return;
     const c = cfg();
     // Spec §6.1 / Ruling R35: the FINAL assistant message is the answer, so
     // that is what gets scanned whenever it carries a fence — a model that
@@ -184,7 +212,15 @@ export function makeTurnHook(
       planSetsEnabled: c.planSets.enabled,
     });
     if (extracted.length === 0) return;
-    const parked = await parkDrafts(c, session, extracted, deps);
+    const parked = await parkDrafts(
+      c,
+      session,
+      extracted,
+      deps,
+      result.status === "aborted"
+        ? `emitted before the turn was aborted (${result.abortReason ?? "stopped"})`
+        : undefined,
+    );
     // The rejected first attempt is REMOVED, not archived: it was never a card
     // the operator saw, and its retry is on disk now (spec §6.3) — which is
     // why this runs here, on the retry that actually parked something, and not
@@ -200,7 +236,7 @@ export function makeTurnHook(
         destination: null,
       });
     const followUp = lintFollowUp(parked);
-    if (followUp !== null && source === "operator") {
+    if (followUp !== null && source === "operator" && result.status === "ok") {
       pendingRetry.set(
         session.slug,
         parked.filter((d) => d.lintFailed).map((d) => d.id),

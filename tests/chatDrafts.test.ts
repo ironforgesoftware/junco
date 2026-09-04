@@ -503,6 +503,130 @@ describe("lintFollowUp + makeTurnHook (spec 2026-09-01 §6.3)", () => {
     expect(listChatDrafts(cfg).map((d) => d.id)).toContain(failed[0]!.id);
   });
 
+  it("salvages a COMPLETE fence from a soft-aborted turn, with a note (#454)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const session = await turnHookSession(cfg, root);
+    const hook = makeTurnHook(() => cfg, { routeFn: routeInbox });
+    const good = "````junco-ticket\n---\nid: good\n---\n" + CLEAN_BODY + "\n````";
+    const r = await hook(
+      session,
+      {
+        mode: "prompt",
+        status: "aborted",
+        abortReason: "operator",
+        errorMessage: null,
+        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+        durationMs: 1,
+        finalText: good,
+        allText: good,
+      },
+      "operator",
+    );
+    const parked = listChatDrafts(cfg);
+    expect(parked).toHaveLength(1);
+    // Salvaged, not quarantined: the note is a WARNING, so `s` still works.
+    expect(parked[0]!.lintFailed).toBe(false);
+    expect(parked[0]!.files[0]!.lint).toContainEqual({
+      rule: "chat_aborted_turn",
+      severity: "warning",
+      message: "emitted before the turn was aborted (operator)",
+    });
+    // Nothing to follow up: the turn is over.
+    expect(r === undefined || !("followUp" in r) || r.followUp === undefined).toBe(true);
+  });
+
+  it("never parks an UNCLOSED fence from an aborted turn (#454)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const session = await turnHookSession(cfg, root);
+    const hook = makeTurnHook(() => cfg, { routeFn: routeInbox });
+    // The turn died mid-fence: the closer never arrived.
+    const half = "````junco-ticket\n---\nid: half\n---\n" + CLEAN_BODY;
+    await hook(
+      session,
+      {
+        mode: "prompt",
+        status: "aborted",
+        abortReason: "timeout",
+        errorMessage: null,
+        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+        durationMs: 1,
+        finalText: half,
+        allText: "here it comes\n\n" + half,
+      },
+      "operator",
+    );
+    expect(listChatDrafts(cfg)).toEqual([]);
+    // An OK turn is held to the same rule — an unclosed fence is not a draft.
+    await hook(
+      session,
+      {
+        mode: "prompt",
+        status: "ok",
+        abortReason: null,
+        errorMessage: null,
+        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+        durationMs: 1,
+        finalText: half,
+        allText: half,
+      },
+      "operator",
+    );
+    expect(listChatDrafts(cfg)).toEqual([]);
+  });
+
+  it("an aborted turn's lint-failing fence parks, and asks for no retry (#454)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const session = await turnHookSession(cfg, root);
+    const hook = makeTurnHook(() => cfg, { routeFn: routeInbox });
+    const bad =
+      "````junco-ticket\n---\nid: bad\n---\n# Bad\n\n## Steps\n\n### Step 1 — run the tests\n\n1. cd src && npm test\n````";
+    const r = await hook(
+      session,
+      {
+        mode: "prompt",
+        status: "aborted",
+        abortReason: "timeout",
+        errorMessage: null,
+        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+        durationMs: 1,
+        finalText: bad,
+        allText: bad,
+      },
+      "operator",
+    );
+    expect(listChatDrafts(cfg)).toHaveLength(1);
+    expect(listChatDrafts(cfg)[0]!.lintFailed).toBe(true);
+    // The auto-lint follow-up would start a NEW turn on a chat the operator
+    // (or the timeout) just stopped.
+    expect(r === undefined || !("followUp" in r) || r.followUp === undefined).toBe(true);
+  });
+
+  it("an errored turn still parks nothing (#454 salvages aborts only)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const session = await turnHookSession(cfg, root);
+    const hook = makeTurnHook(() => cfg, { routeFn: routeInbox });
+    const good = "````junco-ticket\n---\nid: good\n---\n" + CLEAN_BODY + "\n````";
+    await hook(
+      session,
+      {
+        mode: "prompt",
+        status: "error",
+        abortReason: null,
+        errorMessage: "429 rate limited",
+        usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+        durationMs: 1,
+        finalText: good,
+        allText: good,
+      },
+      "operator",
+    );
+    expect(listChatDrafts(cfg)).toEqual([]);
+  });
+
   it("a still-failing retry parks lintFailed and returns no further followUp", async () => {
     const root = mkdtempSync(join(tmpdir(), "junco-park-"));
     const cfg = cfgAt(root);
