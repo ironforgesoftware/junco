@@ -24,6 +24,7 @@ import { chatSlug } from "./chatKey.js";
 import { resolveChatCwd, type ChatCwdError } from "./chatCwd.js";
 import { ChatSession, type ChatSessionDeps, type ChatSubscriber } from "./chatSession.js";
 import type { ChatTurnResult } from "./chatTurn.js";
+import type { SubmitExecDeps } from "./submitExec.js";
 
 export interface ChatStatus {
   key: string;
@@ -62,6 +63,10 @@ export interface ChatManagerDeps {
   spend: Pick<SpendLedger, "recordUsd" | "todayUsd" | "nextMidnightMs">;
   resolveCwd?: typeof resolveChatCwd;
   session?: ChatSessionDeps;
+  /** How a confirmed `junco_submit` reaches the CLI (spec 2026-09-03 §3.4).
+   *  The daemon passes nothing — the real spawner and the real draft store;
+   *  tests inject `spawnFn`/`cliPath`. */
+  submit?: SubmitExecDeps;
   /** Draft parking (chatDrafts.ts) attaches here; best-effort — a throw never
    *  fails the turn the operator just ran. A returned `followUp` is the ONE
    *  automatic lint retry (spec §6.3): prompt() sends it back with
@@ -133,7 +138,11 @@ export class ChatManager {
         nwo: cwd.nwo,
         dir: join(dataTreePaths(cfg).chats, slug),
       },
-      { ...this.deps.session, now: this.deps.now ?? this.deps.session?.now },
+      {
+        ...this.deps.session,
+        now: this.deps.now ?? this.deps.session?.now,
+        ...(this.deps.submit ? { submit: this.deps.submit } : {}),
+      },
     );
     this.sessions.set(slug, session);
     return { ok: true, value: session };
@@ -263,6 +272,19 @@ export class ChatManager {
       if (set.size === 0) this.inFlightTurns.delete(slug);
     });
     return done;
+  }
+
+  /** POST /chat/decide (spec 2026-09-03 §4.5): the dashboard's y/n for a
+   *  pending `junco_submit`. `settled: false` is the 409 — a stale card, or a
+   *  decision that raced the confirm timeout. */
+  async decide(
+    key: string,
+    commandId: string,
+    decision: "run" | "decline",
+  ): Promise<ChatResult<{ settled: boolean }>> {
+    const got = await this.get(key);
+    if (!got.ok) return got;
+    return { ok: true, value: { settled: got.value.decide(commandId, decision) } };
   }
 
   async abort(key: string): Promise<ChatResult<{ aborted: boolean }>> {

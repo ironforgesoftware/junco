@@ -329,3 +329,32 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     if (p.ok) await p.value.done;
   });
 });
+
+describe("ChatManager.decide (spec 2026-09-03 §3.3)", () => {
+  it("settles a pending confirmation and reports false for an unknown id", async () => {
+    const { m } = setup();
+    const got = await m.get("acme/api");
+    if (!got.ok) throw new Error(got.error);
+    await got.value.ensureMeta();
+    const p = got.value.confirmSubmit({ commandId: "c1", draftId: "d", ids: [], route: "inbox" });
+    expect(await m.decide("acme/api", "zzz", "run")).toEqual({
+      ok: true,
+      value: { settled: false },
+    });
+    expect(await m.decide("acme/api", "c1", "run")).toEqual({ ok: true, value: { settled: true } });
+    expect(await p).toBe("run");
+  });
+
+  it("answers a disabled chat the way every other verb does", async () => {
+    const { cfg } = setup();
+    const off = new ChatManager({
+      cfg: () => ({ ...cfg, chat: { ...cfg.chat, enabled: false } }),
+      gate: fakeGate(),
+      spend: fakeSpend(),
+    });
+    expect(await off.decide("acme/api", "c1", "run")).toEqual({
+      ok: false,
+      error: "chat_disabled",
+    });
+  });
+});

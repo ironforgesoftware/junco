@@ -40,7 +40,8 @@ export type StructuralOnlyView =
   | "config"
   | "help"
   | "filtering"
-  | "chatCompose";
+  | "chatCompose"
+  | "chatConfirm";
 
 export type BindingContext =
   /** The main view's context is PANE-scoped for CHIP rendering only (Ruling
@@ -277,6 +278,12 @@ function structuralOnly(view: StructuralOnlyView): Chip[] {
       // this is the navigate row, so it lists only what still works WHILE
       // typing — PgUp/PgDn are not text, so they still page the transcript.
       return [s("pgup/pgdn", "scroll"), s("esc", "blur")];
+    case "chatConfirm":
+      // A junco_submit card is waiting (spec 2026-09-03 §4.3): the answer keys
+      // live on the ACTIONS row (footerModel.ts); this navigate row lists what
+      // still works meanwhile. Empty keymap on purpose — no draft verb may
+      // fire while the daemon holds a submit of that same draft.
+      return [s("↑/↓", "scroll"), s("pgup/pgdn", "page"), s("i", "compose"), s("esc", "back")];
   }
 }
 

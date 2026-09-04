@@ -21,6 +21,8 @@ export interface ChatTurnOpts {
   /** Wedge grace after an abort (default 60s); tests short-circuit it. */
   abortGraceMs?: number;
   now?: () => number;
+  /** Session-owned so the submit tool can pause it; absent → a private one. */
+  deadline?: TurnDeadline;
 }
 
 export interface ChatTurnResult {
@@ -36,6 +38,80 @@ export interface ChatTurnResult {
 
 const ABORT_GRACE_MS = 60_000;
 const ZERO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
+
+/**
+ * The per-turn timeout as a PAUSABLE deadline (spec 2026-09-03 §3.3): while a
+ * `junco_submit` call waits for the operator's y/n the clock stops, so a slow
+ * human never trips the turn's 30-minute budget — the confirmation has its own.
+ * Arithmetic, not wall-clock: `remaining` shrinks only by armed spans.
+ */
+export class TurnDeadline {
+  private remaining: number;
+  private armedAt: number | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private onFire: (() => void) | null = null;
+  private isPaused = false;
+
+  constructor(
+    ms: number,
+    private readonly now: () => number = () => Date.now(),
+  ) {
+    this.remaining = ms;
+  }
+
+  get paused(): boolean {
+    return this.isPaused;
+  }
+
+  get remainingMs(): number {
+    return this.armedAt === null
+      ? this.remaining
+      : Math.max(0, this.remaining - (this.now() - this.armedAt));
+  }
+
+  arm(onFire: () => void): void {
+    this.onFire = onFire;
+    if (!this.isPaused) this.start();
+  }
+
+  pause(): void {
+    if (this.isPaused) return;
+    this.isPaused = true;
+    this.stop();
+  }
+
+  resume(): void {
+    if (!this.isPaused) return;
+    this.isPaused = false;
+    if (this.onFire !== null) this.start();
+  }
+
+  clear(): void {
+    this.stop();
+    this.onFire = null;
+  }
+
+  private start(): void {
+    this.armedAt = this.now();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.armedAt = null;
+      this.remaining = 0;
+      this.onFire?.();
+    }, this.remaining);
+  }
+
+  private stop(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.armedAt !== null) {
+      this.remaining = Math.max(0, this.remaining - (this.now() - this.armedAt));
+      this.armedAt = null;
+    }
+  }
+}
 
 export async function runChatTurn(
   session: ChatSessionLike,
@@ -98,7 +174,8 @@ export async function runChatTurn(
     void session.abort().catch(() => {});
     armAbortGrace();
   };
-  const timer = setTimeout(() => softAbort("timeout"), opts.timeoutMs);
+  const deadline = opts.deadline ?? new TurnDeadline(opts.timeoutMs, now);
+  deadline.arm(() => softAbort("timeout"));
   const onExternalAbort = (): void => softAbort("operator");
   opts.abortSignal?.addEventListener("abort", onExternalAbort, { once: true });
 
@@ -123,7 +200,7 @@ export async function runChatTurn(
   } catch (e) {
     thrown = e instanceof Error ? e.message : String(e);
   } finally {
-    clearTimeout(timer);
+    deadline.clear();
     if (graceTimer !== undefined) clearTimeout(graceTimer);
     opts.abortSignal?.removeEventListener("abort", onExternalAbort);
     unsubscribe?.();

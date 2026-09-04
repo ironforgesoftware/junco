@@ -461,6 +461,12 @@ export interface SessionOverrides {
    *  `appendSystemPromptOverride` + `reload()`. Absent → the loader is built
    *  exactly as before (sandboxed) or skipped entirely (unsandboxed). */
   appendSystemPrompt?: string;
+  /** Chat (spec 2026-09-03 §3.2): bespoke tool definitions to register beside
+   *  the built-ins — opaque here (plain objects shaped like the SDK's
+   *  ToolDefinition), cast at the SDK boundary below like the sandbox tools.
+   *  The SDK enables a custom tool only when `tools` lists its name (0.84.4
+   *  `dist/core/agent-session.js` `_refreshToolRegistry`). */
+  customTools?: unknown[];
 }
 
 export interface ResolveSandboxDeps {
@@ -900,11 +906,14 @@ export function makePiSessionFactory(
             : {}),
         },
       }),
-      // Sandboxed tool set + no-extensions loader (only when enabled). The
-      // sandbox glue is intentionally SDK-free (returns unknown[]); cast here at
-      // the single SDK boundary. Shapes are validated by tests/sandboxBuild +
-      // the platform-gated integration suite.
-      ...(sandboxTools ? { customTools: sandboxTools as never } : {}),
+      // Sandboxed tool set + no-extensions loader (only when enabled), plus
+      // any caller-supplied custom tool (the chat's junco_submit). Both are
+      // intentionally SDK-free (unknown[]); cast here at the single SDK
+      // boundary. Shapes are validated by tests/sandboxBuild +
+      // tests/submitTool + the platform-gated integration suite.
+      ...(sandboxTools || overrides?.customTools
+        ? { customTools: [...(sandboxTools ?? []), ...(overrides?.customTools ?? [])] as never }
+        : {}),
       ...(sandboxLoader ? { resourceLoader: sandboxLoader as never } : {}),
     });
     return session;

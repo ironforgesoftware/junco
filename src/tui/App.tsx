@@ -429,7 +429,7 @@ export function App(props: AppProps): React.JSX.Element {
   const chatApi = useChat({ client, aliveRef });
   // `chatApi` is a fresh object every render, so everything below closes over
   // these members instead (each a stable useCallback) — react-hooks deps.
-  const { chat: chatState, openChat, moveCursor: moveChatCursor, reloadDrafts } = chatApi;
+  const { chat: chatState, openChat, moveCursor: moveChatCursor, reloadDrafts, decide } = chatApi;
   // A draft verb changes both surfaces that list it: the review view and the
   // chat pane's own card (spec §6.6).
   const onDraftChanged = useCallback((): void => {
@@ -1409,6 +1409,7 @@ export function App(props: AppProps): React.JSX.Element {
     logOverlay,
     filtering,
     composerFocused,
+    chatPending: (chatState?.pending ?? null) !== null,
     mode: layout.mode,
     columns: size.columns,
     target: footerTarget,
@@ -1595,10 +1596,11 @@ export function App(props: AppProps): React.JSX.Element {
       case "help":
         return {};
       case "chat":
-        // Deliberately none (like `help`): the chat view's `esc` is a state
-        // machine (abort / blur / leave, spec §8.3) owned by useChatInput, and
-        // a chip recipe here would be a second copy of it. Keyboard-only.
-        return {};
+        // The esc state machine (abort / blur / leave, spec §8.3) stays
+        // keyboard-only — a chip recipe here would be a second copy of
+        // useChatInput's. The junco_submit card's y/n are the one exception
+        // (spec 2026-09-03 §4.3): a mouse user has no other way to answer it.
+        return { y: () => void decide("run"), n: () => void decide("decline") };
       case "main":
         return {
           ",": () => setView("config"),
@@ -1622,6 +1624,7 @@ export function App(props: AppProps): React.JSX.Element {
     confirm,
     logOverlay,
     view,
+    decide,
     prDetail,
     transcriptFrom,
     selectedPr,

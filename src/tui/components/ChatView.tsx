@@ -66,6 +66,10 @@ export function chatHeaderStatus(
       text: `blocked: ${s.blocked.reason}${s.blocked.until ? ` until ${hhmm(s.blocked.until)}` : ""}`,
       tone: "warn",
     };
+  // Spec 2026-09-03 §4.3: the turn IS still streaming while junco_submit
+  // blocks on the operator, and "◐ streaming" would say nothing about what it
+  // is waiting for — so the card's word wins.
+  if (s.pending) return { text: "◐ awaiting your confirmation", tone: "accent" };
   if (s.streaming) return { text: "◐ streaming", tone: "accent" };
   if (s.connection !== "live") return { text: s.connection, tone: "dim" };
   return {
@@ -186,8 +190,16 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
       />
       <Text dimColor wrap="truncate">
         {state.composerFocused
-          ? "esc blur/abort · ctrl+j newline · / commands · ⇞⇟ scroll"
-          : "i compose · ↑/↓ scroll · ⇞⇟ page · tab card · enter expand · s submit · e edit · r route · D discard · t thinking · f follow"}
+          ? // esc does not abort while a submit card waits (useChatInput):
+            // aborting the turn would settle the very card the operator is
+            // being asked about, so there esc only blurs back to it.
+            `esc blur${state.pending === null ? "/abort" : ""} · ctrl+j newline · / commands · ⇞⇟ scroll`
+          : state.pending !== null
+            ? // The draft verbs are unbound while a junco_submit waits (spec
+              // 2026-09-03 §4.3, chatConfirm's empty keymap), so this line
+              // must not advertise them — it mirrors the footer's two rows.
+              "y submit · n keep parked · ↑/↓ scroll · ⇞⇟ page · enter expand · i compose · esc back"
+            : "i compose · ↑/↓ scroll · ⇞⇟ page · tab card · enter expand · s submit · e edit · r route · D discard · t thinking · f follow"}
         {rows.length > 0 ? ` · ${start + 1}–${end}/${rows.length}` : ""}
       </Text>
       <Composer

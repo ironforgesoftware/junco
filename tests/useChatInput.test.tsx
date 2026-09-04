@@ -68,6 +68,7 @@ const chatState = (over: Partial<ChatState> = {}): ChatState => ({
   expanded: new Set(),
   lastOffset: null,
   error: null,
+  pending: null,
   ...over,
 });
 
@@ -85,6 +86,14 @@ const DRAFT: PendingDraft = {
   routeOverride: "auto",
   commandArgs: null,
 };
+
+/** A parked draft with ONE file — `/submit`'s resolution reads both the draft
+ * id and the file stem (draftStore.findChatDraft's rules, spec §3.1). */
+const draftFixture = (id: string, file: string): PendingDraft => ({
+  ...DRAFT,
+  id,
+  files: [{ name: file, content: "", lint: [], route: null, droppedKeys: [] }],
+});
 
 function mount(
   o: {
@@ -117,6 +126,7 @@ function mount(
     setFollow: (on) => void calls.push(`follow:${String(on)}`),
     reloadDrafts: async () => {},
     selectedDraft: () => o.draft ?? null,
+    decide: async (d) => void calls.push(`decide:${d}`),
   };
   const client: DashboardClient = {
     ...stubClient,
@@ -177,6 +187,22 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     const t = mount({ chat: chatState({ composerFocused: true }) });
     expect(t.api.handleChatKey("q", K())).toBe(true);
     expect(t.calls).toEqual([]);
+  });
+
+  it("focused: esc does NOT abort while a submit card waits — it blurs back to the card", () => {
+    // `junco_submit` blocks inside the turn, so `streaming` is true the whole
+    // time the card is up. Aborting here would settle the very proposal the
+    // footer's `i compose` invited the operator to step away from (final
+    // review #1): the card goes `aborted` and the ask has to be repeated.
+    const p = mount({
+      chat: chatState({
+        composerFocused: true,
+        streaming: true,
+        pending: { commandId: "c1", draftId: "d1", ids: ["add-readme"], route: "inbox" },
+      }),
+    });
+    expect(p.api.handleChatKey("", K({ escape: true }))).toBe(true);
+    expect(p.calls).toEqual(["focus:false"]);
   });
 
   it("the composer owns the keys whenever it is focused — the pane is not consulted", () => {
@@ -328,6 +354,22 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
       expect(h.calls, input).toEqual([]);
     }
   });
+  // Spec 2026-09-03 §4.3: while a junco_submit card waits, y/n answer it.
+  // The draft verbs are unbound meanwhile (chatConfirm's EMPTY keymap, which
+  // the cascade layer above this hook derives), so the same draft cannot be
+  // submitted twice.
+  it("blurred with a pending submit: y runs, n declines; nothing answers without a card", () => {
+    const pending = { commandId: "c1", draftId: "d", ids: ["t"], route: "inbox" as const };
+    const h = mount({ chat: chatState({ pending }) });
+    h.api.handleChatKey("y", K());
+    h.api.handleChatKey("n", K());
+    expect(h.calls).toEqual(["decide:run", "decide:decline"]);
+    // No card ⇒ y/n are unbound chat keys: consumed by the view, no decision.
+    const idle = mount();
+    expect(idle.api.handleChatKey("y", K())).toBe(true);
+    idle.api.handleChatKey("n", K());
+    expect(idle.calls).toEqual([]);
+  });
 });
 
 describe("useChatInput — the verbs (spec §8.6)", () => {
@@ -450,5 +492,35 @@ describe("useChatInput — the slash router (spec §8.2)", () => {
     h.api.onComposerSubmit("/new");
     h.api.onComposerSubmit("/nope");
     expect(h.calls).toEqual(["abort", "fresh", "toast:error:unknown command /nope"]);
+  });
+
+  it("/submit submits the only parked draft through the card's path; names one by ticket id; refuses while pending", () => {
+    const d1 = draftFixture("acme__api-1", "add-readme.md");
+    const d2 = draftFixture("acme__api-2", "other.md");
+    const one = mount({ chat: chatState({ drafts: [d1] }) });
+    one.api.onComposerSubmit("/submit");
+    expect(one.calls).toEqual(["submit:acme__api-1"]);
+    const two = mount({ chat: chatState({ drafts: [d1, d2] }) });
+    two.api.onComposerSubmit("/submit");
+    expect(two.calls[0]).toMatch(/^toast:error:several drafts are parked/);
+    two.api.onComposerSubmit("/submit other");
+    expect(two.calls[1]).toBe("submit:acme__api-2");
+    two.api.onComposerSubmit("/submit acme__api-1"); // by draft id too
+    expect(two.calls[2]).toBe("submit:acme__api-1");
+    two.api.onComposerSubmit("/submit nope");
+    expect(two.calls[3]).toBe(
+      'toast:error:no parked draft named "nope" — parked: add-readme; other',
+    );
+    const none = mount({ chat: chatState({ drafts: [] }) });
+    none.api.onComposerSubmit("/submit");
+    expect(none.calls).toEqual(["toast:error:nothing is parked — /draft first"]);
+    const busy = mount({
+      chat: chatState({
+        drafts: [d1],
+        pending: { commandId: "c", draftId: "acme__api-1", ids: ["add-readme"], route: "inbox" },
+      }),
+    });
+    busy.api.onComposerSubmit("/submit");
+    expect(busy.calls[0]).toMatch(/^toast:info:a submit is already awaiting/);
   });
 });

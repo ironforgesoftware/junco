@@ -326,14 +326,18 @@ On a hit the push is refused: the ticket fails, the worktree is **preserved** fo
 
 `chat` configures the dashboard's per-repo chat with the coding agent (press `t` on a repo
 row) — a file-backed Pi session that lives in the **daemon**, not the dashboard process, so it
-survives both a dashboard quit and a daemon restart.
+survives both a dashboard quit and a daemon restart. With `chat.submitTool` on (the default)
+the agent can submit a draft it parked — after you confirm in the dashboard; see
+[Dashboard](dashboard.md).
 
-| Key                       | Default | Reload  | Effect                                                                                                                                    |
-| ------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `chat.enabled`            | `true`  | live    | Serve `/chat/*` on the health server and accept new chat turns; existing session state on disk is untouched when off.                     |
-| `chat.modelId`            | unset   | restart | Model id override for chat turns (same resolution machinery as `model.id`); unset falls back to `github.plannerModelId`, then `model.id`. |
-| `chat.thinkingLevel`      | unset   | restart | Thinking level for chat turns; unset falls back to `model.thinkingLevel`.                                                                 |
-| `chat.turnTimeoutMinutes` | unset   | restart | Per-turn timeout for a chat prompt; unset falls back to `worker.defaultTimeoutMinutes` (30).                                              |
+| Key                          | Default | Reload  | Effect                                                                                                                                                                                                      |
+| ---------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chat.enabled`               | `true`  | live    | Serve `/chat/*` on the health server and accept new chat turns; existing session state on disk is untouched when off.                                                                                       |
+| `chat.modelId`               | unset   | restart | Model id override for chat turns (same resolution machinery as `model.id`); unset falls back to `github.plannerModelId`, then `model.id`.                                                                   |
+| `chat.thinkingLevel`         | unset   | restart | Thinking level for chat turns; unset falls back to `model.thinkingLevel`.                                                                                                                                   |
+| `chat.turnTimeoutMinutes`    | unset   | restart | Per-turn timeout for a chat prompt; unset falls back to `worker.defaultTimeoutMinutes` (30).                                                                                                                |
+| `chat.submitTool`            | `true`  | restart | Register the `junco_submit` tool on new chat sessions, so "submit it" in the chat proposes the parked draft for your `y`/`n` (see [Dashboard § chat](dashboard.md)). `false` keeps the model drafting only. |
+| `chat.confirmTimeoutMinutes` | `10`    | restart | How long a proposed submit waits for your decision before it expires and the draft stays parked.                                                                                                            |
 
 ```json
 {
@@ -346,9 +350,10 @@ survives both a dashboard quit and a daemon restart.
 Session state lives under the [unified data root](#unified-data-root): one directory per repo
 at `<dataDir>/data/chats/<slug>/` (`meta.json`, the transcript, and the SDK's own session
 file), and parked drafts at `<dataDir>/data/chat-drafts/` — the same `makeReviewStore` idiom
-`audit`/`investigate` findings use. A chat session's tools are the same read-only subset a Q&A
-ticket gets — the hard rule against widening that default applies here too. The chat only ever
-drafts work — it never performs it.
+`audit`/`investigate` findings use. A chat session's file tools are the same read-only subset a
+Q&A ticket gets, plus exactly one action tool, `junco_submit`, which only submits a draft the
+chat already parked and only after you confirm on the dashboard card (`chat.submitTool`); the
+hard rule against widening that default still applies to everything else.
 
 `/chat/*` is **loopback-only regardless of `healthHost`** and rejects any request carrying an
 `Origin` header — there is no additional auth to configure. See [Operations § Health &

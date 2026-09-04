@@ -328,6 +328,8 @@ const FLAT_KEYS: Record<string, string[]> = {
   "chat.modelId": ["chat.modelId"],
   "chat.thinkingLevel": ["chat.thinkingLevel"],
   "chat.turnTimeoutMinutes": ["chat.turnTimeoutMinutes"],
+  "chat.submitTool": ["chat.submitTool"],
+  "chat.confirmTimeoutMinutes": ["chat.confirmTimeoutMinutes"],
   "assess.maxIssuesPerRun": ["assess.maxIssuesPerRun"],
   "assess.minSeverity": ["assess.minSeverity"],
   "assess.npmBin": ["assess.npmBin"],

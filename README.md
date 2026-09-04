@@ -164,15 +164,19 @@ do?", "is there a cheaper way to do #42?"), and when you want work done, ask for
 ticket: the agent drafts it inline and junco parks it for you to review, the same confirm gate
 `audit`/`investigate` above use. `s` submits the draft, `e` opens it in `$EDITOR`,
 `r` cycles its route (auto → inbox → issue), `D` discards it — nothing is ever
-submitted, filed, or dispatched without that confirm. Every dispatch branch is
-reachable from the conversation: a plain ticket, a ticket set, a plan set, an amend
-on an open PR, an apply-ticket patch, or a request to `audit`/`investigate`. `/pr N`
+submitted, filed, or dispatched without that confirm. Ask the agent to submit a draft
+it just parked and, with `chat.submitTool` on (the default), it calls its one action
+tool, `junco_submit`, itself — proposing the same submit as a `y`/`n` card instead of
+the `s` key, and reporting back what actually happened once you decide. Every dispatch
+branch is reachable from the conversation: a plain ticket, a ticket set, a plan set, an
+amend on an open PR, an apply-ticket patch, or a request to `audit`/`investigate`. `/pr N`
 and `/issue N` pull that PR or issue's context into the conversation. The session
 lives in the daemon, not the dashboard, so it survives a dashboard quit or a daemon
 restart; `junco transcript --chat owner/repo` prints one outside the TUI. The
-chat's tools are the same read-only subset a Q&A ticket gets, and `/chat/*` never
-leaves loopback.
-→ [ARCHITECTURE.md § The chat path](ARCHITECTURE.md#the-chat-path-dashboard-chat)
+chat's tools are the same read-only subset a Q&A ticket gets, plus that one action
+tool; `/chat/*` never leaves loopback.
+→ [ARCHITECTURE.md § The chat path](ARCHITECTURE.md#the-chat-path-dashboard-chat) ·
+[Dashboard](docs/dashboard.md)
 
 ## Sixty seconds to a running worker
 

@@ -342,6 +342,19 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       keycap: true,
     });
   });
+  it("chat view, a submit awaiting confirmation: y/n are the actions row, and nothing else is", () => {
+    const r = rows({ kind: "structuralOnly", view: "chatConfirm" }, { target: "acme/api" });
+    expect(texts(r.actions.chips)).toEqual(["pill:y:submit", "structural:n:keep parked"]);
+    // The navigate row lists what still works while the card waits — no
+    // draft verb among them (the keymap is empty by construction).
+    expect(texts(r.navigate.chips)).toEqual([
+      "structural:↑/↓:scroll",
+      "structural:pgup/pgdn:page",
+      "structural:i:compose",
+      "structural:esc:back",
+    ]);
+    expect(r.navigate.pinned).toEqual([]);
+  });
   it("chat view, blurred: draft verbs on actions, the chat's own scrolling on navigate", () => {
     const r = rows({ kind: "view", view: "chat" }, { target: "acme/api" });
     expect(texts(r.actions.chips)).toEqual([

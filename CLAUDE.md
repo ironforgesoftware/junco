@@ -35,7 +35,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 - **Every side effect goes behind an injectable `deps` seam** (see any module's `*Deps` interface). Tests never touch the network or a real model: fake `gh` is an inline-generated shell script, fake sessions implement `AgentSessionLike`.
 - Dependencies are **exact-pinned** (no `^`): add with `npm install --save-exact <pkg>`.
 - Many comments cite `worker.py` line numbers (Python-port provenance) or SDK `.d.ts` locations — they are verification evidence, not noise. Keep them true or delete them with the code they describe; never let them drift.
-- `/chat/*` on the health server is loopback-only by construction (`chatRoutes.ts` checks the socket address and rejects any `Origin` header) — `healthHost` never widens it. The chat session's tools are the Q&A read-only subset; drafts pass a frontmatter allowlist (`fenceExtract.ts`) — never let model output set `repo:`/`tools:`/`network:`/`workdir:`.
+- `/chat/*` on the health server is loopback-only by construction (`chatRoutes.ts` checks the socket address and rejects any `Origin` header) — `healthHost` never widens it. The chat session's tools are the Q&A read-only subset plus exactly one action tool, `junco_submit` (spec `docs/superpowers/specs/2026-09-03-chat-submit-tool-design.md`), which submits an already-parked draft only after the operator answers `y` on the dashboard card — never widen beyond that; drafts pass a frontmatter allowlist (`fenceExtract.ts`) — never let model output set `repo:`/`tools:`/`network:`/`workdir:`.
 
 ## Testing gotchas (each of these has burned a session)
 

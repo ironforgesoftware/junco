@@ -92,22 +92,55 @@ function withoutPlanSetExample(skillSections: string): string {
 }
 
 export function buildChatPrompt(
-  opts: { cwd: string; nwo: string | null; planSetsEnabled: boolean },
+  opts: {
+    cwd: string;
+    nwo: string | null;
+    planSetsEnabled: boolean;
+    /** Spec 2026-09-03 §5: whether the `junco_submit` tool is registered for
+     *  this session. Threaded through by chatSession.ts; selects the
+     *  framing's action-tool clause (on) or read-only clause (off). */
+    submitTool?: boolean;
+  },
   deps: { readFileFn?: (p: string) => string } = {},
 ): string {
   const repo = opts.nwo ?? opts.cwd;
   const allow = [...FRONTMATTER_ALLOWLIST].map((k) => `\`${k}\``).join(", ");
+  // Spec 2026-09-03 §5: one branch point drives both the framing's own
+  // read-only/action-tool clause and the #475 draft-card paragraph's callout
+  // for `junco_submit` — folded into this one ternary rather than a second
+  // `opts.submitTool ? … : …` written elsewhere in the function.
+  const { readOnlyFraming, submitClause, submitCardCallout } = opts.submitTool
+    ? {
+        // The tool is the one exception to the read-only framing; naming it
+        // there keeps the next sentence ("You have exactly one action tool")
+        // from reading as a contradiction (final review, Minor).
+        readOnlyFraming: "READ-ONLY except for `junco_submit`",
+        submitClause: `You have exactly one action tool, \`junco_submit\`: it submits a draft this chat has
+ALREADY parked — to the inbox, or as a parked GitHub issue — after the operator confirms in
+the dashboard. The call blocks until they decide; use it only when the operator asks to
+submit, queue, dispatch, or send a draft, and never in the same turn you draft it (a draft
+is parked when your turn ends, so it does not exist yet). Name the draft by its ticket id.
+Report exactly what the tool returned; never claim a submission the tool did not return
+"submitted" for. Everything else stays read-only: you never run a shell, and every other
+action is the operator's, on the dashboard.`,
+        submitCardCallout: " — or, when `junco_submit` is available, call it",
+      }
+    : {
+        readOnlyFraming: "READ-ONLY",
+        submitClause: `You never run, submit, or dispatch anything; junco parks every draft for the operator
+to review and submit. Never claim that a ticket was submitted, that a PR exists, or that
+work has started.`,
+        submitCardCallout: "",
+      };
   const framing = `You are the coding agent behind junco, a task-queue worker, chatting with its operator
 about the repository \`${repo}\` (your working directory: ${opts.cwd}). This session is
-READ-ONLY: explore with your tools, answer questions, and — when the operator asks for work
-to be done — DRAFT it as a junco ticket. You never run, submit, or dispatch anything; junco
-parks every draft for the operator to review and submit. Never claim that a ticket was
-submitted, that a PR exists, or that work has started.
+${readOnlyFraming}: explore with your tools, answer questions, and — when the operator asks for work
+to be done — DRAFT it as a junco ticket. ${submitClause}
 
 How a parked draft gets submitted: the dashboard shows it as a draft card under your
 message — \`s\` submits, \`e\` edits, \`r\` cycles the route, \`D\` discards — and the review
 view (\`v\`) lists every parked draft. When the operator asks you to submit, dispatch, or
-send a draft, point them at that card; never tell them to copy the fence into a file or
+send a draft, point them at that card${submitCardCallout}; never tell them to copy the fence into a file or
 to run \`junco submit\` by hand — the draft is already in junco's hands.`;
   const fenceContract = `--- DRAFTING CONTRACT ---
 

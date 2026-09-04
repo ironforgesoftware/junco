@@ -40,6 +40,7 @@ const base = (over: Partial<ChatState> = {}): ChatState => ({
   expanded: new Set(),
   lastOffset: null,
   error: null,
+  pending: null,
   ...over,
 });
 
@@ -61,6 +62,22 @@ describe("chatHeaderStatus (pure)", () => {
     expect(chatHeaderStatus(base({ endReason: "session_reset" }), "m").text).toBe(
       "session reset — send a message to start fresh",
     );
+  });
+
+  // Spec 2026-09-03 §4.3: a waiting junco_submit card outranks `streaming` —
+  // the turn IS still streaming while the tool blocks on the operator, and
+  // "◐ streaming" would say nothing about what it is waiting for.
+  it("a pending submit reads 'awaiting your confirmation', ahead of streaming", () => {
+    const pending = {
+      commandId: "call_1",
+      draftId: "acme__api-20260901-120000-1",
+      ids: ["add-readme"],
+      route: "inbox" as const,
+    };
+    expect(chatHeaderStatus(base({ pending, streaming: true }), "m")).toEqual({
+      text: "◐ awaiting your confirmation",
+      tone: "accent",
+    });
   });
 
   // Ruling R21b: useChat resubscribes automatically after an `end`, so
@@ -169,6 +186,36 @@ describe("ChatView", () => {
     expect(f).toContain("junco: thinking about it");
     expect(f).toContain("type a message"); // composer placeholder (blurred still renders)
     expect(f).toContain("i compose"); // footer: composer blurred variant
+  });
+
+  // Spec 2026-09-03 §4.3: the view's own hint line may not advertise the draft
+  // verbs while a junco_submit card holds that draft — they are off the keymap.
+  it("a pending submit rewrites the blurred hint line to the card's keys", async () => {
+    const r = render(
+      <ChatView
+        state={base({
+          composerFocused: false,
+          pending: {
+            commandId: "call_1",
+            draftId: "acme__api-20260901-120000-1",
+            ids: ["add-readme"],
+            route: "inbox",
+          },
+        })}
+        modelId={null}
+        costUsd={null}
+        scroll={0}
+        height={20}
+        width={100}
+        focused
+        onComposerChange={() => {}}
+        onComposerSubmit={() => {}}
+      />,
+    );
+    await until(() => (r.lastFrame() ?? "").includes("y submit · n keep parked"));
+    const f = r.lastFrame()!;
+    expect(f).toContain("◐ awaiting your confirmation");
+    expect(f).not.toContain("s submit · e edit");
   });
 
   it("shows the overflow note and disables the composer when the daemon is down", async () => {

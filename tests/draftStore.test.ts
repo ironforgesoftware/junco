@@ -9,6 +9,7 @@ import {
   draftFilesDir,
   draftJsonPath,
   draftsParkedFor,
+  findChatDraft,
   listChatDrafts,
   readChatDraft,
   removeChatDraft,
@@ -31,7 +32,7 @@ function cfgAt(root: string) {
     removeWorktreeOnSuccess: true,
   });
 }
-const draft = (id: string, slug = "acme__api"): PendingDraft => ({
+const draft = (id: string, slug = "acme__api", over: Partial<PendingDraft> = {}): PendingDraft => ({
   id,
   key: "acme/api",
   slug,
@@ -46,6 +47,14 @@ const draft = (id: string, slug = "acme__api"): PendingDraft => ({
   blocked: null,
   routeOverride: "auto",
   commandArgs: null,
+  ...over,
+});
+const draftFile = (name: string): PendingDraft["files"][number] => ({
+  name,
+  content: "",
+  lint: [],
+  route: null,
+  droppedKeys: [],
 });
 
 describe("chat draft store (spec 2026-09-01 §6.2)", () => {
@@ -100,5 +109,36 @@ describe("chat draft store (spec 2026-09-01 §6.2)", () => {
     expect(existsSync(draftJsonPath(cfg, "d1"))).toBe(true);
     removeChatDraft(cfg, "d1");
     expect(existsSync(draftJsonPath(cfg, "d1"))).toBe(false);
+  });
+
+  it("findChatDraft: by draft id, by ticket id, only-one, ambiguous, unknown, key-scoped", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-ds-"));
+    const cfg = cfgAt(root);
+    writeChatDraft(cfg, draft("acme__api-1", "acme__api", { files: [draftFile("add-readme.md")] }));
+    writeChatDraft(cfg, draft("acme__api-2", "acme__api", { files: [draftFile("other.md")] }));
+    writeChatDraft(
+      cfg,
+      draft("beta__two-1", "beta__two", {
+        key: "beta/two",
+        nwo: "beta/two",
+        files: [draftFile("beta-ticket.md")],
+      }),
+    );
+
+    expect(findChatDraft(cfg, "acme/api", "acme__api-1")).toMatchObject({ ok: true });
+    expect(findChatDraft(cfg, "acme/api", "add-readme")).toMatchObject({
+      ok: true,
+      draft: { id: "acme__api-1" },
+    });
+    expect(findChatDraft(cfg, "acme/api", undefined)).toMatchObject({
+      ok: false,
+      reason: "ambiguous",
+    });
+    expect(findChatDraft(cfg, "beta/two", undefined)).toMatchObject({ ok: true });
+    expect(findChatDraft(cfg, "acme/api", "nope")).toMatchObject({ ok: false, reason: "unknown" });
+    expect(findChatDraft(cfg, "acme/api", "beta-ticket")).toMatchObject({
+      ok: false,
+      reason: "unknown",
+    });
   });
 });

@@ -13,6 +13,7 @@
  * from the citations in `src/agent/guardManager.ts`).
  */
 import type {
+  ChatCommandRecord,
   ChatDraftRecord,
   ChatPromptRecord,
   ChatSessionResetRecord,
@@ -214,6 +215,21 @@ export const chatDraft = (over: Partial<ChatDraftRecord> = {}): string =>
     ts: TS,
     ...over,
   } satisfies ChatDraftRecord);
+export const chatCommand = (over: Partial<ChatCommandRecord> = {}): string =>
+  j({
+    type: "junco_chat_command",
+    commandId: "call_1",
+    command: "submit",
+    draftId: "acme__api-20260901-120000-1",
+    ids: ["add-readme"],
+    route: "inbox",
+    status: "proposed",
+    exitCode: null,
+    output: null,
+    detail: null,
+    ts: TS,
+    ...over,
+  } satisfies ChatCommandRecord);
 export const chatReset = (over: Partial<ChatSessionResetRecord> = {}): string =>
   j({
     type: "junco_chat_session_reset",

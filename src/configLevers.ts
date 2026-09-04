@@ -853,6 +853,24 @@ export const LEVERS: Lever[] = [
     reload: "restart",
     description: "Per-turn chat timeout; unset → worker.defaultTimeoutMinutes.",
   },
+  {
+    path: "chat.submitTool",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "restart",
+    description:
+      "Register the junco_submit tool on new chat sessions (the model can submit a parked draft after you confirm).",
+  },
+  {
+    path: "chat.confirmTimeoutMinutes",
+    type: "number",
+    default: 10,
+    min: 1,
+    editable: true,
+    reload: "restart",
+    description: "How long a proposed chat submit waits for y/n in the dashboard before expiring.",
+  },
 
   // --- assess.* ---
   {

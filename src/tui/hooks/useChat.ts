@@ -3,7 +3,12 @@ import type { MutableRefObject } from "react";
 import type { DashboardClient } from "../ghClient.js";
 import type { ChatConnState } from "../chatClient.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
-import { anchorIds, summarizeTranscript, type TranscriptSummary } from "../../transcriptSummary.js";
+import {
+  anchorIds,
+  commandAnchor,
+  summarizeTranscript,
+  type TranscriptSummary,
+} from "../../transcriptSummary.js";
 import { parseTranscriptLine } from "../../agent/transcriptSchema.js";
 
 export const CHAT_RING = 2000;
@@ -40,6 +45,8 @@ export interface ChatState {
   expanded: ReadonlySet<string>;
   lastOffset: number | null;
   error: string | null; // last POST failure (toast-worthy)
+  /** A junco_submit awaiting the operator's y/n (spec 2026-09-03 §4.1). */
+  pending: { commandId: string; draftId: string; ids: string[]; route: "inbox" | "issue" } | null;
 }
 
 export interface ChatApi {
@@ -63,6 +70,8 @@ export interface ChatApi {
   setFollow(on: boolean): void;
   reloadDrafts(): Promise<void>;
   selectedDraft(): PendingDraft | null; // the draft under the cursor, when the anchor is a draft
+  /** Answer the pending junco_submit card (spec 2026-09-03 §4.3). */
+  decide(decision: "run" | "decline"): Promise<void>;
 }
 
 const freshState = (key: string): ChatState => ({
@@ -86,6 +95,7 @@ const freshState = (key: string): ChatState => ({
   expanded: new Set(),
   lastOffset: null,
   error: null,
+  pending: null,
 });
 
 /**
@@ -136,6 +146,11 @@ export function useChat({
    *  without closing over a render's state. Every writer of `composer` below
    *  keeps it in sync. */
   const composerRef = useRef("");
+  /** The card `decide` answers, mirrored so the POST reads the state React has
+   *  already committed rather than a render's closure (the y/n key and the
+   *  footer chip both call it from outside this hook). Written in the render
+   *  body below — the only writer is `chat` itself. */
+  const pendingRef = useRef<ChatState["pending"]>(null);
   const lastOffsetRef = useRef<number | null>(null);
   // Bumped by closeChat and by every connect() call: a callback or timer
   // captured against an earlier generation is stale and no-ops.
@@ -185,6 +200,11 @@ export function useChat({
       // may run the updater lazily, so a flag set and read inside it can
       // observe the read happening before the write.
       const draftsChanged = rec?.type === "junco_chat_draft";
+      // Spec 2026-09-03 §4.1: a `proposed` command is the operator's card; any
+      // other status is its one terminal record (the daemon archived the draft
+      // it submitted, hence the reload below).
+      const command = rec?.type === "junco_chat_command" ? rec : null;
+      const settledCommand = command !== null && command.status !== "proposed";
       setChat((s) => {
         if (s === null) return s;
         const n = anchorIds(summary).length;
@@ -204,9 +224,37 @@ export function useChat({
         if (rec?.type === "junco_chat_turn_rejected")
           next = { ...next, blocked: { reason: rec.reason, until: rec.until } };
         if (rec?.type === "junco_chat_transcript_degraded") next = { ...next, degraded: true };
+        // The card must not be missable: the proposal blurs the composer and
+        // parks the cursor on its anchor, owing the window one reveal (#474's
+        // cursor + reveal + follow: false contract).
+        if (command?.status === "proposed") {
+          const at = anchorIds(summary).indexOf(commandAnchor(command.commandId));
+          next = {
+            ...next,
+            pending: {
+              commandId: command.commandId,
+              draftId: command.draftId,
+              ids: command.ids,
+              route: command.route,
+            },
+            composerFocused: false,
+            ...(at >= 0 ? { cursor: at, follow: false, reveal: true } : {}),
+          };
+        } else if (settledCommand && next.pending?.commandId === command.commandId) {
+          // Controller ruling R2 (fix round 1): the settling record undoes the
+          // proposal's parking unconditionally — the transcript replays on
+          // every (re)connect and the reducer cannot tell a replayed pair from
+          // a live one, so a chat whose history holds an answered card used to
+          // open scrolled to it, follow paused, composer blurred. After a
+          // decision the operator wants the tail (the model's closing text
+          // streams there) and a composer to reply with — send()'s semantics
+          // since #475. The cursor stays put: the card is still reachable with
+          // `tab`/`⏎`.
+          next = { ...next, pending: null, follow: true, composerFocused: true };
+        }
         return next;
       });
-      if (draftsChanged) void reloadDrafts();
+      if (draftsChanged || settledCommand) void reloadDrafts();
     },
     [flushDelta, flushMs, ringSize, reloadDrafts],
   );
@@ -265,6 +313,12 @@ export function useChat({
                       lastOffset: null,
                       cursor: 0,
                       streaming: false,
+                      // Defensive: in production the tool's own
+                      // `junco_chat_command{aborted}` record precedes the
+                      // reset, so `pending` is already null — but a reset
+                      // drops the records the card is derived from, and a
+                      // card with no record behind it can never be answered.
+                      pending: null,
                     },
               );
               connectRef.current(key, null);
@@ -429,6 +483,7 @@ export function useChat({
       setChat((s) => {
         if (s === null || s.summary === null) return s;
         const id = anchorIds(s.summary)[s.cursor];
+        // A draft card has no body to show; a `cmd:` card has the CLI output.
         if (id === undefined || id.startsWith("draft:")) return s;
         const expanded = new Set(s.expanded);
         if (expanded.has(id)) expanded.delete(id);
@@ -445,6 +500,25 @@ export function useChat({
     (follow: boolean): void => setChat((s) => (s === null ? s : { ...s, follow })),
     [],
   );
+  /** Spec 2026-09-03 §4.5: `settled: false` is the daemon saying nothing was
+   *  pending under that id — another dashboard answered first, or it expired.
+   *  Not a transport error, but the operator's error to see. */
+  const decide = useCallback(
+    async (decision: "run" | "decline"): Promise<void> => {
+      const key = keyRef.current;
+      const pending = pendingRef.current;
+      if (key === null || pending === null) return;
+      const r = await client.chat.decide(key, pending.commandId, decision);
+      if (!aliveRef.current) return;
+      const error = !r.ok
+        ? r.error
+        : r.value.settled
+          ? null
+          : "that confirmation is no longer pending";
+      if (error !== null) setChat((s) => (s === null ? s : { ...s, error }));
+    },
+    [client, aliveRef],
+  );
   const selectedDraft = useCallback((): PendingDraft | null => {
     if (chat === null || chat.summary === null) return null;
     const id = anchorIds(chat.summary)[chat.cursor];
@@ -453,6 +527,7 @@ export function useChat({
     return chat.drafts.find((d) => d.id === draftId) ?? null;
   }, [chat]);
 
+  pendingRef.current = chat?.pending ?? null;
   return {
     chat,
     openChat,
@@ -470,5 +545,6 @@ export function useChat({
     setFollow,
     reloadDrafts,
     selectedDraft,
+    decide,
   };
 }

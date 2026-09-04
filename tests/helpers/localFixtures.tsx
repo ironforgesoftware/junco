@@ -248,6 +248,7 @@ export const stubClient: DashboardClient = {
     abort: async () => okv({ aborted: false }),
     fresh: async () => okv(null),
     note: async () => okv(null),
+    decide: async () => okv({ settled: true }),
   },
   listChatDrafts: async () => okv([]),
   readChatDraftFile: async () => okv(""),

@@ -8,11 +8,13 @@ import type {
   SessionManagerMode,
   SessionOverrides,
 } from "../src/agent/session.js";
-import { makeConfig, READ_ONLY_TOOLS } from "./helpers/config.js";
+import { makeConfig, READ_ONLY_TOOLS, type ConfigSeams } from "./helpers/config.js";
 import { fakeChatSession, chatScriptText, type FakeChatSession } from "./helpers/fakeSession.js";
-import { parseTranscriptLine } from "../src/agent/transcriptSchema.js";
+import { parseTranscriptLine, TRANSCRIPT_VERSION } from "../src/agent/transcriptSchema.js";
 
-const cfg = makeConfig({
+/** Reusable so the junco_submit block below can vary `chat` off the same
+ *  ten seams (makeConfig spreads its overrides last). */
+const cfgSeams: ConfigSeams = {
   dataDir: "/sbxroot/data",
   queueRoot: "/sbxroot/data/queue",
   worktreeRoot: "/sbxroot/wt",
@@ -23,7 +25,8 @@ const cfg = makeConfig({
   supervisorEnabled: false,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
-});
+};
+const cfg = makeConfig(cfgSeams);
 
 /** A fake SessionManager seam mirroring SDK 0.84.4 (Ruling R5): "create"
  * mints a file under dir; "open" never throws — a missing path simply yields
@@ -687,5 +690,188 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
     release();
     expect(await p).toMatchObject({ status: "aborted", abortReason: "operator" });
     expect(built()!.prompts).toEqual([]); // runChatTurn's pre-aborted short-circuit
+  });
+});
+
+describe("junco_submit wiring (spec 2026-09-03)", () => {
+  it("passes the tool + its name to the factory when chat.submitTool is on, neither when off", async () => {
+    for (const on of [true, false]) {
+      const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+      let captured: SessionOverrides | undefined;
+      const session = new ChatSession(
+        {
+          cfg: makeConfig(cfgSeams, { chat: { ...cfg.chat, submitTool: on } }),
+          key: "acme/api",
+          kind: "watched",
+          cwd: root,
+          nwo: "acme/api",
+          dir: join(root, "acme__api"),
+        },
+        {
+          makeSessionManager: fakeSm,
+          sessionFactoryFor: (_c, _w, o) => (
+            (captured = o),
+            fakeChatSession([chatScriptText("hi")])
+          ),
+        },
+      );
+      await session.ensureSession();
+      expect(captured!.tools?.includes("junco_submit")).toBe(on);
+      expect(captured!.appendSystemPrompt?.includes("junco_submit")).toBe(on);
+      expect((captured!.customTools ?? []).length).toBe(on ? 1 : 0);
+      // The read-only file tools are never widened by the action tool.
+      expect(captured!.tools?.filter((t) => t !== "junco_submit")).toEqual([
+        "read",
+        "grep",
+        "find",
+      ]);
+    }
+  });
+
+  it("confirmSubmit: proposes, blocks, decide('run') resolves; the proposed record is on the bus", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root);
+    await session.ensureMeta();
+    const seen: string[] = [];
+    session.subscribe({
+      onLine: (l) => seen.push(JSON.parse(l).status ?? JSON.parse(l).type),
+      onEnd: () => {},
+    });
+    const p = session.confirmSubmit({ commandId: "c1", draftId: "d", ids: ["t"], route: "inbox" });
+    expect(session.pendingCommandId).toBe("c1");
+    expect(seen).toContain("proposed");
+    expect(session.decide("nope", "run")).toBe(false);
+    expect(session.decide("c1", "run")).toBe(true);
+    expect(await p).toBe("run");
+    expect(session.pendingCommandId).toBeNull();
+  });
+
+  it("confirmSubmit: a second proposal while one is pending is refused; decline and expiry settle", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root);
+    await session.ensureMeta();
+    const p = session.confirmSubmit({ commandId: "c1", draftId: "d", ids: [], route: "inbox" });
+    await expect(
+      session.confirmSubmit({ commandId: "c2", draftId: "d", ids: [], route: "inbox" }),
+    ).rejects.toThrow(/already awaiting/);
+    session.decide("c1", "decline");
+    expect(await p).toBe("decline");
+    const fast = new ChatSession(
+      {
+        cfg: makeConfig(cfgSeams, { chat: { ...cfg.chat, confirmTimeoutMinutes: 1 } }),
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        dir: join(root, "x"),
+      },
+      {
+        makeSessionManager: fakeSm,
+        sessionFactoryFor: () => fakeChatSession([chatScriptText("hi")]),
+        confirmTimeoutMs: 20,
+      },
+    );
+    await fast.ensureMeta();
+    expect(
+      await fast.confirmSubmit({ commandId: "c3", draftId: "d", ids: [], route: "inbox" }),
+    ).toBe("expired");
+    expect(fast.pendingCommandId).toBeNull();
+  });
+
+  it("abort() settles a pending confirmation as aborted; so does the tool's own signal", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root);
+    await session.ensureMeta();
+    const p = session.confirmSubmit({ commandId: "c1", draftId: "d", ids: [], route: "inbox" });
+    expect(await session.abort()).toBe(true); // Ruling R1: a pending confirm is turn-like state
+    expect(await p).toBe("aborted");
+    const ctl = new AbortController();
+    const q = session.confirmSubmit(
+      { commandId: "c2", draftId: "d", ids: [], route: "inbox" },
+      ctl.signal,
+    );
+    ctl.abort();
+    expect(await q).toBe("aborted");
+    // A pre-aborted signal never even proposes.
+    expect(
+      await session.confirmSubmit(
+        { commandId: "c3", draftId: "d", ids: [], route: "inbox" },
+        ctl.signal,
+      ),
+    ).toBe("aborted");
+  });
+
+  it("the turn deadline pauses while a confirmation is pending and resumes after", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root);
+    await session.ensureMeta();
+    const deadline = session.deadlineForTest(1_000);
+    const p = session.confirmSubmit({ commandId: "c1", draftId: "d", ids: [], route: "inbox" });
+    expect(deadline.paused).toBe(true);
+    session.decide("c1", "decline");
+    await p;
+    expect(deadline.paused).toBe(false);
+    deadline.clear();
+  });
+
+  it("startup closes a dangling proposed command as expired (daemon restarted)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const dir = join(root, "acme__api");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({
+        key: "acme/api",
+        kind: "watched",
+        cwd: root,
+        nwo: "acme/api",
+        sdkSessionFile: join(dir, "s.jsonl"),
+        createdAt: "t",
+      }),
+    );
+    const cmd = (over: Record<string, unknown>): string =>
+      JSON.stringify({
+        type: "junco_chat_command",
+        commandId: "c1",
+        command: "submit",
+        draftId: "d",
+        ids: ["t"],
+        route: "inbox",
+        status: "proposed",
+        exitCode: null,
+        output: null,
+        detail: null,
+        ts: "t",
+        ...over,
+      });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      [
+        JSON.stringify({
+          type: "junco_meta",
+          version: TRANSCRIPT_VERSION,
+          ticketId: "acme__api",
+          createdAt: "t",
+          ts: "t",
+        }),
+        cmd({}),
+        // A settled command is not dangling — only `proposed` with no terminal
+        // record of its own is.
+        cmd({ commandId: "c0", status: "declined" }),
+      ].join("\n") + "\n",
+    );
+    const { session } = makeSession(root);
+    await session.ensureMeta();
+    const lines = readFileSync(join(dir, "transcript.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(4);
+    expect(lines.at(-1)).toMatchObject({
+      type: "junco_chat_command",
+      commandId: "c1",
+      status: "expired",
+      detail: "daemon restarted",
+    });
   });
 });

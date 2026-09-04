@@ -243,6 +243,8 @@ export function assembleConfig(
       modelId: d.chat.modelId ?? null,
       thinkingLevel: d.chat.thinkingLevel ?? null,
       turnTimeoutMinutes: d.chat.turnTimeoutMinutes ?? null,
+      submitTool: d.chat.submitTool,
+      confirmTimeoutMinutes: d.chat.confirmTimeoutMinutes,
     },
   };
 }

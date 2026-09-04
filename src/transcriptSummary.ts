@@ -17,6 +17,7 @@
 import type { Usage } from "./types.js";
 import {
   parseTranscriptLine,
+  type ChatCommandRecord,
   type ChatDraftRecord,
   type ChatSessionResetRecord,
   type DraftKind,
@@ -74,6 +75,19 @@ export type ChatNote =
       status: ChatDraftRecord["status"];
       ids: string[];
       destination: ChatDraftRecord["destination"];
+      ts: string;
+    }
+  | {
+      kind: "command";
+      commandId: string;
+      command: "submit";
+      draftId: string;
+      ids: string[];
+      route: "inbox" | "issue";
+      status: ChatCommandRecord["status"];
+      exitCode: number | null;
+      output: string | null;
+      detail: string | null;
       ts: string;
     }
   | { kind: "reset"; reason: ChatSessionResetRecord["reason"]; ts: string }
@@ -296,6 +310,34 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
             ts: r.ts,
           });
           break;
+        case "junco_chat_command": {
+          const note: ChatNote = {
+            kind: "command",
+            commandId: r.commandId,
+            command: r.command,
+            draftId: r.draftId,
+            ids: r.ids,
+            route: r.route,
+            status: r.status,
+            exitCode: r.exitCode,
+            output: r.output,
+            detail: r.detail,
+            ts: r.ts,
+          };
+          // One row per command: the terminal record replaces the proposed
+          // one wherever it sits (the daemon-restart `expired` stamp lands
+          // before any new run opens, so the proposal may be in an earlier run).
+          const replaced = out.runs.some((run) => {
+            const i = run.notes.findIndex(
+              (n) => n.kind === "command" && n.commandId === r.commandId,
+            );
+            if (i === -1) return false;
+            run.notes[i] = note;
+            return true;
+          });
+          if (!replaced) noteRun().notes.push(note);
+          break;
+        }
         case "junco_chat_session_reset":
           noteRun().notes.push({ kind: "reset", reason: r.reason, ts: r.ts });
           break;
@@ -408,13 +450,17 @@ export function toolCallIds(s: TranscriptSummary): string[] {
 }
 
 export const draftAnchor = (draftId: string): string => `draft:${draftId}`;
+export const commandAnchor = (commandId: string): string => `cmd:${commandId}`;
 
-/** Tool ids ∪ draft anchors in file order — the chat view's cursor space. */
+/** Tool ids ∪ draft/command anchors in file order — the chat view's cursor space. */
 export function anchorIds(s: TranscriptSummary): string[] {
   const out: string[] = [];
   for (const r of s.runs) {
     for (const t of r.turns) for (const c of t.toolCalls) out.push(c.id);
-    for (const n of r.notes) if (n.kind === "draft") out.push(draftAnchor(n.draftId));
+    for (const n of r.notes) {
+      if (n.kind === "draft") out.push(draftAnchor(n.draftId));
+      else if (n.kind === "command") out.push(commandAnchor(n.commandId));
+    }
   }
   return out;
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runChatTurn } from "../src/chat/chatTurn.js";
+import { runChatTurn, TurnDeadline } from "../src/chat/chatTurn.js";
 import { fakeChatSession, chatScriptText } from "./helpers/fakeSession.js";
 
 describe("runChatTurn (spec 2026-09-01 §3)", () => {
@@ -117,5 +117,50 @@ describe("runChatTurn (spec 2026-09-01 §3)", () => {
     const n = seen.length;
     await s.prompt("raw"); // outside any turn
     expect(seen.length).toBe(n);
+  });
+});
+
+describe("TurnDeadline", () => {
+  it("fires after ms, minus nothing when never paused", async () => {
+    let fired = 0;
+    const d = new TurnDeadline(20);
+    d.arm(() => fired++);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fired).toBe(1);
+  });
+
+  it("a paused span does not count: pause/resume defers the fire by the pause length", async () => {
+    let t = 0;
+    const now = () => t;
+    let fired = 0;
+    const d = new TurnDeadline(100, now);
+    d.arm(() => fired++);
+    t = 40;
+    d.pause();
+    expect(d.remainingMs).toBe(60);
+    expect(d.paused).toBe(true);
+    t = 10_000; // an hour with the operator
+    d.resume();
+    expect(d.remainingMs).toBe(60);
+    expect(fired).toBe(0);
+    d.clear();
+  });
+
+  it("runChatTurn with a paused deadline does not time out; resuming it does", async () => {
+    const s = await fakeChatSession([{ events: [], delayMs: 10_000 }])();
+    const deadline = new TurnDeadline(30);
+    deadline.pause();
+    const p = runChatTurn(s, {
+      text: "slow",
+      timeoutMs: 30,
+      emit: () => {},
+      abortGraceMs: 20,
+      deadline,
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(s.aborted).toBe(0); // still paused → no timeout fired
+    deadline.resume();
+    const r = await p;
+    expect(r.abortReason).toBe("timeout");
   });
 });

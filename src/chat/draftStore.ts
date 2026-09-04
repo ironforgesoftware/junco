@@ -153,3 +153,33 @@ export function removeChatDraft(
 export function draftsParkedFor(cfg: Config, slug: string, deps: ReviewStoreDeps = {}): number {
   return listChatDrafts(cfg, deps).filter((d) => d.slug === slug).length;
 }
+
+export type DraftLookup =
+  | { ok: true; draft: PendingDraft }
+  | { ok: false; reason: "none" | "unknown" | "ambiguous"; candidates: PendingDraft[] };
+
+/** Resolve the draft a chat verb names (spec 2026-09-03 §3.1): a draft id,
+ * or a ticket id (the file stem). No `ref` → the ONLY parked draft of this
+ * chat; two or more → ambiguous, the caller must name one. Scoped to `key`,
+ * so a chat can never touch another repo's draft. */
+export function findChatDraft(
+  cfg: Config,
+  key: string,
+  ref: string | undefined,
+  deps: ReviewStoreDeps = {},
+): DraftLookup {
+  const mine = listChatDrafts(cfg, deps).filter((d) => d.key === key);
+  if (mine.length === 0) return { ok: false, reason: "none", candidates: [] };
+  if (ref === undefined) {
+    return mine.length === 1
+      ? { ok: true, draft: mine[0]! }
+      : { ok: false, reason: "ambiguous", candidates: mine };
+  }
+  const hit = mine.filter(
+    (d) => d.id === ref || d.files.some((f) => f.name === ref || f.name === `${ref}.md`),
+  );
+  if (hit.length === 1) return { ok: true, draft: hit[0]! };
+  return hit.length === 0
+    ? { ok: false, reason: "unknown", candidates: mine }
+    : { ok: false, reason: "ambiguous", candidates: hit };
+}

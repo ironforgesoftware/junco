@@ -1,16 +1,19 @@
 /**
  * Command-palette roster + subprocess runner.
  *
- * The dashboard runs CLI subcommands by SPAWNING the real junco CLI (argv
- * arrays only — no shell, no injection surface), capturing merged
- * stdout+stderr for the output view. No --config flag is threaded through:
- * the spawned child inherits the parent's environment and resolves the same
- * canonical ~/.junco/config.json itself. Thin shell: a future subcommand
- * needs only a roster row here.
+ * The dashboard runs CLI subcommands via `spawnCli` (../cliSpawn.js) — argv
+ * arrays only (no shell, no injection surface), merged stdout+stderr for the
+ * output view, no --config flag threaded through. Thin shell: a future
+ * subcommand needs only a roster row here.
  */
 
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import {
+  spawnCli,
+  DEFAULT_TIMEOUT_MS,
+  type CliRunResult,
+  type CliRunnerDeps,
+} from "../cliSpawn.js";
+export { DEFAULT_TIMEOUT_MS, type CliRunResult, type CliRunnerDeps };
 
 export interface PaletteCommand {
   name: string;
@@ -70,71 +73,16 @@ export const PALETTE_COMMANDS: PaletteCommand[] = [
   cmd("start", null, "Start the daemon", [], "foreground daemon would block — use restart"),
 ];
 
-export const DEFAULT_TIMEOUT_MS = 120_000;
-
 /** Palette subprocess budget: the roster override or the 120 s default. */
 export function timeoutFor(name: string): number {
   return PALETTE_COMMANDS.find((c) => c.name === name)?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 }
 
-export interface CliRunResult {
-  code: number | null;
-  output: string;
-  timedOut: boolean;
-}
-
-export interface CliRunnerDeps {
-  spawnFn?: typeof spawn;
-  cliPath?: string;
-  timeoutMs?: number;
-}
-
-// From dist/tui/cliRunner.js, ../cli.js is dist/cli.js — the shipped entry.
-// (Tests always inject cliPath; the default only runs in a built tree.)
-const DEFAULT_CLI_PATH = fileURLToPath(new URL("../cli.js", import.meta.url));
-
-/** Run one subcommand; resolves ALWAYS (errors land in `output`). */
+/** Run one palette subcommand with the roster's time budget; resolves ALWAYS. */
 export function runCliCommand(
   name: string,
   extraArgs: string[],
   deps: CliRunnerDeps = {},
 ): Promise<CliRunResult> {
-  const spawnFn = deps.spawnFn ?? spawn;
-  const cliPath = deps.cliPath ?? DEFAULT_CLI_PATH;
-  const timeoutMs = deps.timeoutMs ?? timeoutFor(name);
-
-  return new Promise((resolvePromise) => {
-    const chunks: string[] = [];
-    let settled = false;
-    let timedOut = false;
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawnFn(process.execPath, [cliPath, name, ...extraArgs], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (e) {
-      // "Always resolves" holds even for a synchronous spawn throw.
-      resolvePromise({ code: null, output: String((e as Error).message ?? e), timedOut: false });
-      return;
-    }
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-
-    const settle = (code: number | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolvePromise({ code: timedOut ? null : code, output: chunks.join(""), timedOut });
-    };
-
-    child.stdout?.on("data", (d: Buffer) => chunks.push(d.toString()));
-    child.stderr?.on("data", (d: Buffer) => chunks.push(d.toString()));
-    child.on("close", (code: number | null) => settle(code));
-    child.on("error", (e: Error) => {
-      chunks.push(String(e.message ?? e));
-      settle(null);
-    });
-  });
+  return spawnCli([name, ...extraArgs], { ...deps, timeoutMs: deps.timeoutMs ?? timeoutFor(name) });
 }
