@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import type { Config } from "./types.js";
 import type { AppProps } from "./tui/App.js";
 import { dataTreePaths } from "./dataTree.js";
+import { openAppendLogSink } from "./logging.js";
 import { draftFilePath } from "./chat/draftStore.js";
 import { checkForUpdate } from "./updateCheck.js";
 import { resolveBotLogin } from "./botIdentity.js";
@@ -53,6 +54,35 @@ export interface DashboardDeps {
   printOut?: (s: string) => void;
   /** Existence probe for the truthful cancel message (Amendment 1). Default: fs.existsSync. */
   existsFn?: (p: string) => boolean;
+}
+
+/**
+ * Best-effort worker-log line for a rejection the dashboard swallowed (#455).
+ * Written straight to the file rather than through `log.error`: logging.ts's
+ * `emit` also writes to process.stdout, which for the dashboard is the
+ * alternate screen Ink owns — one stray line smears the frame. Appends (never
+ * rotates): rotation is the lock-holding daemon's single-writer concern, and
+ * the daemon may well be running. Never throws — with no config (FTUE) or no
+ * log dir there is simply nowhere to write, and the operator still gets App's
+ * toast.
+ */
+function noteUnhandledRejection(cfg: Config | null, reason: unknown): void {
+  if (cfg === null) return;
+  try {
+    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+    const sink = openAppendLogSink(dataTreePaths(cfg).logFile);
+    sink.write(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        ticket: "-",
+        msg: `dashboard: unhandled rejection — ${detail}`,
+      }),
+    );
+    sink.close();
+  } catch {
+    /* no log dir, or not writable — dropping the line beats crashing here */
+  }
 }
 
 export async function runDashboard(
@@ -114,6 +144,9 @@ export async function runDashboard(
   const buildAppProps = (c: Config): Omit<AppProps, "onRequestWizard"> => ({
     client: makeGhDashboardClient(c),
     trigger: c.github.triggerLabel,
+    // The optimistic label overlay's second name (#443) — the real edit reads
+    // it from cfg inside ghClient; App only predicts with it.
+    askLabel: c.github.askLabel,
     branchPrefix: c.branchPrefix,
     configRepos: c.github.repos,
     watchlistFile: watchlistPath(c),
@@ -147,39 +180,53 @@ export async function runDashboard(
     botLoginFn: () => resolveBotLogin(c),
   });
 
-  let exitCode = 0;
-  const instance = renderFn(
-    react.createElement(
-      MouseProvider,
-      null,
-      react.createElement(Root, {
-        configPath,
-        initialConfig: cfg,
-        buildAppProps,
-        makeWizardIo: () => buildWizardIO(configPath),
-        loadConfigFn: deps.loadConfigFn ?? loadConfig,
-        onFinalExitCode: (n: number) => {
-          exitCode = n;
-        },
-      }),
-    ),
-  );
-  await instance.waitUntilExit();
-  if (exitCode === 130) {
-    // Amendment 1 — truthful cancel: WizardIO.write() renames the config into
-    // place BEFORE a throwable re-read, so a user CAN cancel with the file
-    // already on disk. Existence-check at PRINT time rather than unconditionally
-    // claiming nothing was written.
-    const printOut = deps.printOut ?? ((s: string) => process.stdout.write(s));
-    // Print the RESOLVED path the existence check actually probed, so the
-    // message never names a relative path that differs from what was checked.
-    const resolved = resolve(configPath);
-    const exists = (deps.existsFn ?? existsSync)(resolved);
-    printOut(
-      exists
-        ? `Setup did not finish — but a config exists at ${resolved}. Run junco doctor to verify it.\n`
-        : "Setup cancelled — nothing written.\n",
+  // Process-level safety net (#455). Node 22 turns an unhandled rejection into
+  // a process EXIT: for a full-screen Ink app that is a hard quit with no
+  // message and a terminal stranded in the alternate buffer. Registering ANY
+  // listener suppresses that exit, so this one's whole job is to leave a trace
+  // and return. It covers the entire render, wizard included; the
+  // operator-facing half (a toast) is App's own hooks/useRejectionToast.ts,
+  // live only while App is mounted. Removed in the `finally` so a hosted call
+  // (the suite, a future re-run) never leaks a listener.
+  const onUnhandledRejection = (reason: unknown): void => noteUnhandledRejection(cfg, reason);
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    let exitCode = 0;
+    const instance = renderFn(
+      react.createElement(
+        MouseProvider,
+        null,
+        react.createElement(Root, {
+          configPath,
+          initialConfig: cfg,
+          buildAppProps,
+          makeWizardIo: () => buildWizardIO(configPath),
+          loadConfigFn: deps.loadConfigFn ?? loadConfig,
+          onFinalExitCode: (n: number) => {
+            exitCode = n;
+          },
+        }),
+      ),
     );
+    await instance.waitUntilExit();
+    if (exitCode === 130) {
+      // Amendment 1 — truthful cancel: WizardIO.write() renames the config into
+      // place BEFORE a throwable re-read, so a user CAN cancel with the file
+      // already on disk. Existence-check at PRINT time rather than unconditionally
+      // claiming nothing was written.
+      const printOut = deps.printOut ?? ((s: string) => process.stdout.write(s));
+      // Print the RESOLVED path the existence check actually probed, so the
+      // message never names a relative path that differs from what was checked.
+      const resolved = resolve(configPath);
+      const exists = (deps.existsFn ?? existsSync)(resolved);
+      printOut(
+        exists
+          ? `Setup did not finish — but a config exists at ${resolved}. Run junco doctor to verify it.\n`
+          : "Setup cancelled — nothing written.\n",
+      );
+    }
+    return exitCode;
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
   }
-  return exitCode;
 }

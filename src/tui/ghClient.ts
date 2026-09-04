@@ -13,9 +13,10 @@ import { cachePathFor, prCachePathFor } from "../githubCachePaths.js";
 import { transcriptPathFor } from "../slug.js";
 import { summarizeTranscript, type TranscriptSummary } from "../transcriptSummary.js";
 import { gh, git, describeError } from "../git.js";
-import { lifecycleLabels, nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
+import { nwoFromRemoteUrl, PLAN_COMMENT_MARKER } from "../githubInbox.js";
 import { tryOrEnqueue, isOffline, type OutboxOp } from "../githubOutbox.js";
 import type { DashIssue, DashAction } from "./state.js";
+import { labelDelta } from "./state.js";
 import type { DashPr } from "./prState.js";
 import { fetchJuncoPrs } from "../githubPrs.js";
 import { ensureExternalClone } from "../externalRepo.js";
@@ -54,38 +55,20 @@ interface PrCache {
   prs: DashPr[];
 }
 
-/** Mirrors the applyAction switch's add/remove lists EXACTLY — including the
- * recycle zero-op short-circuit (null return), which the caller must honor
- * BEFORE calling tryOrEnqueue (a no-op recycle must neither call gh nor queue
- * an op). */
+/** `state.ts`'s `labelDelta` addressed at one issue — a thin wrapper with no
+ * transition logic of its own (#443). Propagates the zero-op `null` unchanged;
+ * the caller must honor it BEFORE calling tryOrEnqueue (a no-op recycle must
+ * neither call gh nor queue an op). */
 function labelsOpFor(
   trigger: string,
   askLabel: string,
-  ll: ReturnType<typeof lifecycleLabels>,
   action: DashAction,
   nwo: string,
   num: number,
   labels: string[],
 ): LabelsOp | null {
-  const has = (l: string): boolean => labels.includes(l);
-  switch (action) {
-    case "dispatch":
-      return { kind: "labels", nwo, issue: num, add: [trigger], remove: [] };
-    case "dispatchAsk":
-      return { kind: "labels", nwo, issue: num, add: [trigger, askLabel], remove: [] };
-    case "approve":
-      return { kind: "labels", nwo, issue: num, add: [ll.approved], remove: [] };
-    case "replan": {
-      const remove = [ll.planReady];
-      if (has(ll.approved)) remove.push(ll.approved);
-      return { kind: "labels", nwo, issue: num, add: [], remove };
-    }
-    case "recycle": {
-      const terminal = [ll.done, ll.failed, ll.denied].filter(has);
-      if (terminal.length === 0) return null; // stale labels — clean no-op
-      return { kind: "labels", nwo, issue: num, add: [], remove: terminal };
-    }
-  }
+  const delta = labelDelta(action, labels, { trigger, askLabel });
+  return delta === null ? null : { kind: "labels", nwo, issue: num, ...delta };
 }
 
 /** `--add-label`/`--remove-label` flags for a labels op, in add-then-remove
@@ -350,7 +333,6 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
   const renameFn = deps.renameFn ?? renameSync;
   const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
   const trigger = cfg.github.triggerLabel;
-  const ll = lifecycleLabels(trigger);
   let viewer: string | null = null;
   // Chat's own base URL (spec 2026-09-01 §7): same host:port as fetchHealth's
   // /health probe, bracketed for an IPv6 healthHost.
@@ -548,7 +530,7 @@ export function makeGhDashboardClient(cfg: Config, deps: GhClientDeps = {}): Das
 
     applyAction(nwo, num, action, labels) {
       return attempt(async () => {
-        const op = labelsOpFor(trigger, cfg.github.askLabel, ll, action, nwo, num, labels);
+        const op = labelsOpFor(trigger, cfg.github.askLabel, action, nwo, num, labels);
         // Stale labels (someone already recycled): a flag-less `gh issue edit`
         // exits 1, so the zero-op recycle must short-circuit here — before
         // gh is called and before anything is queued.

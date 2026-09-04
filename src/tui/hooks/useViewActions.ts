@@ -57,6 +57,10 @@ export interface ViewActionsInput {
    * keymap carries the hidden reserved `?`, so every arm below must dispatch
    * it — otherwise the key and the pinned `? help` chip are inert there. */
   openHelp: () => void;
+  /** useTranscript's closer. `c` from the transcript view is a one-way trip
+   * (the chat's own close returns to `main`), so the transcript is released on
+   * the way out rather than left polling underneath — #462. */
+  closeTranscript: () => void;
   /** useChat's opener (spec 2026-09-02 §5): `c` from an overlay attaches the
    * chat to the overlay's OWN repo, with the thread prefilled where one is in
    * view — `chatTargetFor` below decides both. */
@@ -160,6 +164,7 @@ export function useViewActions({
   cmd,
   runPaletteCommand,
   transcript,
+  closeTranscript,
   toggleTranscriptThinking,
   setTranscriptFollow,
   toEnd,
@@ -321,7 +326,7 @@ export function useViewActions({
     // repo in context — same predicate as Task 2's footer pill, so a rendered
     // pill and a live `c` can never disagree. No target ⇒ toast, never a chat
     // about whatever the rail happens to be parked on.
-    const chat = (): void => {
+    const chat = (): boolean => {
       const t = chatTargetFor(view, {
         detail,
         prDetail,
@@ -334,9 +339,13 @@ export function useViewActions({
       // FROM HERE: inside an overlay that is `esc` (spec §5's `(←)` is the
       // main view's own wording, which useMainActions keeps — `←` does
       // nothing under an overlay).
-      if (t === null) return void showToast("info", "select a repo first (esc)");
+      if (t === null) {
+        showToast("info", "select a repo first (esc)");
+        return false;
+      }
       openChat(t.key, t.composer === undefined ? undefined : { composer: t.composer });
       setView("chat"); // the pane stays put — see useMainActions' chat door
+      return true;
     };
     switch (view) {
       case "detail":
@@ -379,7 +388,14 @@ export function useViewActions({
         };
       case "transcript":
         return {
-          chat,
+          // #462: leaving for the chat must release the transcript — its live
+          // poll would otherwise keep reading the file with nothing on screen,
+          // and the chat's close lands on `main`, never back here. Only on a
+          // chat that actually opened: a target-less `c` just toasts, and the
+          // transcript stays exactly as it was.
+          chat: () => {
+            if (chat()) closeTranscript();
+          },
           close,
           help: openHelp,
           thinking: toggleTranscriptThinking,
@@ -426,6 +442,7 @@ export function useViewActions({
     reviewActions,
     reviewState,
     chatHandlers,
+    closeTranscript,
     detail,
     openIssueTranscript,
     openHelp,
