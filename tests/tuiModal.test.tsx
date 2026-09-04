@@ -44,6 +44,20 @@ describe("HelpModal", () => {
     expect(f).toContain("unpushed"); // outbox chip documented in the system section
   });
 
+  it("the system section's q says what q does in THIS context (#468)", () => {
+    const help = (bindings: Parameters<typeof HelpModal>[0]["bindings"]) =>
+      render(<HelpModal pane={2} mode="wide" trigger="junco" bindings={bindings} />).lastFrame()!;
+    // Opened over the main view, `q` quits the dashboard…
+    expect(help(buildContextBindings({ kind: "main", body: "issues", pane: 2 }, "wide"))).toContain(
+      "quit (terminal restored)",
+    );
+    // …but `?` opens help from every overlay too (Ruling R5), and there the
+    // same key closes the surface underneath instead.
+    const overlay = help(buildContextBindings({ kind: "view", view: "detail" }, "wide"));
+    expect(overlay).toContain("leave this view");
+    expect(overlay).not.toContain("quit (terminal restored)");
+  });
+
   it("renders ONE unified reference: system-row verbs present, no mode toggle", () => {
     const f = render(
       <HelpModal

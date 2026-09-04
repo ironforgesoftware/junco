@@ -56,6 +56,12 @@ export function HelpModal({
   // reserved `q`/`?` the footer pins right (Ruling R5) — and the "system"
   // section below documents both, so neither belongs in the variant list.
   const hidden = bindings.all.filter((d) => d.hidden && d.id !== "close" && d.id !== "help");
+  // `?` opens help from every overlay (Ruling R5), and `q` is `close` there,
+  // not `quit` — the surface underneath is what the modal is describing, and
+  // its own table says which (#468).
+  const qLabel = bindings.all.some((d) => d.id === "close")
+    ? "leave this view (esc works too)"
+    : "quit (terminal restored)";
   const thisView: [string, string][] = [
     ...structural,
     ...visible.map((d): [string, string] => [
@@ -102,7 +108,7 @@ export function HelpModal({
         title="system"
         rows={[
           ["?", "this help"],
-          ["q", "quit (terminal restored)"],
+          ["q", qLabel],
           ["⇡", "unpushed GitHub ops — flushed automatically; junco outbox flush pushes now"],
         ]}
       />
