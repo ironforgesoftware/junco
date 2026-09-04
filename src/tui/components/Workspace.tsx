@@ -44,7 +44,14 @@ export function Workspace({
   return (
     <Box flexDirection="column" width={size.columns} height={size.rows}>
       {header}
-      <Box flexGrow={1}>
+      {/* Fixed `height` + `overflow="hidden"` are both load-bearing (#463): a
+          body taller than its band — the 21-command palette at 30 rows — grew
+          this Box past its share under `flexGrow`, pushing the footer off the
+          frame and painting the modal's bottom border over the actions row. It
+          used to bleed invisibly into the blank toast row #457 removed.
+          `layout.bodyRows` is `rows - CHROME_ROWS`, i.e. exactly the band left
+          between the 1-row header and the 2-row footer. */}
+      <Box height={layout.bodyRows} overflow="hidden">
         {layout.mode === "tooSmall" ? (
           <Center>
             <Text dimColor>terminal too small — junco needs at least 60×14</Text>

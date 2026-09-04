@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runDashboard, INK_RENDER_OPTIONS } from "../src/dashboardCmd.js";
+import { dataTreePaths } from "../src/dataTree.js";
 import type { Config } from "../src/types.js";
 
 const cfg = {
@@ -160,6 +165,57 @@ describe("runDashboard FTUE (nullable config)", () => {
     expect(code).toBe(130);
     expect(outs.join("")).toContain("a config exists at");
     expect(outs.join("")).toContain("junco doctor");
+  });
+});
+
+// #455: several dashboard verbs are fired as `void asyncVerb()`. Ruling R34
+// made every current one catch-and-toast, but on Node 22 a NEW one that forgets
+// is a process exit — for a full-screen Ink app, a hard quit with no message
+// and a terminal left in the alternate buffer.
+describe("runDashboard unhandledRejection net", () => {
+  const withDataDir = (): Config => {
+    const root = mkdtempSync(join(tmpdir(), "junco-dash-reject-"));
+    const c = { ...cfg, dataDir: root } as unknown as Config;
+    mkdirSync(dirname(dataTreePaths(c).logFile), { recursive: true });
+    return c;
+  };
+
+  it("installs a handler for the whole render and logs to the worker log", async () => {
+    const c = withDataDir();
+    const before = process.listenerCount("unhandledRejection");
+    let during = -1;
+    await runDashboard(c, "/x/config.json", {
+      isTTY: true,
+      renderFn: () => ({
+        waitUntilExit: async () => {
+          during = process.listenerCount("unhandledRejection");
+          // Synthetic: a REAL rejection here would also reach vitest's own
+          // reporter and fail the file for the error the dashboard swallows.
+          process.emit("unhandledRejection", new Error("boom"), Promise.resolve());
+        },
+      }),
+    });
+    expect(during).toBe(before + 1);
+    const line = readFileSync(dataTreePaths(c).logFile, "utf8").trim();
+    expect(JSON.parse(line)).toMatchObject({ level: "error" });
+    expect(line).toContain("unhandled rejection");
+    expect(line).toContain("boom");
+  });
+
+  it("removes the handler on the way out — a hosted call leaks nothing", async () => {
+    const c = withDataDir();
+    const before = process.listenerCount("unhandledRejection");
+    await runDashboard(c, "/x/config.json", {
+      isTTY: true,
+      renderFn: () => ({ waitUntilExit: async () => {} }),
+    });
+    expect(process.listenerCount("unhandledRejection")).toBe(before);
+  });
+
+  it("never installs one when the TTY guard refuses", async () => {
+    const before = process.listenerCount("unhandledRejection");
+    await runDashboard(cfg, "/x/config.json", { isTTY: false, printErr: () => {} });
+    expect(process.listenerCount("unhandledRejection")).toBe(before);
   });
 });
 

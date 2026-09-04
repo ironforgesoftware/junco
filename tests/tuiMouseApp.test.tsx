@@ -693,4 +693,52 @@ describe("footer chips: mouse", () => {
     await until(() => !(r.lastFrame() ?? "").includes("junco dashboard"));
     expect(exited).toBe(false);
   });
+
+  // #461: the navigate row renders `:  palette` and `→  issues` as keycaps,
+  // but App's structuralChipActions `main` recipe only mapped `,`, `←`, `/`
+  // and `enter` — so both were inert to the mouse. The palette in particular
+  // had mouse reach through the `c commands` mnemonic chip until #457 retired
+  // it, so this is a regression, not a gap.
+  it("navigate row: the ':  palette' chip opens the palette, filter reset", async () => {
+    const r = renderApp();
+    await until(() =>
+      /: {2}palette/.test(rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""))),
+    );
+    // Leave a stale filter behind first: the chip must run the KEY's whole
+    // recipe (resetPalette included), not just the view switch.
+    r.stdin.write(":");
+    await until(() => (r.lastFrame() ?? "").includes("run a junco command"));
+    await tap(r, "doctor");
+    await until(() => !(r.lastFrame() ?? "").includes("status"));
+    r.stdin.write(ESC);
+    await until(() => !(r.lastFrame() ?? "").includes("run a junco command"));
+
+    const f = r.lastFrame() ?? "";
+    const y = navigateY(f);
+    const x = rowAt(f, y).search(/: {2}palette/);
+    expect(x).toBeGreaterThan(0);
+    // Opening swaps the footer to the palette's own structuralOnly vocabulary,
+    // so a retried press lands nowhere — self-terminating.
+    await fireUntil(r.stdin, press(x, y), () =>
+      (r.lastFrame() ?? "").includes("run a junco command"),
+    );
+    expect(r.lastFrame() ?? "").toContain("status"); // unfiltered list
+  });
+
+  it("pane 1: the '→  issues' chip focuses the issues pane", async () => {
+    const r = renderApp();
+    await until(() =>
+      /→ {2}issues/.test(rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""))),
+    );
+    const f = r.lastFrame() ?? "";
+    const y = navigateY(f);
+    const x = rowAt(f, y).search(/→ {2}issues/);
+    expect(x).toBeGreaterThan(0);
+    // Pane 2's navigate row says `⏎ preview` where pane 1 says `⏎ detail`, so
+    // the vocabulary swap IS the focus move. Idempotent once focus has landed:
+    // the chip at that x is gone, so a retried press hits nothing.
+    await fireUntil(r.stdin, press(x, y), () =>
+      /⏎ {2}preview/.test(rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""))),
+    );
+  });
 });
