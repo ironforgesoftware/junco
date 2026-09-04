@@ -199,8 +199,10 @@ const SMUGGLED_FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
 
 /** Longest run of consecutive backticks at the START of any line in `text`.
  * Line-anchored is sufficient because extractPlanBody is itself line-anchored:
- * only fences that begin a line can open/close a block. */
-function longestBacktickRun(text: string): number {
+ * only fences that begin a line can open/close a block. Exported for the two
+ * places that REWRAP a body in a fence of their own — buildPlanComment below
+ * and the chat's parked plan.md (fenceExtract.ts). */
+export function longestBacktickRun(text: string): number {
   let max = 0;
   for (const line of text.split("\n")) {
     const m = /^(`+)/.exec(line);
