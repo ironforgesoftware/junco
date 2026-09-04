@@ -130,8 +130,10 @@ export interface ChatDraftRecord {
   ts: string;
 }
 /** The chat's one action tool (spec 2026-09-03): a `junco_submit` call is
- * PROPOSED (the operator's card), then settled by exactly one terminal
- * record with the same `commandId` — the SDK's toolCallId. */
+ * PROPOSED (the operator's card), optionally passes through RUNNING (the
+ * operator answered `y` and the daemon released the CLI — #478), then is
+ * settled by exactly one terminal record with the same `commandId` — the
+ * SDK's toolCallId. */
 export interface ChatCommandRecord {
   type: "junco_chat_command";
   commandId: string;
@@ -141,7 +143,9 @@ export interface ChatCommandRecord {
   ids: string[];
   /** Effective destination for this submission. */
   route: "inbox" | "issue";
-  status: "proposed" | "ran" | "failed" | "declined" | "expired" | "aborted";
+  /** `proposed` and `running` are both OPEN: exactly one of the other five
+   *  closes the command. */
+  status: "proposed" | "running" | "ran" | "failed" | "declined" | "expired" | "aborted";
   /** ran/failed only. */
   exitCode: number | null;
   /** ran/failed only; the CLI's merged output, ≤ 4 KiB tail. */

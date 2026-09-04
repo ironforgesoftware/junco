@@ -73,11 +73,17 @@ describe("chatHeaderStatus (pure)", () => {
       draftId: "acme__api-20260901-120000-1",
       ids: ["add-readme"],
       route: "inbox" as const,
+      running: false,
     };
     expect(chatHeaderStatus(base({ pending, streaming: true }), "m")).toEqual({
       text: "◐ awaiting your confirmation",
       tone: "accent",
     });
+    // #478: once the operator answered `y` the wait is the daemon's spawned
+    // CLI, not them — the header must stop asking for a confirmation it has.
+    expect(
+      chatHeaderStatus(base({ pending: { ...pending, running: true }, streaming: true }), "m"),
+    ).toEqual({ text: "▸ submitting…", tone: "accent" });
   });
 
   // Ruling R21b: useChat resubscribes automatically after an `end`, so
@@ -200,6 +206,7 @@ describe("ChatView", () => {
             draftId: "acme__api-20260901-120000-1",
             ids: ["add-readme"],
             route: "inbox",
+            running: false,
           },
         })}
         modelId={null}

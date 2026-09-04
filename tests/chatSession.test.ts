@@ -868,9 +868,12 @@ describe("junco_submit wiring (spec 2026-09-03)", () => {
           ts: "t",
         }),
         cmd({}),
-        // A settled command is not dangling — only `proposed` with no terminal
-        // record of its own is.
+        // A settled command is not dangling — only an OPEN one (proposed, or
+        // #478's running) with no terminal record of its own is.
         cmd({ commandId: "c0", status: "declined" }),
+        // #478: the spawned CLI died with the daemon, so this is dangling too.
+        cmd({ commandId: "c2", status: "proposed" }),
+        cmd({ commandId: "c2", status: "running" }),
       ].join("\n") + "\n",
     );
     const { session } = makeSession(root);
@@ -879,13 +882,21 @@ describe("junco_submit wiring (spec 2026-09-03)", () => {
       .trim()
       .split("\n")
       .map((l) => JSON.parse(l));
-    expect(lines).toHaveLength(4);
-    expect(lines.at(-1)).toMatchObject({
-      type: "junco_chat_command",
-      commandId: "c1",
-      status: "expired",
-      detail: "daemon restarted",
-    });
+    expect(lines).toHaveLength(7);
+    expect(lines.slice(-2)).toMatchObject([
+      {
+        type: "junco_chat_command",
+        commandId: "c1",
+        status: "expired",
+        detail: "daemon restarted",
+      },
+      {
+        type: "junco_chat_command",
+        commandId: "c2",
+        status: "expired",
+        detail: "daemon restarted",
+      },
+    ]);
   });
 });
 
@@ -983,8 +994,12 @@ describe("the junco_submit handshake inside a real turn (#477)", () => {
       "submit",
       draftFilePath(t.cfg, "acme__api-20260903-120000-1", "add-readme.md"),
     ]);
+    // #478: `running` lands the moment the operator's y releases the tool
+    // into the CLI, so the card stops saying "awaiting you" for the whole
+    // spawn window.
     expect(t.cmdRows()).toEqual([
       { status: "proposed", detail: null },
+      { status: "running", detail: null },
       { status: "ran", detail: null },
     ]);
     // The draft was archived, so the card's own note is written too — and the
@@ -993,6 +1008,7 @@ describe("the junco_submit handshake inside a real turn (#477)", () => {
       "junco_meta",
       "junco_chat_prompt",
       "junco_chat_turn_start",
+      "junco_chat_command",
       "junco_chat_command",
       "junco_chat_draft",
       "junco_chat_command",

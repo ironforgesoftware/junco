@@ -521,6 +521,11 @@ describe("junco_chat_command rows", () => {
       text: "   ▸ submit add-readme → inbox — awaiting you · y submit · n keep parked",
       tone: "accent",
     });
+    // #478: the window between the operator's `y` and the CLI's exit.
+    expect(row(lines({ status: "running" }))).toMatchObject({
+      text: "   \u25b8 submitting add-readme \u2192 inbox\u2026",
+      tone: "accent",
+    });
     expect(row(lines({ status: "ran", exitCode: 0, output: "ok" }))).toMatchObject({
       text: "   ✓ submitted → inbox · add-readme · exit 0",
       tone: "success",

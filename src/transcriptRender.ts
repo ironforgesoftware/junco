@@ -318,6 +318,8 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
               `   ▸ submit ${what} → ${n.route} — awaiting you · y submit · n keep parked`,
               "accent",
             ],
+            // #478: the window between the operator's `y` and the CLI's exit.
+            running: [`   ▸ submitting ${what} → ${n.route}…`, "accent"],
             ran: [`   ✓ submitted → ${n.route} · ${what} · exit ${n.exitCode ?? "?"}`, "success"],
             failed: [
               // The detail carries the only thing the row cannot infer — and
