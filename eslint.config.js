@@ -90,8 +90,23 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // (2026-09-03, 1,880 → 1,882): `chatPending` on the useFooterBindings call
   // (+1) and `decide` in the structuralChipActions dep array (+1) — the card's
   // y/n chip recipe replaces the chat case's `return {}` in place, and the
-  // `decide` it dispatches rides the existing chatApi destructure.
-  { file: "src/tui/App.tsx", max: 1882 },
+  // `decide` it dispatches rides the existing chatApi destructure. +2 for the
+  // label-switch unification (#443, 1,882 → 1,884): `optimisticLabels` now
+  // applies state.ts's shared `labelDelta`, which needs the ask label as well
+  // as the trigger — one `askLabel` fallback line and one `labelNames` memo
+  // (stable, so `runAction`'s identity does not churn); the dep array trades
+  // `trigger` for it and stays a single line. +6 for the two unreachable
+  // navigate-row chips (#461, 1,884 → 1,890): `→ issues` is one line, and the
+  // `: palette` chip is the `openQueueTranscript` precedent again — the key and
+  // the chip must run ONE recipe, so `openPalette` is a stable useCallback (+5
+  // net against the three key-handler lines it replaces with two). +1 for the
+  // transcript's chat exit (#462, 1,890 → 1,891): `closeTranscript` joins the
+  // useViewActions call so `c` releases the transcript's live poll on the way
+  // out — the hook owns the recipe, App only names the closer. +1 for the
+  // unhandled-rejection net (#455, 1,891 → 1,892): one `useRejectionToast`
+  // call; the listener and its message shape live in the hook, and the
+  // whole-process half is src/dashboardCmd.ts's.
+  { file: "src/tui/App.tsx", max: 1892 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

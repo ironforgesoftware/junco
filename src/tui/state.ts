@@ -89,6 +89,65 @@ export function allowedActions(s: IssueLifecycle): DashAction[] {
   return ACTIONS[s];
 }
 
+/** The label names a delta is computed against: the configured trigger label
+ * and the ask label (`cfg.github.triggerLabel` / `cfg.github.askLabel`); every
+ * lifecycle label derives from the trigger via `lifecycleLabels`. */
+export interface LabelNames {
+  trigger: string;
+  askLabel: string;
+}
+
+/** What one `DashAction` does to an issue's labels. */
+export interface LabelDelta {
+  add: string[];
+  remove: string[];
+}
+
+/**
+ * THE DashAction → label-transition table (#443) — the single source of truth
+ * for both consumers: `ghClient.ts`'s `labelsOpFor` (the `gh`/outbox op) and
+ * `App.tsx`'s `optimisticLabels` (the local, immediate UI update). It used to
+ * be two exhaustive switches that had to be kept identical by hand; adding an
+ * action was compile-safe, but *changing* one action's labels in one of them
+ * let the dashboard show one thing and GitHub receive another, silently.
+ *
+ * `null` is the recycle zero-op short-circuit: nothing to remove. Callers must
+ * honor it BEFORE calling `tryOrEnqueue` — a no-op recycle must neither call
+ * gh (a flag-less `gh issue edit` exits 1) nor queue an outbox op.
+ *
+ * Lives in this pure module rather than in `ghClient.ts` (where #443 first
+ * proposed it) so `App.tsx` can reach it: every `src/tui` import of
+ * `ghClient.ts` is type-only by construction, and a value import would pull
+ * the whole GitHub/CLI graph (analyzeCmd, healthServer, …) into the render
+ * layer and its tests.
+ */
+export function labelDelta(
+  action: DashAction,
+  labels: string[],
+  names: LabelNames,
+): LabelDelta | null {
+  const ll = lifecycleLabels(names.trigger);
+  const has = (l: string): boolean => labels.includes(l);
+  switch (action) {
+    case "dispatch":
+      return { add: [names.trigger], remove: [] };
+    case "dispatchAsk":
+      return { add: [names.trigger, names.askLabel], remove: [] };
+    case "approve":
+      return { add: [ll.approved], remove: [] };
+    case "replan": {
+      const remove = [ll.planReady];
+      if (has(ll.approved)) remove.push(ll.approved);
+      return { add: [], remove };
+    }
+    case "recycle": {
+      const terminal = [ll.done, ll.failed, ll.denied].filter(has);
+      if (terminal.length === 0) return null; // stale labels — clean no-op
+      return { add: [], remove: terminal };
+    }
+  }
+}
+
 // Sort groups: needs-review (plan-ready/approved) → raw → in-flight → terminal.
 const GROUP: Record<IssueLifecycle, number> = {
   "plan-ready": 0,

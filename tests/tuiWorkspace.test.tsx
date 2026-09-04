@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
 import { render, cleanup } from "ink-testing-library";
-import { Text } from "ink";
+import { Box, Text } from "ink";
 import { Workspace } from "../src/tui/components/Workspace.js";
 import { computeLayout } from "../src/tui/layout.js";
 import type { FooterRows } from "../src/tui/footerModel.js";
@@ -88,6 +88,40 @@ describe("Workspace", () => {
     ).lastFrame()!;
     expect(f).toContain("MODAL CONTENT");
     expect(f).not.toContain("HIDDEN BODY");
+  });
+
+  // #463: at 30 rows the command palette (21 commands + chrome) is taller than
+  // the body, and the body Box had no `overflow="hidden"` — so the modal's
+  // bottom border painted straight over the footer's actions row. It used to
+  // bleed invisibly into the blank toast row #457 removed.
+  it("a modal taller than the body is clipped, never over the footer", () => {
+    const tall = { columns: 100, rows: 30 };
+    const f = render(
+      <Workspace
+        size={tall}
+        layout={computeLayout(tall.columns, tall.rows)}
+        header={<Text>H</Text>}
+        toast={null}
+        footer={FOOTER}
+        modal={
+          <Box borderStyle="round" flexDirection="column">
+            {Array.from({ length: 40 }, (_, i) => (
+              <Text key={i}>modal line {i}</Text>
+            ))}
+          </Box>
+        }
+      >
+        <Text>HIDDEN BODY</Text>
+      </Workspace>,
+    ).lastFrame()!;
+    const lines = f.split("\n");
+    expect(lines.length).toBeLessThanOrEqual(tall.rows);
+    // Both footer rows survive intact: the actions row still carries its own
+    // label + chips, the navigate row below it likewise.
+    expect(lines.at(-2)).toContain("acme/api");
+    expect(lines.at(-2)).toContain("quit");
+    expect(lines.at(-1)).toContain("navigate");
+    expect(lines.at(-1)).toContain("move");
   });
 });
 
