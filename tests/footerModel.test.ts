@@ -1,13 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { buildContextBindings, type BindingContext } from "../src/tui/viewActions.js";
+import {
+  buildContextBindings,
+  type BindingContext,
+  type MainBody,
+} from "../src/tui/viewActions.js";
 import {
   buildFooterRows,
   footerSegments,
   keyGlyph,
+  rowWidth,
   TARGET_WIDTH,
   type FooterChip,
   type FooterInput,
 } from "../src/tui/footerModel.js";
+import { MIN_COLS } from "../src/tui/layout.js";
 
 const rows = (
   context: BindingContext,
@@ -83,6 +89,29 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "structural:,:config",
     ]);
   });
+  it("issue list with NO issue under the cursor: only the verbs that can fire (#473)", () => {
+    // An empty (or fully filtered) issue list left `import · approve ·
+    // investigate · transcript` on the bar, each of which only toasts.
+    const r = rows(
+      { kind: "main", body: "issues", pane: 2, issueSelected: false },
+      { target: "acme/api" },
+    );
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:chat:chat",
+      "mnemonic:assess:audit",
+      "mnemonic:browser:browser",
+      "│",
+      "mnemonic:prs:PRs",
+      "mnemonic:review:review",
+      "mnemonic:queue:queue",
+    ]);
+    // Panes 1 and 3 never listed the issue verbs, so the flag changes nothing
+    // there — and the keymap is untouched everywhere (the handlers own the
+    // guard; the chips only stop advertising it).
+    expect(
+      texts(rows({ kind: "main", body: "issues", pane: 1, issueSelected: false }).actions.chips),
+    ).toEqual(texts(rows({ kind: "main", body: "issues", pane: 1 }).actions.chips));
+  });
   it("PR pane (pane 3): pill, browser │ PRs, review", () => {
     const r = rows({ kind: "main", body: "issues", pane: 3 }, { target: "PR #12" });
     expect(texts(r.actions.chips)).toEqual([
@@ -141,15 +170,47 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "mnemonic:prs:PRs",
     ]);
     expect(r.actions.chips.some((c) => c.kind === "pill")).toBe(false);
+    // #470: a system row opens its BODY — neither key goes to an issue list
+    // or a repo detail. `→`/`⏎` both `setPane(2)` in App (the logs row's
+    // `⏎` opens the full-screen log instead).
     expect(texts(r.navigate.chips)).toEqual([
       "structural:↑/↓:move",
-      "structural:→:issues",
-      "structural:enter:detail",
+      "structural:→:open",
+      "structural:enter:open",
       "structural:g/G:first/last",
       "structural:::palette",
       "structural:,:config",
     ]);
     expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:quit:quit"]);
+  });
+  it("rail: → and ⏎ say what the SELECTED ROW opens (#470)", () => {
+    const nav = (body: MainBody) =>
+      texts(rows({ kind: "main", body, pane: 1 }, { chatReachable: false }).navigate.chips).slice(
+        1,
+        3,
+      );
+    // A watched repo row is the only one with an issue list behind `→`.
+    expect(nav("issues")).toEqual(["structural:→:issues", "structural:enter:detail"]);
+    // An unwatched checkout has no issue list — `→` focuses its detail body,
+    // `⏎` opens the same panel full-screen.
+    expect(nav("repoDetail")).toEqual(["structural:→:open", "structural:enter:detail"]);
+    for (const body of ["queue", "outbox", "worktrees", "daemon"] as const)
+      expect(nav(body), body).toEqual(["structural:→:open", "structural:enter:open"]);
+    expect(nav("logs")).toEqual(["structural:→:open", "structural:enter:log"]);
+  });
+  it("logs: no dangling leading │ when nothing precedes the go-globals (#458)", () => {
+    // BODY_VERBS.logs is empty, so the logs body's chip order is the two go
+    // ids alone — the separator has nothing to separate and must not render.
+    for (const pane of [1, 2] as const) {
+      const r = rows(
+        { kind: "main", body: "logs", pane },
+        { target: "logs", chatReachable: false },
+      );
+      expect(texts(r.actions.chips), `pane ${pane}`).toEqual([
+        "mnemonic:review:review",
+        "mnemonic:prs:PRs",
+      ]);
+    }
   });
   it("repo detail body: pill · browser · refresh · audit │ queue · review · PRs (R11)", () => {
     // The other undelivered §4 row: this body used to render a bare `│ review
@@ -208,6 +269,55 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "structural:,:config",
     ]);
   });
+  it("#464: at MIN_COLS every main navigate row still shows ? help and quit", () => {
+    // Between 60 and ~76 columns the pinned run — the one thing §3.2 says
+    // never moves — was what got clipped: after the four NAV_DROP_ORDER keys
+    // the issue-list row still measured 72 columns (88 behind a full-width
+    // target). The last two fit steps are the shared label slot and `/
+    // filter`, in that order.
+    const at60 = (context: BindingContext, target: string) => {
+      const r = rows(context, { target, columns: MIN_COLS });
+      const labelWidth = Math.max(r.actions.label.length, r.navigate.label.length);
+      return { r, width: rowWidth(r.navigate, labelWidth) };
+    };
+    for (const context of [
+      { kind: "main", body: "issues", pane: 1 },
+      { kind: "main", body: "issues", pane: 2 },
+      { kind: "main", body: "issues", pane: 3 },
+      { kind: "main", body: "queue", pane: 2 },
+      { kind: "main", body: "repoDetail", pane: 2 },
+    ] as BindingContext[]) {
+      for (const target of ["acme/api", "alxedelwe…/arkanoid_oq4e"]) {
+        const { r, width } = at60(context, target);
+        expect(width, `${JSON.stringify(context)} ${target}`).toBeLessThanOrEqual(MIN_COLS);
+        expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:quit:quit"]);
+      }
+    }
+  });
+  it("#464: the label slot goes before / filter, and only when the keys are exhausted", () => {
+    const at = (columns: number) => rows({ kind: "main", body: "issues", pane: 2 }, { columns });
+    // 72 is the width of this row with all four keys dropped and the label
+    // still there — one column more and nothing else has to go.
+    expect(at(72).actions.label).toBe("acme/api");
+    expect(texts(at(72).navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←/→:panes",
+      "structural:enter:preview",
+      "structural:/:filter",
+    ]);
+    // At 62 the label slot goes — both rows lose it, because Chrome.tsx sizes
+    // one slot from the two of them.
+    const tight = at(62);
+    expect(tight.actions.label).toBe("");
+    expect(tight.navigate.label).toBe("");
+    expect(texts(tight.navigate.chips)).toContain("structural:/:filter");
+    // Below that `/ filter` is the last thing left to shed.
+    expect(texts(at(MIN_COLS).navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←/→:panes",
+      "structural:enter:preview",
+    ]);
+  });
   it("Ruling R10: a row that cannot fit even after all four drops overflows untouched (review overlay, 60 cols)", () => {
     // review's own structural vocabulary (↑/↓ move, ⏎ open/file, space
     // toggle, esc back) shares no key with NAV_DROP_ORDER, so all four
@@ -220,6 +330,20 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "structural:space:toggle",
       "structural:esc:back",
     ]);
+  });
+  it("an over-long owner/repo target loses the OWNER half, not the repo name (#472)", () => {
+    const label = (t: string) =>
+      rows({ kind: "main", body: "issues", pane: 1 }, { target: t }).actions.label;
+    // The discriminating half is the repo name — `alxedelweiss/arkanoid_o…`
+    // is the one label nobody can read on a rail full of that owner's repos.
+    expect(label("alxedelweiss/arkanoid_oq4e")).toBe("alxedelwe…/arkanoid_oq4e");
+    expect(label("alxedelweiss/arkanoid_oq4e")).toHaveLength(TARGET_WIDTH);
+    // A repo name that alone overflows the slot leaves no owner budget, so
+    // the plain tail cut takes over.
+    expect(label(`o/${"x".repeat(40)}`)).toBe(`o/${"x".repeat(21)}…`);
+    // Targets with no owner half (issue #46, queue, a ticket id) are unchanged.
+    expect(label("x".repeat(40))).toBe(`${"x".repeat(23)}…`);
+    expect(label("acme/api")).toBe("acme/api");
   });
   it("the target label is truncated to TARGET_WIDTH", () => {
     const r = rows({ kind: "main", body: "issues", pane: 1 }, { target: "x".repeat(40) });
@@ -341,6 +465,24 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       text: " ⇞ ⇟ ",
       keycap: true,
     });
+  });
+  it("composer focused OVER a pending card: esc only blurs, so the chip says so (#479)", () => {
+    // #476 made `esc` abort only when `chat.streaming && chat.pending === null`
+    // (useChatInput.ts) — while a junco_submit card waits, esc just blurs.
+    const r = buildFooterRows({
+      context: { kind: "structuralOnly", view: "chatCompose", pending: true },
+      bindings: buildContextBindings({ kind: "structuralOnly", view: "chatCompose" }, "wide"),
+      target: "acme/api",
+      chatReachable: true,
+      mode: "wide",
+      columns: 200,
+    });
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:enter:send",
+      "structural:ctrl+j:newline",
+      "structural:/:commands",
+      "structural:esc:blur",
+    ]);
   });
   it("chat view, a submit awaiting confirmation: y/n are the actions row, and nothing else is", () => {
     const r = rows({ kind: "structuralOnly", view: "chatConfirm" }, { target: "acme/api" });

@@ -1445,6 +1445,7 @@ export function App(props: AppProps): React.JSX.Element {
     logOverlay,
     filtering,
     composerFocused,
+    issueSelected: currentIssue !== undefined,
     chatPending: (chatState?.pending ?? null) !== null,
     mode: layout.mode,
     columns: size.columns,

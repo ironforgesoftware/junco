@@ -53,12 +53,24 @@ export interface FooterInput {
 /** Row-1 target label slot. 24, not spec §3.1's 16: the chat view's label is
  * the bare session key now (hooks/useFooterTarget.ts dropped the `chat · `
  * prefix the header crumb already carries), and a real `owner/name` has to
- * fit it whole — a truncated repo name is the one label nobody can read. */
+ * fit it whole — a truncated repo name is the one label nobody can read, so
+ * `fitTarget` below spends the overflow on the OWNER half instead (#472). */
 export const TARGET_WIDTH = 24;
 /** Navigate chips dropped, in this order, one at a time, until the row fits
  * `columns` (Ruling R10) — they stay in the keymap + help regardless. Keyed
  * on dispatch key, not id: every chip here is structural. */
 export const NAV_DROP_ORDER: readonly string[] = [",", ":", "g/G", "[/]"];
+/** The fit step that gives up the two rows' shared label slot — not a key, so
+ * it can never collide with a chip's. */
+export const NAV_DROP_LABEL = "label slot";
+/** The full fit order (#464). After the four keys above, a main row could
+ * still need ~72 columns (~88 behind a full-width target) and what got
+ * clipped between MIN_COLS and there was the pinned `? help  quit` — the one
+ * run spec §3.2 says never moves. So the row sheds two more things: the label
+ * slot (the header crumb already names the target), then `/ filter`. The
+ * issue's third candidate, shortening `first/last`, is unreachable — `g/G`
+ * leaves at step 3. */
+export const NAV_FIT_ORDER: readonly string[] = [...NAV_DROP_ORDER, NAV_DROP_LABEL, "/"];
 const SEP: FooterChip = {
   kind: "separator",
   id: "|",
@@ -153,10 +165,22 @@ function navigateChips(
   const { body, pane } = context;
   const common = [s("g/G", "first/last"), s(":", "palette"), s(",", "config")];
   return pane === 1
-    ? [s("↑/↓", "move"), s("→", "issues"), s("enter", "detail"), ...common]
+    ? [s("↑/↓", "move"), ...railOpen(body), ...common]
     : pane === 3
       ? [s("↑/↓", "move"), s("enter", "detail"), s("←", "issues"), ...common]
       : [...mainBodyNav(body, mode), ...common];
+}
+/** Pane 1's `→`/`⏎` labels, per the kind of row the rail cursor is on (#470).
+ * `→` always focuses that row's body (App's pane-1 arm: `setPane(2)`), so only
+ * a WATCHED repo row can honestly say `issues`; `⏎` opens the repo-detail
+ * overlay on a repo row and the full-screen log on the logs row, and is the
+ * same "focus the body" everywhere else. Spec §4's "main · rail, system row"
+ * row said `→ open` all along — the code rendered the repo labels for every
+ * pane-1 row. */
+function railOpen(body: MainBody): FooterChip[] {
+  if (body === "issues") return [s("→", "issues"), s("enter", "detail")];
+  if (body === "repoDetail") return [s("→", "open"), s("enter", "detail")];
+  return [s("→", "open"), s("enter", body === "logs" ? "log" : "open")];
 }
 function mainBodyNav(body: MainBody, mode: LayoutMode): FooterChip[] {
   switch (body) {
@@ -181,6 +205,25 @@ function mainBodyNav(body: MainBody, mode: LayoutMode): FooterChip[] {
   }
 }
 
+/** Fits a target into `TARGET_WIDTH`. An `owner/repo` that overflows loses
+ * OWNER characters, never repo ones (#472): on a rail full of one owner's
+ * checkouts the owner is the redundant half and the name is the whole
+ * message, and `alxedelweiss/arkanoid_o…` named nothing. Sizing the slot to
+ * the widest loaded target was the alternative; a fixed slot keeps the fit
+ * rules (`rowWidth`, Ruling R10) reading one constant instead of a value that
+ * moves with every poll. Anything without an owner half — `issue #46`,
+ * `queue`, a ticket id — keeps the plain tail cut. */
+function fitTarget(target: string): string {
+  if (target.length <= TARGET_WIDTH) return target;
+  const slash = target.indexOf("/");
+  if (slash > 0) {
+    const name = target.slice(slash); // "/repo", the half that must survive
+    const owner = TARGET_WIDTH - name.length - 1; // -1 for the ellipsis
+    if (owner >= 1) return `${target.slice(0, owner)}…${name}`;
+  }
+  return `${target.slice(0, TARGET_WIDTH - 1)}…`;
+}
+
 export function buildFooterRows({
   context,
   bindings,
@@ -189,7 +232,7 @@ export function buildFooterRows({
   mode,
   columns,
 }: FooterInput): FooterRows {
-  const label = target.length > TARGET_WIDTH ? `${target.slice(0, TARGET_WIDTH - 1)}…` : target;
+  const label = fitTarget(target);
   const structural = bindings.chips.filter((c) => c.kind === "structural").map(fromChip);
   const mnemonics = bindings.chips.flatMap((c) => (c.kind === "mnemonic" ? [fromChip(c)] : []));
   // bindings.all is [] for structuralOnly contexts, so this is naturally []
@@ -219,7 +262,11 @@ export function buildFooterRows({
             },
             s("ctrl+j", "newline"),
             s("/", "commands"),
-            s("esc", "blur/abort"),
+            // While a junco_submit card waits, `esc` only blurs — #476 made
+            // the abort conditional on `streaming && pending === null`
+            // (useChatInput.ts), and an inert chip may not claim otherwise
+            // (#479). ChatView's own hint line already reads `esc blur` here.
+            s("esc", context.pending === true ? "blur" : "blur/abort"),
           ]
         : [];
     // Spec 2026-09-03 §4.3: the y/n of a waiting junco_submit card. `y` is the
@@ -256,38 +303,49 @@ export function buildFooterRows({
   if (context.kind === "main") {
     const here = rest.filter((m) => !GO_IDS.has(m.id));
     const go = rest.filter((m) => GO_IDS.has(m.id));
-    actions = [...pill, ...here, ...(go.length > 0 ? [SEP, ...go] : [])];
+    // The separator only earns its column when something precedes it: the
+    // logs body has no verbs of its own, so its row is the go-globals alone
+    // and used to open with a dangling `│` (#458).
+    const lead = pill.length + here.length > 0;
+    actions = [...pill, ...here, ...(go.length > 0 ? [...(lead ? [SEP] : []), ...go] : [])];
   } else {
     actions = [...pill, ...rest];
   }
   const navRaw = context.kind === "main" ? navigateChips(context, mode) : structural;
-  // Chrome.tsx's Footer computes ONE labelWidth from both rows' labels, and
-  // every navigate row's label is the literal "navigate" — the structuralOnly
-  // branch above uses it too, so this is the width there as well.
-  const labelWidth = Math.max(label.length, "navigate".length);
-  const navigate = fitNavigate(navRaw, pinned, labelWidth, columns);
+  const fit = fitNavigate(navRaw, pinned, label, columns);
   return {
-    actions: { label, chips: actions, pinned: [] },
-    navigate: { label: "navigate", chips: navigate, pinned },
+    actions: { label: fit.label, chips: actions, pinned: [] },
+    navigate: { label: fit.label === "" ? "" : "navigate", chips: fit.chips, pinned },
   };
 }
 
-/** Ruling R10: drops `NAV_DROP_ORDER` keys one at a time — a no-op for a key
- * absent from `chips` (an overlay's own vocabulary rarely has one) — until
+/** Chrome.tsx's Footer sizes ONE label slot from both rows' labels, and every
+ * navigate row's label is the literal "navigate" — so this is the width the
+ * renderer will use, and `""` means no slot at all. */
+const slotWidth = (label: string): number =>
+  label === "" ? 0 : Math.max(label.length, "navigate".length);
+
+/** Ruling R10 + #464: walks `NAV_FIT_ORDER` one step at a time — a no-op for a
+ * key absent from `chips` (an overlay's own vocabulary rarely has one) — until
  * the row fits `columns`, or the list is exhausted (the renderer clips the
- * rest from the right; it never wraps). */
+ * rest from the right; it never wraps). The label step returns `""`, which
+ * takes the slot off BOTH rows, since they share its width. */
 function fitNavigate(
   chips: FooterChip[],
   pinned: FooterChip[],
-  labelWidth: number,
+  label: string,
   columns: number,
-): FooterChip[] {
+): { chips: FooterChip[]; label: string } {
   let out = chips;
-  for (const key of NAV_DROP_ORDER) {
-    if (rowWidth({ label: "navigate", chips: out, pinned }, labelWidth) <= columns) break;
-    out = out.filter((c) => c.key !== key);
+  let lbl = label;
+  const fits = (): boolean =>
+    rowWidth({ label: lbl, chips: out, pinned }, slotWidth(lbl)) <= columns;
+  for (const step of NAV_FIT_ORDER) {
+    if (fits()) break;
+    if (step === NAV_DROP_LABEL) lbl = "";
+    else out = out.filter((c) => c.key !== step);
   }
-  return out;
+  return { chips: out, label: lbl };
 }
 
 export interface Segment {
@@ -344,17 +402,25 @@ export function footerSegments(chip: FooterChip): Segment[] {
 
 /** Estimates one footer row's rendered width exactly as Chrome.tsx's
  * `FooterLine`/`ChipRun` lay it out (Ruling R10): `paddingX={1}` (both
- * sides), the label slot (`labelWidth`, `marginRight={2}`), then each run's
+ * sides), the label slot (`labelWidth`, `marginRight={2}` — absent entirely
+ * at width 0, #464), then each run's
  * chips — `footerSegments` text length summed (keycap/pill padding spaces
- * are already part of those strings) plus `marginRight={2}` PER chip,
- * pinned included since it renders as a second `ChipRun`. The `flexGrow`
+ * are already part of those strings) plus the run's `gap={2}` BETWEEN its
+ * chips (#460: no trailing margin on the last one), and the pinned run's own
+ * `marginLeft={2}` when it has any chips. The `flexGrow`
  * spacer between the two runs contributes nothing: with no content of its
  * own it shrinks to 0 whenever the row is tight, which is exactly the case
  * this function exists to detect. A test pins this against a `renderWide`
  * frame's real line length so the estimate cannot drift from the renderer. */
 export function rowWidth(row: FooterRow, labelWidth: number): number {
-  const runWidth = (chips: FooterChip[]): number => chips.reduce((n, c) => n + chipWidth(c) + 2, 0);
-  return 2 + (labelWidth + 2) + runWidth(row.chips) + runWidth(row.pinned);
+  const runWidth = (chips: FooterChip[]): number =>
+    chips.reduce((n, c) => n + chipWidth(c), 0) + 2 * Math.max(0, chips.length - 1);
+  return (
+    2 +
+    (labelWidth > 0 ? labelWidth + 2 : 0) +
+    runWidth(row.chips) +
+    (row.pinned.length > 0 ? 2 + runWidth(row.pinned) : 0)
+  );
 }
 function chipWidth(chip: FooterChip): number {
   return footerSegments(chip).reduce((n, seg2) => n + seg2.text.length, 0);

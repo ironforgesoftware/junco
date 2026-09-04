@@ -80,6 +80,9 @@ the right (the row is informational; the invariant "chrome = 3 rows" holds).
 - `? help` and `q`uit (or `q` close in overlays) are pinned to the right edge (a flex spacer).
 - Medium width (60–109 columns): `g G`, `:` and `,` are dropped from the row (they stay in the
   help modal and the keymap). `tooSmall` renders as today.
+  (Superseded by Ruling R10 and #464: the row fits itself to `columns` at every width, dropping
+  `,` → `:` → `g G` → `[ ]` → the shared label slot → `/ filter`, in that order, so the pinned
+  run survives to `MIN_COLS`.)
 
 ### 3.3 Toast
 
@@ -89,15 +92,15 @@ never hidden. The multi-line collapse (`\n` → `·`) stays.
 
 ### 3.4 Rendering language
 
-| Element           | Style                                                                                                                                                                      |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Lit letter        | `theme.accent`, bold, underline (Ink `underline`) — uppercase when guarded                                                                                                 |
-| Label             | default foreground (today's `dimColor` is dropped)                                                                                                                         |
-| Structural keycap | `backgroundColor: theme.keycapBg` (new token, `#3b4261`-class, chosen for both dark and light terminals), default foreground, one space of padding each side               |
-| Chat pill         | `backgroundColor: theme.accent`, foreground `theme.pillFg` (new token, the terminal-background-like dark), bold; the lit letter additionally underlined; one space padding |
-| Row label         | dim, fixed-width slot                                                                                                                                                      |
-| Separator         | `│` dim                                                                                                                                                                    |
-| Toast             | `toastColor(kind)` as today                                                                                                                                                |
+| Element           | Style                                                                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lit letter        | `theme.accent`, bold, underline (Ink `underline`) — uppercase when guarded                                                                                                                               |
+| Label             | default foreground (today's `dimColor` is dropped)                                                                                                                                                       |
+| Structural keycap | `backgroundColor: theme.keycapBg` (new token, `#3b4261`-class) with `theme.keycapFg` (#465: an EXPLICIT light foreground, so a light terminal theme is not dark-on-dark), one space of padding each side |
+| Chat pill         | `backgroundColor: theme.accent`, foreground `theme.pillFg` (new token, the terminal-background-like dark), bold; the lit letter additionally underlined; one space padding                               |
+| Row label         | dim, fixed-width slot                                                                                                                                                                                    |
+| Separator         | `│` dim                                                                                                                                                                                                  |
+| Toast             | `toastColor(kind)` as today                                                                                                                                                                              |
 
 Frames strip ANSI, so tests assert placement through the pure segment model (§7), never
 through colours in `lastFrame()`.
@@ -112,7 +115,7 @@ everywhere except the help modal itself.
 | Context                                                | Row 1 (after the target label)                                                                  | Row 2 (before `? help · q`)                                                                |
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | main · rail, repo row                                  | pill · audit · browser · refresh · add repo · unwatch │ queue · review · PRs                    | ↑↓ move · → issues · ⏎ detail · g G · : palette · , config                                 |
-| main · rail, system row                                | (body verbs of that system section, e.g. queue: retry · delete) │ review · PRs                  | ↑↓ move · → open · g G · : · ,                                                             |
+| main · rail, system row                                | (body verbs of that system section, e.g. queue: retry · delete) │ review · PRs                  | ↑↓ move · → open · ⏎ open (logs: ⏎ log) · g G · : · ,                                      |
 | main · issues (pane 2)                                 | pill · import · approve · investigate · transcript · audit · browser │ PRs · review · queue     | ↑↓ move · ←→ panes · ⏎ preview · / filter · g G · : · ,                                    |
 | main · repo detail body                                | pill · browser · refresh · audit │ queue · review · PRs                                         | [ ] scroll · ← rail · : · ,                                                                |
 | main · PR pane (pane 3)                                | pill · browser │ PRs · review                                                                   | ↑↓ move · ⏎ detail · ← issues · g G · : · ,                                                |

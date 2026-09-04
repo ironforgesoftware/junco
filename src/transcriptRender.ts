@@ -320,7 +320,15 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
             ],
             // #478: the window between the operator's `y` and the CLI's exit.
             running: [`   ▸ submitting ${what} → ${n.route}…`, "accent"],
-            ran: [`   ✓ submitted → ${n.route} · ${what} · exit ${n.exitCode ?? "?"}`, "success"],
+            ran: [
+              // A `ran` CAN carry a caveat (the CLI queued the ticket but the
+              // draft did not archive), and without it the row reads as a clean
+              // success beside a card still marked parked (#479).
+              `   ✓ submitted → ${n.route} · ${what} · exit ${n.exitCode ?? "?"}${
+                n.detail === null ? "" : ` · ${n.detail}`
+              }`,
+              "success",
+            ],
             failed: [
               // The detail carries the only thing the row cannot infer — and
               // sometimes contradicts the tail (a draft the dashboard already

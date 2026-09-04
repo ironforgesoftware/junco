@@ -50,10 +50,28 @@ export type BindingContext =
    * ORDER below); the keymap carries the same globals + body verbs on every
    * pane of a body. The pane still belongs to the context identity rather
    * than to a second argument that could disagree with it. */
-  | { kind: "main"; body: MainBody; pane: 1 | 2 | 3 }
+  | {
+      kind: "main";
+      body: MainBody;
+      pane: 1 | 2 | 3;
+      /** Pane 1 only: is the selected RAIL row a repo in the watchlist? App
+       * derives it from the row's own `UnifiedRepo` (`watched && nwo`) — the
+       * gate useMainActions' `unwatch` handler uses. `false` drops the
+       * `Unwatch` chip, which only toasts "not in watchlist" there (#459).
+       * Omitted → watched, so every other caller is unchanged. */
+      watched?: boolean;
+      /** Pane 2 of the issues body only: is there an issue under the cursor?
+       * `false` (an empty or fully filtered list) drops the per-issue verbs,
+       * which all toast "no issue selected" there (#473). Omitted → yes. */
+      issueSelected?: boolean;
+    }
   | { kind: "view"; view: OverlayView }
   | { kind: "logOverlay" }
-  | { kind: "structuralOnly"; view: StructuralOnlyView };
+  /** `pending`: a junco_submit card is waiting while the composer still has
+   * focus (#479). It changes ONE label — `esc` blurs there, it does not abort
+   * the turn (#476's useChatInput rule) — so it stays optional and only
+   * `chatCompose` reads it. */
+  | { kind: "structuralOnly"; view: StructuralOnlyView; pending?: boolean };
 
 export type Chip =
   | { kind: "structural"; key: string; label: string }
@@ -330,6 +348,15 @@ const ISSUES_CHIP_ORDER = [
   "quit",
   "help",
 ];
+/** The ids in ISSUES_CHIP_ORDER that need an issue under the cursor: each of
+ * their handlers returns early with a "no issue selected" toast otherwise, so
+ * an empty list must not advertise them (#473). */
+const PER_ISSUE_IDS: ReadonlySet<string> = new Set([
+  "dispatch",
+  "approve",
+  "analyze",
+  "transcript",
+]);
 const PANE3_CHIP_ORDER = ["chat", "browser", "prs", "review", "quit", "help"];
 /** Spec §4 "main · repo detail body" (Ruling R11): a repo IS in context on
  * this body — `useMainActions`' `chat` handler reads `currentRepoKey`, which a
@@ -351,6 +378,16 @@ const sectionChipOrder = (body: MainBody): string[] => [
 /** A rail row that names a repo (watched → the issues body, everything else →
  * repoDetail); the other five bodies are the pinned system rows. */
 const isRepoBody = (body: MainBody): boolean => body === "issues" || body === "repoDetail";
+
+/** The body's verbs for ONE pane. Spec §5: `t` is the ticket transcript on the
+ * issue LIST and nowhere else — "it is unbound on the rail and the PR pane" —
+ * so the issues body's own slot derives on pane 2 only (#466). Every other
+ * option is pane-independent, and dropping the last entry of the list leaves
+ * the earlier derivations untouched (pinned in tests/tuiViewActions.test.ts). */
+function bodyVerbs(body: MainBody, pane: 1 | 2 | 3): MnemonicOption[] {
+  const verbs = BODY_VERBS[body];
+  return body === "issues" && pane !== 2 ? verbs.filter((o) => o.id !== "transcript") : verbs;
+}
 
 function mnemonicChip(d: DerivedMnemonic): Chip {
   return {
@@ -378,7 +415,7 @@ export function buildContextBindings(context: BindingContext, _mode: LayoutMode)
       // argument that only this branch read, which let the keymap and the
       // chips be built for different panes).
       const pane = context.pane;
-      const all = deriveMnemonics([...MAIN_GLOBALS, ...BODY_VERBS[context.body]], {
+      const all = deriveMnemonics([...MAIN_GLOBALS, ...bodyVerbs(context.body, pane)], {
         reserved: MAIN_RESERVED,
         excluded: MAIN_EXCLUDED,
       });
@@ -389,15 +426,25 @@ export function buildContextBindings(context: BindingContext, _mode: LayoutMode)
       // `unwatch` are rail verbs and §4's "rail, repo row" lists them — while
       // a system row gets that section's verbs. Only past pane 1 does the
       // BODY decide, which is where `repoDetail` earns its own order.
+      // An unwatched rail row (a local-only checkout, or any repo row while
+      // github is off) cannot be unwatched — the handler toasts "not in
+      // watchlist" — so the chip goes (#459). `add repo` stays: it is a rail
+      // verb about the rail, live whatever row is selected.
+      const railOrder =
+        context.watched === false
+          ? RAIL_CHIP_ORDER.filter((id) => id !== "unwatch")
+          : RAIL_CHIP_ORDER;
       const chipOrder =
         pane === 1
           ? isRepoBody(context.body)
-            ? RAIL_CHIP_ORDER
+            ? railOrder
             : sectionChipOrder(context.body)
           : pane === 3
             ? PANE3_CHIP_ORDER
             : context.body === "issues"
-              ? ISSUES_CHIP_ORDER
+              ? context.issueSelected === false
+                ? ISSUES_CHIP_ORDER.filter((id) => !PER_ISSUE_IDS.has(id))
+                : ISSUES_CHIP_ORDER
               : context.body === "repoDetail"
                 ? REPO_DETAIL_CHIP_ORDER
                 : sectionChipOrder(context.body);

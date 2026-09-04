@@ -396,6 +396,20 @@ describe("Footer (two rows, spec 2026-09-02 §3)", () => {
     expect(nav.trimEnd().endsWith("? help  quit")).toBe(true);
     expect(nav.trimEnd().length).toBeGreaterThan(60); // the spacer pushed them right
   });
+  it("the pinned run ends one column in from the right edge, like the left (#460)", () => {
+    // `paddingX={1}` is the whole margin the row is supposed to have: one
+    // blank column each side. The last pinned chip used to add its own
+    // `marginRight={2}` on top, so `quit` stopped three columns short while
+    // the label started one column in.
+    const nav = renderAt(80, <Footer rows={rows} toast={null} />)
+      .lastFrame()!
+      .split("\n")[1]!;
+    expect(nav.trimEnd().endsWith("quit")).toBe(true);
+    expect(nav.trimEnd()).toHaveLength(80 - 1);
+    // The gaps INSIDE the runs are unchanged: two columns between chips.
+    expect(nav).toMatch(/ {2}\? help {2}quit$/);
+  });
+
   it("a toast replaces the actions row only; the navigate row stays", () => {
     const f = render(
       <Footer rows={rows} toast={{ kind: "error", text: "gh boom\nline 2" }} />,
@@ -537,13 +551,35 @@ describe("Footer with the REAL derived rows (wide, pinned chips past col 100)", 
     expect(nav).not.toContain("config"); // "," (config) is the one dropped
   });
 
-  it("clips from the right when the row genuinely does not fit (60 columns)", () => {
-    // Even after all four NAV_DROP_ORDER entries, the remaining chips (move /
-    // panes / preview / filter) plus the pinned run still don't fit 60 —
-    // Chrome.tsx's overflow="hidden" clips it, never wraps to a third line.
-    const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 60);
-    expect(nav.length).toBeLessThanOrEqual(60);
-    expect(nav).not.toContain("quit");
+  it("#464: at 60 columns the pinned run survives — the label slot and / filter go instead", () => {
+    // Pre-#464 the four NAV_DROP_ORDER keys left this row needing 72 columns,
+    // so between MIN_COLS and ~76 what Chrome.tsx clipped was `? help  quit`
+    // — the one run the design says never moves. Rendered, not modelled: this
+    // is the assertion that would catch a rowWidth that drifts optimistic.
+    for (const target of ["acme/api", "alxedelwe…/arkanoid_oq4e"]) {
+      const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, target, 60);
+      expect(nav.length, target).toBeLessThanOrEqual(60);
+      expect(nav.trimEnd(), target).toMatch(/ {2}\? help {2}quit$/);
+      // The label slot and `/ filter` are what paid for it; the movement keys
+      // and `⏎ preview` stay.
+      expect(nav, target).not.toContain("navigate");
+      expect(nav, target).not.toContain("filter");
+      expect(nav, target).toContain("preview");
+    }
+  });
+  it("both rows lose the label slot together, so the chip runs stay aligned (#464)", () => {
+    const r = renderWide(
+      <Box width={60} flexDirection="column">
+        <Footer
+          rows={rowsFor({ kind: "main", body: "issues", pane: 2 }, "acme/api", 60)}
+          toast={null}
+        />
+      </Box>,
+      60,
+    );
+    const [actions, nav] = (r.lastFrame() ?? "").split("\n");
+    expect(actions).not.toContain("acme/api");
+    expect(actions!.indexOf("chat")).toBe(nav!.indexOf("↑↓"));
   });
 });
 
@@ -579,16 +615,16 @@ describe("rowWidth pinned against the real renderer (Ruling R10)", () => {
   };
 
   // ink-testing-library's frame trims EACH line's trailing whitespace before
-  // handing it back, so the rendered STRING's length always reads 3 short of
-  // `rowWidth`: the last pinned chip's own `marginRight={2}` plus the row's
-  // `paddingRight` (from `paddingX={1}`) are real, occupied columns — Yoga
-  // reserves them so the row overflows exactly at `rowWidth` — but they are
-  // blank, so the trimmed string never shows them. `TRAILING_BLANK` names
-  // that gap once instead of asserting a bare "3" here and never explaining
-  // it: it is not a fudge factor, it is `rowWidth`'s own last-chip marginRight
-  // (2) plus the row's paddingRight (1), the exact two terms this file's own
-  // header comment says the estimate counts.
-  const TRAILING_BLANK = 2 + 1;
+  // handing it back, so the rendered STRING's length reads 1 short of
+  // `rowWidth`: the row's `paddingRight` (from `paddingX={1}`) is a real,
+  // occupied column — Yoga reserves it so the row overflows exactly at
+  // `rowWidth` — but it is blank, so the trimmed string never shows it.
+  // `TRAILING_BLANK` names that gap once instead of asserting a bare "1" here
+  // and never explaining it: it is not a fudge factor, it is `rowWidth`'s own
+  // paddingRight term. It used to be 3 — the last pinned chip's
+  // `marginRight={2}` was in it too, which is exactly the column debt #460
+  // paid off.
+  const TRAILING_BLANK = 1;
 
   it("rowWidth is exactly the column count where the row's last character stops fitting", () => {
     // At rowWidth (and TRAILING_BLANK short of it) every character up to and
