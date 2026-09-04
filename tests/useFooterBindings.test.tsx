@@ -40,6 +40,7 @@ const base: FooterBindingsInput = {
   logOverlay: false,
   filtering: false,
   composerFocused: false,
+  issueSelected: true,
   chatPending: false,
   mode: "wide",
   columns: 120,
@@ -56,7 +57,13 @@ const run = (input: FooterBindingsInput) => {
 describe("useFooterBindings", () => {
   it("main view: context is pane-scoped, keymap carries c → chat, footer rows are built for the target", () => {
     const r = run(base);
-    expect(r.bindingContext).toEqual({ kind: "main", body: "issues", pane: 1, watched: true });
+    expect(r.bindingContext).toEqual({
+      kind: "main",
+      body: "issues",
+      pane: 1,
+      watched: true,
+      issueSelected: true,
+    });
     expect(r.bindings.keymap.get("c")).toBe("chat");
     expect(r.footer.actions.label).toBe("acme/api");
     expect(r.footer.actions.chips[0]).toMatchObject({ kind: "pill", id: "chat" });
@@ -139,12 +146,14 @@ describe("useFooterBindings", () => {
       body: "queue",
       pane: 1,
       watched: true,
+      issueSelected: true,
     });
     expect(run({ ...base, body: null }).bindingContext).toEqual({
       kind: "main",
       body: "repoDetail",
       pane: 1,
       watched: true,
+      issueSelected: true,
     });
   });
   it("a repoDetail rail row reports its own watch state — the Unwatch gate (#459)", () => {

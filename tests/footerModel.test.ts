@@ -83,6 +83,29 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "structural:,:config",
     ]);
   });
+  it("issue list with NO issue under the cursor: only the verbs that can fire (#473)", () => {
+    // An empty (or fully filtered) issue list left `import · approve ·
+    // investigate · transcript` on the bar, each of which only toasts.
+    const r = rows(
+      { kind: "main", body: "issues", pane: 2, issueSelected: false },
+      { target: "acme/api" },
+    );
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:chat:chat",
+      "mnemonic:assess:audit",
+      "mnemonic:browser:browser",
+      "│",
+      "mnemonic:prs:PRs",
+      "mnemonic:review:review",
+      "mnemonic:queue:queue",
+    ]);
+    // Panes 1 and 3 never listed the issue verbs, so the flag changes nothing
+    // there — and the keymap is untouched everywhere (the handlers own the
+    // guard; the chips only stop advertising it).
+    expect(
+      texts(rows({ kind: "main", body: "issues", pane: 1, issueSelected: false }).actions.chips),
+    ).toEqual(texts(rows({ kind: "main", body: "issues", pane: 1 }).actions.chips));
+  });
   it("PR pane (pane 3): pill, browser │ PRs, review", () => {
     const r = rows({ kind: "main", body: "issues", pane: 3 }, { target: "PR #12" });
     expect(texts(r.actions.chips)).toEqual([

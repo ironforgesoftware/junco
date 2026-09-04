@@ -60,6 +60,10 @@ export type BindingContext =
        * `Unwatch` chip, which only toasts "not in watchlist" there (#459).
        * Omitted → watched, so every other caller is unchanged. */
       watched?: boolean;
+      /** Pane 2 of the issues body only: is there an issue under the cursor?
+       * `false` (an empty or fully filtered list) drops the per-issue verbs,
+       * which all toast "no issue selected" there (#473). Omitted → yes. */
+      issueSelected?: boolean;
     }
   | { kind: "view"; view: OverlayView }
   | { kind: "logOverlay" }
@@ -344,6 +348,15 @@ const ISSUES_CHIP_ORDER = [
   "quit",
   "help",
 ];
+/** The ids in ISSUES_CHIP_ORDER that need an issue under the cursor: each of
+ * their handlers returns early with a "no issue selected" toast otherwise, so
+ * an empty list must not advertise them (#473). */
+const PER_ISSUE_IDS: ReadonlySet<string> = new Set([
+  "dispatch",
+  "approve",
+  "analyze",
+  "transcript",
+]);
 const PANE3_CHIP_ORDER = ["chat", "browser", "prs", "review", "quit", "help"];
 /** Spec §4 "main · repo detail body" (Ruling R11): a repo IS in context on
  * this body — `useMainActions`' `chat` handler reads `currentRepoKey`, which a
@@ -429,7 +442,9 @@ export function buildContextBindings(context: BindingContext, _mode: LayoutMode)
           : pane === 3
             ? PANE3_CHIP_ORDER
             : context.body === "issues"
-              ? ISSUES_CHIP_ORDER
+              ? context.issueSelected === false
+                ? ISSUES_CHIP_ORDER.filter((id) => !PER_ISSUE_IDS.has(id))
+                : ISSUES_CHIP_ORDER
               : context.body === "repoDetail"
                 ? REPO_DETAIL_CHIP_ORDER
                 : sectionChipOrder(context.body);

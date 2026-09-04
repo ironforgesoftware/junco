@@ -25,6 +25,9 @@ export interface FooterBindingsInput {
   logOverlay: boolean;
   filtering: boolean;
   composerFocused: boolean;
+  /** Is there an issue under the cursor (App's `currentIssue`)? An empty or
+   * fully filtered issue list must not advertise the per-issue verbs (#473). */
+  issueSelected: boolean;
   /** A junco_submit card is waiting on the operator (spec 2026-09-03 §4.3) →
    * the blurred chat's context is `chatConfirm`, whose keymap is empty. */
   chatPending: boolean;
@@ -68,6 +71,7 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     logOverlay,
     filtering,
     composerFocused,
+    issueSelected,
     chatPending,
     mode,
     columns,
@@ -111,9 +115,15 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
       case "transcript":
         return { kind: "view", view };
       case "main":
-        return { kind: "main", pane, body: mainBody(body), watched: railWatched(body) };
+        return {
+          kind: "main",
+          pane,
+          body: mainBody(body),
+          watched: railWatched(body),
+          issueSelected,
+        };
     }
-  }, [logOverlay, filtering, view, composerFocused, chatPending, body, pane]);
+  }, [logOverlay, filtering, view, composerFocused, chatPending, issueSelected, body, pane]);
   const bindings = useMemo(
     () => buildContextBindings(bindingContext, mode),
     [bindingContext, mode],

@@ -18,7 +18,14 @@ import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
 import { App } from "../src/tui/App.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
-import { makeAppProps, okv, stubClient, HEAVY, WIDE_COLS_TEST } from "./helpers/localFixtures.js";
+import {
+  makeAppProps,
+  okv,
+  stubClient,
+  HEAVY,
+  ISSUES,
+  WIDE_COLS_TEST,
+} from "./helpers/localFixtures.js";
 import { makeDashPr } from "./helpers/dashFixtures.js";
 import { renderWide, cleanupWide, type WideInstance } from "./helpers/renderWide.js";
 import { until } from "./helpers/until.js";
@@ -54,6 +61,8 @@ const PR_12 = makeDashPr({ number: 12, nwo: "acme/api" });
 const client: DashboardClient = {
   ...stubClient,
   listPrs: async (nwo) => okv({ prs: nwo === "acme/api" ? [PR_12] : [], staleAt: null }),
+  // beta/two is the watched repo with an EMPTY issue list (#473).
+  listIssues: async (nwo) => okv({ issues: nwo === "beta/two" ? [] : ISSUES, staleAt: null }),
 };
 
 function mount(over: Partial<AppProps> = {}): WideInstance {
@@ -140,6 +149,21 @@ describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => 
     expect(f.actions.trimStart().startsWith("issue #1")).toBe(true);
     expect(f.actions).not.toContain("acme/api");
     expect(hasPill(f.actions)).toBe(true);
+  });
+
+  it("issue list with NO issues: the per-issue verbs are gone, the repo verbs stay (#473)", async () => {
+    const r = mount();
+    await until(() => frame(r).includes(LOADED));
+    r.stdin.write("j");
+    await until(() => footer(r).actions.includes("beta/two"));
+    r.stdin.write("l"); // into beta/two's empty issue list
+    await until(() => footer(r).navigate.includes("filter"));
+    const f = footer(r);
+    for (const dead of ["import", "approve", "investigate", "transcript"]) {
+      expect(f.actions, dead).not.toContain(dead);
+    }
+    expect(hasPill(f.actions)).toBe(true);
+    expect(f.actions).toMatch(/audit\s+browser\s+│\s+PRs\s+review\s+queue/);
   });
 
   it("PR monitor (pane 3): the target is the PR, not the repo (R12)", async () => {
