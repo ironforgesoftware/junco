@@ -103,6 +103,10 @@ describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => 
     const f = footer(r);
     expect(f.actions).not.toContain("no repo");
     expect(hasPill(f.actions)).toBe(true);
+    // …and NOT `Unwatch`: this checkout is not in the watchlist, so the
+    // handler behind that chip only toasts "not in watchlist" (#459).
+    expect(f.actions).not.toContain("Unwatch");
+    expect(f.actions).toContain("add repo");
   });
 
   it("rail, SYSTEM row: that section's verbs against its own name — no pill, no repo verbs (R11)", async () => {

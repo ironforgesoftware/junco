@@ -5,8 +5,23 @@ import React from "react";
 import { render, cleanup } from "ink-testing-library";
 import { Text } from "ink";
 import { useFooterBindings, type FooterBindingsInput } from "../src/tui/hooks/useFooterBindings.js";
+import type { BodyKind, UnifiedRepo } from "../src/tui/railModel.js";
 
 afterEach(cleanup);
+
+/** A discovered checkout that is not in the watchlist — `bodyKindFor` routes
+ * every such row to the repoDetail body. */
+const UNWATCHED: UnifiedRepo = {
+  key: "/c/scratchpad",
+  nwo: null,
+  path: "/c/scratchpad",
+  fromConfig: false,
+  external: false,
+  source: "clone",
+  watched: false,
+  git: null,
+  clones: [],
+};
 
 function Probe({
   input,
@@ -41,7 +56,7 @@ const run = (input: FooterBindingsInput) => {
 describe("useFooterBindings", () => {
   it("main view: context is pane-scoped, keymap carries c → chat, footer rows are built for the target", () => {
     const r = run(base);
-    expect(r.bindingContext).toEqual({ kind: "main", body: "issues", pane: 1 });
+    expect(r.bindingContext).toEqual({ kind: "main", body: "issues", pane: 1, watched: true });
     expect(r.bindings.keymap.get("c")).toBe("chat");
     expect(r.footer.actions.label).toBe("acme/api");
     expect(r.footer.actions.chips[0]).toMatchObject({ kind: "pill", id: "chat" });
@@ -123,12 +138,29 @@ describe("useFooterBindings", () => {
       kind: "main",
       body: "queue",
       pane: 1,
+      watched: true,
     });
     expect(run({ ...base, body: null }).bindingContext).toEqual({
       kind: "main",
       body: "repoDetail",
       pane: 1,
+      watched: true,
     });
+  });
+  it("a repoDetail rail row reports its own watch state — the Unwatch gate (#459)", () => {
+    const repoDetail = (over: Partial<UnifiedRepo>): BodyKind => ({
+      kind: "repoDetail",
+      repo: { ...UNWATCHED, ...over },
+    });
+    const ids = (body: BodyKind): string[] =>
+      run({ ...base, body }).footer.actions.chips.map((c) => c.id);
+    expect(ids(repoDetail({}))).not.toContain("unwatch");
+    // A watched repo lands on this body too when github is off — `U` is live
+    // there, so the chip must stay.
+    expect(ids(repoDetail({ watched: true, nwo: "acme/api" }))).toContain("unwatch");
+    // A watchlist entry with no nwo cannot be unwatched either (the handler
+    // needs the nwo), so both halves of the gate are pinned.
+    expect(ids(repoDetail({ watched: true }))).not.toContain("unwatch");
   });
   // Ruling R6' (fix round 3): `view === "help"` wins over EVERY other input,
   // the log overlay included. Before this the overlay won, and the footer

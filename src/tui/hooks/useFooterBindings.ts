@@ -52,6 +52,13 @@ export interface FooterBindings {
 
 const mainBody = (body: BodyKind | null): MainBody =>
   body?.kind === "issues" ? "issues" : body?.kind === "section" ? body.section : "repoDetail";
+/** Pane 1's `Unwatch` gate (#459): the rail row's repo is in the watchlist —
+ * exactly useMainActions' own `watched && nwo` test, so the chip and the
+ * handler agree. An issues body is watched by construction (`bodyKindFor`),
+ * and a section body has no repo at all — its chip order never lists
+ * `unwatch`, so `true` there is inert. */
+const railWatched = (body: BodyKind | null): boolean =>
+  body?.kind === "repoDetail" ? body.repo.watched && body.repo.nwo !== null : true;
 
 export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
   const {
@@ -104,7 +111,7 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
       case "transcript":
         return { kind: "view", view };
       case "main":
-        return { kind: "main", pane, body: mainBody(body) };
+        return { kind: "main", pane, body: mainBody(body), watched: railWatched(body) };
     }
   }, [logOverlay, filtering, view, composerFocused, chatPending, body, pane]);
   const bindings = useMemo(
