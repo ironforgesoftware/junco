@@ -10,8 +10,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, useApp, type Key } from "ink";
 import { bumpRender } from "./renderCount.js";
 import type { DashboardClient, HealthInfo } from "./ghClient.js";
-import type { DashAction, DashIssue, IssueLifecycle } from "./state.js";
-import { allowedActions, deriveState } from "./state.js";
+import type { DashAction, DashIssue, IssueLifecycle, LabelNames } from "./state.js";
+import { allowedActions, deriveState, labelDelta } from "./state.js";
+import type { LifecycleLabels } from "../githubInbox.js";
 import { githubTicketId, lifecycleLabels } from "../githubInbox.js";
 import { resolve } from "node:path";
 import { expandHome } from "../config.js";
@@ -105,6 +106,11 @@ import type { PlanOutcome } from "../unwatchCmd.js";
 export interface AppProps {
   client: DashboardClient;
   trigger: string;
+  /** `cfg.github.askLabel` — the second label `dispatchAsk` adds. Only the
+   * optimistic overlay needs it here (the real edit is ghClient's, which reads
+   * it from cfg); optional so a test's App can stay at the configAssemble
+   * default (`<trigger>:ask`) without restating it. */
+  askLabel?: string;
   /** `cfg.branchPrefix` — recovers a PR's ticket slug from its head branch. */
   branchPrefix: string;
   configRepos: GithubRepoMapping[]; // read-only entries
@@ -244,33 +250,41 @@ function firstNonEmptyLine(s: string): string | null {
   return null;
 }
 
+/**
+ * The optimistic overlay: labels the dashboard *predicts* the daemon will add
+ * once it picks the issue up, painted on top of the real `labelDelta`.
+ *
+ * This is the ONE place the optimistic view is allowed to differ from what
+ * `gh` is actually asked to do (#443), and the difference is deliberate, not
+ * drift: the operator must see the row leave `raw` the instant they act, but
+ * these labels are the BRIDGE's to write — the dashboard never sends them.
+ * `dispatch` predicts `:planning` (the bridge plans first); `dispatchAsk`
+ * predicts `:queued` (an ask ticket skips planning and goes straight to the
+ * queue). The next poll reconciles either way. Anything NOT listed here must
+ * come from `labelDelta` — see tests/tuiLabelDelta.test.ts, which fails if a
+ * third divergence appears.
+ */
+const OPTIMISTIC_PREDICTION: Partial<Record<DashAction, (ll: LifecycleLabels) => string[]>> = {
+  dispatch: (ll) => [ll.planning],
+  dispatchAsk: (ll) => [ll.queued],
+};
+
 /** Compute the optimistic label set for an action — the operator sees motion
- * immediately; the bridge later reconciles to the authoritative labels. */
-function optimisticLabels(action: DashAction, labels: string[], trigger: string): string[] {
-  const ll = lifecycleLabels(trigger);
+ * immediately; the bridge later reconciles to the authoritative labels. The
+ * transition itself is `ghClient.labelDelta`, exactly as sent to GitHub; only
+ * OPTIMISTIC_PREDICTION above is local. A zero-op recycle (`null` delta) moves
+ * nothing, mirroring `applyAction`'s short-circuit. */
+export function optimisticLabels(
+  action: DashAction,
+  labels: string[],
+  names: LabelNames,
+): string[] {
   const set = new Set(labels);
-  switch (action) {
-    case "dispatch":
-      set.add(trigger);
-      set.add(ll.planning);
-      break;
-    case "dispatchAsk":
-      set.add(trigger);
-      set.add(ll.queued);
-      break;
-    case "approve":
-      set.add(ll.approved);
-      break;
-    case "replan":
-      set.delete(ll.planReady);
-      set.delete(ll.approved);
-      break;
-    case "recycle":
-      set.delete(ll.done);
-      set.delete(ll.failed);
-      set.delete(ll.denied);
-      break;
-  }
+  const delta = labelDelta(action, labels, names);
+  if (delta === null) return [...set];
+  for (const l of delta.remove) set.delete(l);
+  for (const l of delta.add) set.add(l);
+  for (const l of OPTIMISTIC_PREDICTION[action]?.(lifecycleLabels(names.trigger)) ?? []) set.add(l);
   return [...set];
 }
 
@@ -340,6 +354,10 @@ export function App(props: AppProps): React.JSX.Element {
   const assessHistoryPollMs = props.assessHistoryPollMs ?? 15_000;
   const localCheapPollMs = props.localCheapPollMs ?? 3_000;
   const localHeavyPollMs = props.localHeavyPollMs ?? 15_000;
+  // What `optimisticLabels` predicts against — the pair ghClient hands
+  // `labelDelta` for the real edit (#443); the fallback is configAssemble's.
+  const askLabel = props.askLabel ?? `${trigger}:ask`;
+  const labelNames = useMemo((): LabelNames => ({ trigger, askLabel }), [trigger, askLabel]);
   // useMemo'd (perf pass #259): the `??` fallback arrow was rebuilt every
   // render, churning the identity of everything that depends on `runCliFn`
   // (runPaletteCommand, paletteEnter, runAssess, runLocalAction) even when
@@ -883,7 +901,7 @@ export function App(props: AppProps): React.JSX.Element {
   const runAction = useCallback(
     (action: DashAction) => {
       if (!currentNwo || !currentIssue) return;
-      const st = deriveState(currentIssue.labels, trigger);
+      const st = deriveState(currentIssue.labels, labelNames.trigger);
       // Display text only: `action` ("dispatch"/…) is the internal DashAction id
       // (ghClient.ts, unchanged — see viewActions.ts's id/label split), but its
       // dashboard LABEL is "import" (surface-legibility Task 2) — surface that,
@@ -896,7 +914,7 @@ export function App(props: AppProps): React.JSX.Element {
       const nwo = currentNwo;
       const num = currentIssue.number;
       const prevLabels = currentIssue.labels;
-      githubSetIssueLabels(nwo, num, optimisticLabels(action, prevLabels, trigger));
+      githubSetIssueLabels(nwo, num, optimisticLabels(action, prevLabels, labelNames));
       void client.applyAction(nwo, num, action, prevLabels).then((res) => {
         if (!aliveRef.current) return;
         if (!res.ok) {
@@ -912,7 +930,7 @@ export function App(props: AppProps): React.JSX.Element {
         }
       });
     },
-    [client, currentNwo, currentIssue, trigger, githubSetIssueLabels, showToast, queueSnap],
+    [client, currentNwo, currentIssue, labelNames, githubSetIssueLabels, showToast, queueSnap],
   );
 
   const openDetail = useCallback(() => {

@@ -114,6 +114,9 @@ export async function runDashboard(
   const buildAppProps = (c: Config): Omit<AppProps, "onRequestWizard"> => ({
     client: makeGhDashboardClient(c),
     trigger: c.github.triggerLabel,
+    // The optimistic label overlay's second name (#443) — the real edit reads
+    // it from cfg inside ghClient; App only predicts with it.
+    askLabel: c.github.askLabel,
     branchPrefix: c.branchPrefix,
     configRepos: c.github.repos,
     watchlistFile: watchlistPath(c),

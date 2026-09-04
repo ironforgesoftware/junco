@@ -90,8 +90,13 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // (2026-09-03, 1,880 → 1,882): `chatPending` on the useFooterBindings call
   // (+1) and `decide` in the structuralChipActions dep array (+1) — the card's
   // y/n chip recipe replaces the chat case's `return {}` in place, and the
-  // `decide` it dispatches rides the existing chatApi destructure.
-  { file: "src/tui/App.tsx", max: 1882 },
+  // `decide` it dispatches rides the existing chatApi destructure. +2 for the
+  // label-switch unification (#443, 1,882 → 1,884): `optimisticLabels` now
+  // applies state.ts's shared `labelDelta`, which needs the ask label as well
+  // as the trigger — one `askLabel` fallback line and one `labelNames` memo
+  // (stable, so `runAction`'s identity does not churn); the dep array trades
+  // `trigger` for it and stays a single line.
+  { file: "src/tui/App.tsx", max: 1884 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
