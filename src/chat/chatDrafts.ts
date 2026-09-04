@@ -163,6 +163,13 @@ export function makeTurnHook(
   // lint_failed cards.
   const pendingRetry = new Map<string, string[]>();
   return async (session, result, source) => {
+    // #449: the slot belongs to the ONE retry that followed a failed park, and
+    // it is spent the moment that retry comes back — whatever it produced. A
+    // retry that errored or emitted no fence used to leave the entry behind,
+    // so a LATER auto_lint turn (a fresh failure's retry is fine; this one is
+    // not its retry) would remove a draft the operator was still looking at.
+    const previous = source === "auto_lint" ? pendingRetry.get(session.slug) : undefined;
+    if (source === "auto_lint") pendingRetry.delete(session.slug);
     if (result.mode !== "prompt" || result.status !== "ok") return;
     const c = cfg();
     // Spec §6.1 / Ruling R35: the FINAL assistant message is the answer, so
@@ -178,13 +185,11 @@ export function makeTurnHook(
     });
     if (extracted.length === 0) return;
     const parked = await parkDrafts(c, session, extracted, deps);
-    const previous = pendingRetry.get(session.slug);
-    if (source === "auto_lint" && previous !== undefined) {
-      // The rejected first attempt is REMOVED, not archived: it was never a
-      // card the operator saw, and its retry is on disk now.
-      for (const id of previous) removeChatDraft(c, id);
-      pendingRetry.delete(session.slug);
-    }
+    // The rejected first attempt is REMOVED, not archived: it was never a card
+    // the operator saw, and its retry is on disk now (spec §6.3) — which is
+    // why this runs here, on the retry that actually parked something, and not
+    // where the slot is cleared above.
+    if (previous !== undefined) for (const id of previous) removeChatDraft(c, id);
     for (const d of parked)
       session.writeRecord({
         type: "junco_chat_draft",

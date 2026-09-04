@@ -38,6 +38,28 @@ const routeInbox = async () => ({
   discarded: [],
 });
 
+/** A real ChatSession over a temp data dir — what makeTurnHook writes its
+ * records through. The SDK never runs here: the factory hands back a fake. */
+async function turnHookSession(cfg: ReturnType<typeof cfgAt>, root: string): Promise<ChatSession> {
+  const fakeSm = async (mode: SessionManagerMode) =>
+    "create" in mode
+      ? { manager: {}, file: join(mode.create.dir, "sdk") }
+      : { manager: {}, file: mode.open.file };
+  const session = new ChatSession(
+    {
+      cfg,
+      key: "acme/api",
+      kind: "watched",
+      cwd: "/repo",
+      nwo: "acme/api",
+      dir: join(root, "data", "chats", "acme__api"),
+    },
+    { makeSessionManager: fakeSm, sessionFactoryFor: () => fakeChatSession([]) },
+  );
+  await session.ensureMeta();
+  return session;
+}
+
 describe("parkDrafts (spec 2026-09-01 §6.2)", () => {
   // The REAL decideRoute, not a fake: makeConfig ships github.enabled false,
   // which is decideRoute's own deterministic short-circuit (no git, no fs), so
@@ -384,6 +406,101 @@ describe("lintFollowUp + makeTurnHook (spec 2026-09-01 §6.3)", () => {
     await run("done — parked it above", `${first}\n\ndone — parked it above`);
     const after = listChatDrafts(cfg);
     expect(after).toHaveLength(2);
+  });
+
+  it("a retry that emits no fence clears the retry slot: the original stays parked (#449)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const session = await turnHookSession(cfg, root);
+    const hook = makeTurnHook(() => cfg, { routeFn: routeInbox });
+    const bad =
+      "````junco-ticket\n---\nid: bad\n---\n# Bad\n\n## Steps\n\n### Step 1 — run the tests\n\n1. cd src && npm test\n````";
+    const good = "````junco-ticket\n---\nid: good\n---\n" + CLEAN_BODY + "\n````";
+    const run = (text: string, source: "operator" | "auto_lint", status: "ok" | "error" = "ok") =>
+      hook(
+        session,
+        {
+          mode: "prompt",
+          status,
+          abortReason: null,
+          errorMessage: status === "error" ? "boom" : null,
+          usage: { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 },
+          durationMs: 1,
+          finalText: text,
+          allText: text,
+        },
+        source,
+      );
+
+    await run(bad, "operator");
+    const failed = listChatDrafts(cfg);
+    expect(failed).toHaveLength(1);
+    // The one retry ran and produced prose, not a fence: nothing parks, and
+    // the lint-failed draft stays listed for the operator to `D`.
+    await run("sorry — I could not fix that", "auto_lint");
+    expect(listChatDrafts(cfg).map((d) => d.id)).toEqual([failed[0]!.id]);
+    // The slot is gone with it: a LATER auto_lint turn is not that draft's
+    // retry and must not remove it (it used to, on the stale entry).
+    await run(good, "auto_lint");
+    const after = listChatDrafts(cfg);
+    expect(after).toHaveLength(2);
+    expect(after.map((d) => d.id)).toContain(failed[0]!.id);
+  });
+
+  it("a retry that ERRORS clears the slot too — the retry ran (#449)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-park-"));
+    const cfg = cfgAt(root);
+    const session = await turnHookSession(cfg, root);
+    const hook = makeTurnHook(() => cfg, { routeFn: routeInbox });
+    const bad =
+      "````junco-ticket\n---\nid: bad\n---\n# Bad\n\n## Steps\n\n### Step 1 — run the tests\n\n1. cd src && npm test\n````";
+    const good = "````junco-ticket\n---\nid: good\n---\n" + CLEAN_BODY + "\n````";
+    const zero = { input: 0, output: 0, cacheRead: 0, total: 0, costUsd: 0 };
+    await hook(
+      session,
+      {
+        mode: "prompt",
+        status: "ok",
+        abortReason: null,
+        errorMessage: null,
+        usage: zero,
+        durationMs: 1,
+        finalText: bad,
+        allText: bad,
+      },
+      "operator",
+    );
+    const failed = listChatDrafts(cfg);
+    expect(failed).toHaveLength(1);
+    await hook(
+      session,
+      {
+        mode: "prompt",
+        status: "error",
+        abortReason: null,
+        errorMessage: "429 rate limited",
+        usage: zero,
+        durationMs: 1,
+        finalText: "",
+        allText: "",
+      },
+      "auto_lint",
+    );
+    await hook(
+      session,
+      {
+        mode: "prompt",
+        status: "ok",
+        abortReason: null,
+        errorMessage: null,
+        usage: zero,
+        durationMs: 1,
+        finalText: good,
+        allText: good,
+      },
+      "auto_lint",
+    );
+    expect(listChatDrafts(cfg).map((d) => d.id)).toContain(failed[0]!.id);
   });
 
   it("a still-failing retry parks lintFailed and returns no further followUp", async () => {
