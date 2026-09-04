@@ -28,8 +28,7 @@ describe("useConfirm", () => {
         confirmed = true;
       },
     });
-    await new Promise((res) => setTimeout(res, 5));
-    expect(r.lastFrame()).toBe("Delete branch:This cannot be undone.");
+    await until(() => r.lastFrame() === "Delete branch:This cannot be undone.");
     expect(api.confirm?.danger).toBe(true);
 
     // A cancel drops the state without invoking onConfirm (no onCancel given).
