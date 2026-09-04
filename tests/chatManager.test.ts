@@ -413,6 +413,49 @@ describe("ChatManager watchlist reconciliation (#452, #453)", () => {
     await m.reconcile();
     expect(m.health().sessions).toHaveLength(1);
   });
+
+  it("a moved checkout is re-resolved on the next open, with a cwd_changed record (#453)", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    const first = await m.get("acme/api");
+    if (!first.ok) throw new Error(first.error);
+    expect(first.value.cwd).toBe(state.cwd);
+    await runTurn(m, "acme/api", "hello");
+    const transcript = first.value.transcriptPath;
+
+    state.cwd = tmp(); // clonesDir moved, or the checkout was relocated
+    await m.reconcile();
+    const again = await m.get("acme/api");
+    if (!again.ok) throw new Error(again.error);
+    expect(again.value.cwd).toBe(state.cwd);
+    expect(again.value).not.toBe(first.value);
+    // Same transcript, one record explaining the jump.
+    expect(again.value.transcriptPath).toBe(transcript);
+    expect(lines(transcript).filter((r) => r.type === "junco_chat_session_reset")).toEqual([
+      expect.objectContaining({ reason: "cwd_changed" }),
+    ]);
+  });
+
+  it("/new re-resolves the checkout before the next turn (#453)", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    const first = await m.get("acme/api");
+    if (!first.ok) throw new Error(first.error);
+    await runTurn(m, "acme/api", "hello");
+    state.cwd = tmp();
+    expect(await m.fresh("acme/api")).toEqual({ ok: true, value: null });
+    const again = await m.get("acme/api");
+    expect(again.ok && again.value.cwd).toBe(state.cwd);
+  });
+
+  it("an unchanged checkout keeps the very same session across a reset (Ruling R10)", async () => {
+    const { resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    const first = await m.get("acme/api");
+    await m.fresh("acme/api");
+    const again = await m.get("acme/api");
+    expect(first.ok && again.ok && again.value).toBe(first.ok ? first.value : null);
+  });
 });
 
 describe("ChatManager.decide (spec 2026-09-03 §3.3)", () => {

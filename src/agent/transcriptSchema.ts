@@ -167,7 +167,9 @@ export interface ChatCommandRecord {
 }
 export interface ChatSessionResetRecord {
   type: "junco_chat_session_reset";
-  reason: "corrupt" | "missing" | "operator_new";
+  /** cwd_changed: the checkout moved under a live session and it was rebuilt
+   *  on the new path (spec §2.2, #453) — the transcript continues. */
+  reason: "corrupt" | "missing" | "operator_new" | "cwd_changed";
   ts: string;
 }
 export interface ChatTranscriptDegradedRecord {
