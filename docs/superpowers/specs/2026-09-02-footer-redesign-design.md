@@ -92,15 +92,15 @@ never hidden. The multi-line collapse (`\n` → `·`) stays.
 
 ### 3.4 Rendering language
 
-| Element           | Style                                                                                                                                                                      |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Lit letter        | `theme.accent`, bold, underline (Ink `underline`) — uppercase when guarded                                                                                                 |
-| Label             | default foreground (today's `dimColor` is dropped)                                                                                                                         |
-| Structural keycap | `backgroundColor: theme.keycapBg` (new token, `#3b4261`-class, chosen for both dark and light terminals), default foreground, one space of padding each side               |
-| Chat pill         | `backgroundColor: theme.accent`, foreground `theme.pillFg` (new token, the terminal-background-like dark), bold; the lit letter additionally underlined; one space padding |
-| Row label         | dim, fixed-width slot                                                                                                                                                      |
-| Separator         | `│` dim                                                                                                                                                                    |
-| Toast             | `toastColor(kind)` as today                                                                                                                                                |
+| Element           | Style                                                                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lit letter        | `theme.accent`, bold, underline (Ink `underline`) — uppercase when guarded                                                                                                                               |
+| Label             | default foreground (today's `dimColor` is dropped)                                                                                                                                                       |
+| Structural keycap | `backgroundColor: theme.keycapBg` (new token, `#3b4261`-class) with `theme.keycapFg` (#465: an EXPLICIT light foreground, so a light terminal theme is not dark-on-dark), one space of padding each side |
+| Chat pill         | `backgroundColor: theme.accent`, foreground `theme.pillFg` (new token, the terminal-background-like dark), bold; the lit letter additionally underlined; one space padding                               |
+| Row label         | dim, fixed-width slot                                                                                                                                                                                    |
+| Separator         | `│` dim                                                                                                                                                                                                  |
+| Toast             | `toastColor(kind)` as today                                                                                                                                                                              |
 
 Frames strip ANSI, so tests assert placement through the pure segment model (§7), never
 through colours in `lastFrame()`.

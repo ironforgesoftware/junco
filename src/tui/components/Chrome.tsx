@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { theme, toastColor, type ToastKind } from "../theme.js";
+import { theme, toastColor, segmentColors, type ToastKind } from "../theme.js";
 import type { LayoutMode } from "../layout.js";
 import type { HealthInfo } from "../ghClient.js";
 import { fmtDurShort } from "../queueFmt.js";
@@ -227,8 +227,7 @@ function SegmentText({ chip }: { chip: FooterChip }): React.JSX.Element {
       {footerSegments(chip).map((s, j) => (
         <Text
           key={j}
-          color={s.pill ? theme.pillFg : s.accent ? theme.accent : undefined}
-          backgroundColor={s.pill ? theme.accent : s.keycap ? theme.keycapBg : undefined}
+          {...segmentColors(s)}
           bold={s.pill || s.accent}
           underline={s.underline}
           dimColor={s.dim}
