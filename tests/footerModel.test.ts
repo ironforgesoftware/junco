@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildContextBindings, type BindingContext } from "../src/tui/viewActions.js";
+import {
+  buildContextBindings,
+  type BindingContext,
+  type MainBody,
+} from "../src/tui/viewActions.js";
 import {
   buildFooterRows,
   footerSegments,
@@ -164,15 +168,33 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "mnemonic:prs:PRs",
     ]);
     expect(r.actions.chips.some((c) => c.kind === "pill")).toBe(false);
+    // #470: a system row opens its BODY — neither key goes to an issue list
+    // or a repo detail. `→`/`⏎` both `setPane(2)` in App (the logs row's
+    // `⏎` opens the full-screen log instead).
     expect(texts(r.navigate.chips)).toEqual([
       "structural:↑/↓:move",
-      "structural:→:issues",
-      "structural:enter:detail",
+      "structural:→:open",
+      "structural:enter:open",
       "structural:g/G:first/last",
       "structural:::palette",
       "structural:,:config",
     ]);
     expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:quit:quit"]);
+  });
+  it("rail: → and ⏎ say what the SELECTED ROW opens (#470)", () => {
+    const nav = (body: MainBody) =>
+      texts(rows({ kind: "main", body, pane: 1 }, { chatReachable: false }).navigate.chips).slice(
+        1,
+        3,
+      );
+    // A watched repo row is the only one with an issue list behind `→`.
+    expect(nav("issues")).toEqual(["structural:→:issues", "structural:enter:detail"]);
+    // An unwatched checkout has no issue list — `→` focuses its detail body,
+    // `⏎` opens the same panel full-screen.
+    expect(nav("repoDetail")).toEqual(["structural:→:open", "structural:enter:detail"]);
+    for (const body of ["queue", "outbox", "worktrees", "daemon"] as const)
+      expect(nav(body), body).toEqual(["structural:→:open", "structural:enter:open"]);
+    expect(nav("logs")).toEqual(["structural:→:open", "structural:enter:log"]);
   });
   it("logs: no dangling leading │ when nothing precedes the go-globals (#458)", () => {
     // BODY_VERBS.logs is empty, so the logs body's chip order is the two go

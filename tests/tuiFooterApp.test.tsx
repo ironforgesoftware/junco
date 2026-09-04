@@ -138,6 +138,11 @@ describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => 
     // Spec §4: the main view pins [help, quit] on a system row too.
     expect(f.navigate).toContain("? help");
     expect(f.navigate).toContain("quit");
+    // …and the navigate row says what the keys do HERE (#470): both open the
+    // section's body — neither goes to an issue list or a repo detail.
+    expect(f.navigate).toMatch(/→\s+open\s+⏎\s+open/);
+    expect(f.navigate).not.toContain("issues");
+    expect(f.navigate).not.toContain("detail");
   });
 
   it("issue list (pane 2): the target is the ISSUE, not the repo (R12)", async () => {

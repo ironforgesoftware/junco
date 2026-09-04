@@ -153,10 +153,22 @@ function navigateChips(
   const { body, pane } = context;
   const common = [s("g/G", "first/last"), s(":", "palette"), s(",", "config")];
   return pane === 1
-    ? [s("↑/↓", "move"), s("→", "issues"), s("enter", "detail"), ...common]
+    ? [s("↑/↓", "move"), ...railOpen(body), ...common]
     : pane === 3
       ? [s("↑/↓", "move"), s("enter", "detail"), s("←", "issues"), ...common]
       : [...mainBodyNav(body, mode), ...common];
+}
+/** Pane 1's `→`/`⏎` labels, per the kind of row the rail cursor is on (#470).
+ * `→` always focuses that row's body (App's pane-1 arm: `setPane(2)`), so only
+ * a WATCHED repo row can honestly say `issues`; `⏎` opens the repo-detail
+ * overlay on a repo row and the full-screen log on the logs row, and is the
+ * same "focus the body" everywhere else. Spec §4's "main · rail, system row"
+ * row said `→ open` all along — the code rendered the repo labels for every
+ * pane-1 row. */
+function railOpen(body: MainBody): FooterChip[] {
+  if (body === "issues") return [s("→", "issues"), s("enter", "detail")];
+  if (body === "repoDetail") return [s("→", "open"), s("enter", "detail")];
+  return [s("→", "open"), s("enter", body === "logs" ? "log" : "open")];
 }
 function mainBodyNav(body: MainBody, mode: LayoutMode): FooterChip[] {
   switch (body) {
