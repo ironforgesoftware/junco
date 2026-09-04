@@ -95,8 +95,12 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // applies state.ts's shared `labelDelta`, which needs the ask label as well
   // as the trigger — one `askLabel` fallback line and one `labelNames` memo
   // (stable, so `runAction`'s identity does not churn); the dep array trades
-  // `trigger` for it and stays a single line.
-  { file: "src/tui/App.tsx", max: 1884 },
+  // `trigger` for it and stays a single line. +6 for the two unreachable
+  // navigate-row chips (#461, 1,884 → 1,890): `→ issues` is one line, and the
+  // `: palette` chip is the `openQueueTranscript` precedent again — the key and
+  // the chip must run ONE recipe, so `openPalette` is a stable useCallback (+5
+  // net against the three key-handler lines it replaces with two).
+  { file: "src/tui/App.tsx", max: 1890 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },

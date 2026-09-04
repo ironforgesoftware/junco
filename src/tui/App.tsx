@@ -482,6 +482,13 @@ export function App(props: AppProps): React.JSX.Element {
     onRequestWizard: props.onRequestWizard,
     setView,
   });
+  // Opening the palette is one recipe with two doors — the `:` key and the
+  // navigate row's `:  palette` chip (#461) — so they can never drift; the
+  // reset is what keeps a reopen from inheriting the last filter.
+  const openPalette = useCallback((): void => {
+    resetPalette();
+    setView("palette");
+  }, [resetPalette]);
   // ── Local runtime state: system-section cursors + the cheap/heavy snapshots
   // feeding the rail's system rows and section bodies. ──
   const [sectionCursor, setSectionCursor] = useState<Record<SystemSection, number>>({
@@ -1623,6 +1630,11 @@ export function App(props: AppProps): React.JSX.Element {
         return {
           ",": () => setView("config"),
           "←": () => setPane(1),
+          // #461: both keycaps render on the navigate row, so both must click.
+          // `→` is pane 1's `→ issues` cap — the mirror of `←` above, and the
+          // only pane the navigate row draws it in.
+          ":": openPalette,
+          "→": () => setPane(2),
           "/": () => {
             if (body?.kind !== "issues") return;
             setFiltering(true);
@@ -1658,6 +1670,7 @@ export function App(props: AppProps): React.JSX.Element {
     onLogExpand,
     openDetail,
     paletteEnter,
+    openPalette,
     setLogOverlay,
     setLogSearchMode,
   ]);
@@ -2093,8 +2106,7 @@ export function App(props: AppProps): React.JSX.Element {
     // the derived keymap; `,` config at layer 3c. `:` is the palette's own
     // structural key (spec 2026-09-02 D5) — `c` now derives `chat` instead.
     if (input === ":") {
-      resetPalette();
-      setView("palette");
+      openPalette();
       return;
     }
 
