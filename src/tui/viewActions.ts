@@ -53,7 +53,11 @@ export type BindingContext =
   | { kind: "main"; body: MainBody; pane: 1 | 2 | 3 }
   | { kind: "view"; view: OverlayView }
   | { kind: "logOverlay" }
-  | { kind: "structuralOnly"; view: StructuralOnlyView };
+  /** `pending`: a junco_submit card is waiting while the composer still has
+   * focus (#479). It changes ONE label — `esc` blurs there, it does not abort
+   * the turn (#476's useChatInput rule) — so it stays optional and only
+   * `chatCompose` reads it. */
+  | { kind: "structuralOnly"; view: StructuralOnlyView; pending?: boolean };
 
 export type Chip =
   | { kind: "structural"; key: string; label: string }

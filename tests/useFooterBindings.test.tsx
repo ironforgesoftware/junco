@@ -86,9 +86,14 @@ describe("useFooterBindings", () => {
     expect(r.bindingContext).toEqual({ kind: "structuralOnly", view: "chatConfirm" });
     expect(r.bindings.keymap.size).toBe(0);
     // The composer still wins: `i` focuses it and typing must derive nothing.
+    // It carries `pending` through, though — the composer's `esc` chip has to
+    // say "blur", not "blur/abort", while the card waits (#479).
     expect(
       run({ ...base, view: "chat", composerFocused: true, chatPending: true }).bindingContext,
-    ).toEqual({ kind: "structuralOnly", view: "chatCompose" });
+    ).toEqual({ kind: "structuralOnly", view: "chatCompose", pending: true });
+    expect(
+      run({ ...base, view: "chat", composerFocused: true, chatPending: false }).bindingContext,
+    ).toEqual({ kind: "structuralOnly", view: "chatCompose", pending: false });
   });
   it("log overlay and filtering win over the view", () => {
     expect(run({ ...base, logOverlay: true }).bindingContext).toEqual({ kind: "logOverlay" });

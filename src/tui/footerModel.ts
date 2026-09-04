@@ -219,7 +219,11 @@ export function buildFooterRows({
             },
             s("ctrl+j", "newline"),
             s("/", "commands"),
-            s("esc", "blur/abort"),
+            // While a junco_submit card waits, `esc` only blurs — #476 made
+            // the abort conditional on `streaming && pending === null`
+            // (useChatInput.ts), and an inert chip may not claim otherwise
+            // (#479). ChatView's own hint line already reads `esc blur` here.
+            s("esc", context.pending === true ? "blur" : "blur/abort"),
           ]
         : [];
     // Spec 2026-09-03 §4.3: the y/n of a waiting junco_submit card. `y` is the

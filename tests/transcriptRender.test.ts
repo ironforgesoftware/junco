@@ -536,6 +536,22 @@ describe("junco_chat_command rows", () => {
     expect(row(lines({ status: "aborted" })).text).toContain("aborted with the turn");
   });
 
+  it("a ran row appends its detail — a queued-but-unarchived submit says so (#479)", () => {
+    // `code 0` with a failed archive records `ran` WITH a detail; without it
+    // the row reads as a clean success beside a draft card still marked parked.
+    expect(
+      row(
+        lines({
+          status: "ran",
+          exitCode: 0,
+          detail: "submitted, but the draft did not archive: EACCES",
+        }),
+      ).text,
+    ).toBe(
+      "   ✓ submitted → inbox · add-readme · exit 0 · submitted, but the draft did not archive: EACCES",
+    );
+  });
+
   it("a failed row shows its detail instead of the parked tail (final review #2c)", () => {
     // "draft stays parked" is a lie when the detail says the draft is gone —
     // and the detail is the only thing the row cannot infer from the record.

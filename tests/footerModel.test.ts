@@ -342,6 +342,24 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       keycap: true,
     });
   });
+  it("composer focused OVER a pending card: esc only blurs, so the chip says so (#479)", () => {
+    // #476 made `esc` abort only when `chat.streaming && chat.pending === null`
+    // (useChatInput.ts) — while a junco_submit card waits, esc just blurs.
+    const r = buildFooterRows({
+      context: { kind: "structuralOnly", view: "chatCompose", pending: true },
+      bindings: buildContextBindings({ kind: "structuralOnly", view: "chatCompose" }, "wide"),
+      target: "acme/api",
+      chatReachable: true,
+      mode: "wide",
+      columns: 200,
+    });
+    expect(texts(r.actions.chips)).toEqual([
+      "pill:enter:send",
+      "structural:ctrl+j:newline",
+      "structural:/:commands",
+      "structural:esc:blur",
+    ]);
+  });
   it("chat view, a submit awaiting confirmation: y/n are the actions row, and nothing else is", () => {
     const r = rows({ kind: "structuralOnly", view: "chatConfirm" }, { target: "acme/api" });
     expect(texts(r.actions.chips)).toEqual(["pill:y:submit", "structural:n:keep parked"]);

@@ -84,7 +84,9 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     // what keeps typed prose off the mnemonic dispatch at layer 3d.
     if (view === "chat")
       return composerFocused
-        ? { kind: "structuralOnly", view: "chatCompose" }
+        ? // `pending` only relabels the composer's `esc` chip (#479): esc
+          // blurs while a submit card waits, it does not abort.
+          { kind: "structuralOnly", view: "chatCompose", pending: chatPending }
         : chatPending
           ? { kind: "structuralOnly", view: "chatConfirm" }
           : { kind: "view", view: "chat" };
