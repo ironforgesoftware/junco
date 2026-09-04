@@ -97,6 +97,7 @@ function chatClient(): {
         ],
         turns: 1,
         costUsd: 0.1,
+        chatTodayUsd: 0.1,
         tokensIn: 1,
         tokensOut: 1,
       },
@@ -148,7 +149,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     c.push(40, chatTurnAborted());
     await until(() => !r.lastFrame()!.includes("◐ streaming"));
     r.stdin.write("\x1b");
-    await until(() => r.lastFrame()!.includes("i compose"));
+    await until(() => r.lastFrame()!.includes("i  compose"));
     r.stdin.write("\x1b");
     await until(() => !r.lastFrame()!.includes("chat · acme/api"));
     expect(c.calls).toContain("unsub");
@@ -172,12 +173,12 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     c.push(20, chatDraft());
     await until(() => r.lastFrame()!.includes("draft parked"));
     r.stdin.write("\x1b"); // blur (idle)
-    await until(() => r.lastFrame()!.includes("i compose"));
+    await until(() => r.lastFrame()!.includes("i  compose"));
     await fireUntil(r.stdin, "s", () => ran.length === 1);
     expect(ran[0]![0]).toBe("submit");
     expect(ran[0]![1]).toMatch(/add-cache\.md$/);
     r.stdin.write("i");
-    await until(() => r.lastFrame()!.includes("esc blur/abort"));
+    await until(() => r.lastFrame()!.includes("esc  blur/abort"));
   });
 
   // QA 2026-09-03: every door forced pane 2 (the Composer's hook was gated on
@@ -194,7 +195,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     r.stdin.write("quit"); // typed prose still reaches the composer with no pane switch
     await until(() => r.lastFrame()!.includes("quit"));
     r.stdin.write("\x1b"); // blur
-    await until(() => r.lastFrame()!.includes("i compose"));
+    await until(() => r.lastFrame()!.includes("i  compose"));
     r.stdin.write("\x1b"); // leave
     await until(() => !r.lastFrame()!.includes("chat · acme/api"));
     expect(railFooter()).toBe(true);
@@ -224,7 +225,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     await until(() => r.lastFrame()!.includes("line 49")); // following the tail
     expect(r.lastFrame()).not.toContain("draft parked"); // 40 rows: the card is off the top
     r.stdin.write("\x1b"); // blur
-    await until(() => r.lastFrame()!.includes("i compose"));
+    await until(() => r.lastFrame()!.includes("i  compose"));
     r.stdin.write("\x1b[A"); // ↑ — one row, NOT a jump to the card
     await until(() => !r.lastFrame()!.includes("line 49"));
     expect(r.lastFrame()).toContain("line 48");
@@ -271,7 +272,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     expect(r.lastFrame()).toContain("awaiting you · y submit · n keep parked");
     expect(r.lastFrame()).toContain("◐ awaiting your confirmation");
     expect(footerActions()).toContain("y submit");
-    expect(r.lastFrame()).not.toContain("esc blur/abort"); // composer blurred
+    expect(r.lastFrame()).not.toContain("esc  blur/abort"); // composer blurred
     // The draft verbs are OFF the keymap while the daemon holds this draft:
     // `s` must not submit the parked draft a second time. The proposal parked
     // the cursor on the COMMAND card, where `s` would only ever toast "no
@@ -290,7 +291,7 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     await until(() => r.lastFrame()!.includes("✓ submitted → inbox · add-readme · exit 0"));
     // Answered (fix round 1, ruling R2): the tail and the composer come back,
     // so the footer is the composer's own row — not the confirm one.
-    await until(() => r.lastFrame()!.includes("esc blur/abort"));
+    await until(() => r.lastFrame()!.includes("esc  blur/abort"));
     expect(footerActions()).not.toContain("keep parked");
     r.stdin.write("\x1b"); // blur again to reach the card's keys
     await until(() => footerActions().includes("thinking"));

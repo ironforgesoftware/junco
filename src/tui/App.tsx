@@ -2535,7 +2535,7 @@ export function App(props: AppProps): React.JSX.Element {
           <ChatView
             state={chatState}
             modelId={props.chatModelId}
-            costUsd={health?.chats?.costUsd ?? null}
+            chatTodayUsd={health?.chats?.chatTodayUsd ?? null}
             scroll={scroll}
             height={listHeight}
             width={size.columns}
