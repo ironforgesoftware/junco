@@ -143,10 +143,15 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
     expect(d!.files).toHaveLength(1);
     expect(d!.files[0]!.body).toContain("corrected");
     expect(d!.files[0]!.body).not.toContain("first attempt");
-    expect(d!.problems).toEqual(["duplicate id add-cache: kept the last fence"]);
+    expect(d!.problems).toEqual([
+      "duplicate id add-cache: kept the last fence in the first one's slot",
+    ]);
   });
 
   it("a duplicate inside a genuine set keeps the set and drops only the superseded fence", () => {
+    // #448: the survivor takes the FIRST fence's slot with the LAST fence's
+    // content, so the set stays in the order the model wrote it — submitArgv
+    // submits in file order and `ui` depends on `api`.
     const text = [
       fence("id: api", "# API v1"),
       fence("id: ui\ndepends_on: [api]", "# UI"),
@@ -154,9 +159,27 @@ describe("extractDrafts (spec 2026-09-01 §6.1)", () => {
     ].join("\n\n");
     const [d] = extractDrafts(text, ctx);
     expect(d!.kind).toBe("ticketSet");
-    expect(d!.files.map((f) => f.name)).toEqual(["ui.md", "api.md"]);
+    expect(d!.files.map((f) => f.name)).toEqual(["api.md", "ui.md"]);
     expect(d!.files.find((f) => f.id === "api")!.body).toContain("API v2");
-    expect(d!.problems).toEqual(["duplicate id api: kept the last fence"]);
+    expect(d!.problems).toEqual(["duplicate id api: kept the last fence in the first one's slot"]);
+  });
+
+  it("a redraft never reorders a set: the dependency keeps its slot ahead of the dependent (#448)", () => {
+    // The model drafts api → ui, then re-emits a corrected api. Last-wins on
+    // POSITION would queue `ui` (which depends_on api) first.
+    const text = [
+      fence("id: api", "# API v1"),
+      fence("id: ui\ndepends_on: [api]", "# UI"),
+      fence("id: api", "# API v2"),
+      fence("id: ui\ndepends_on: [api]", "# UI v2"),
+    ].join("\n\n");
+    const [d] = extractDrafts(text, ctx);
+    expect(d!.files.map((f) => f.name)).toEqual(["api.md", "ui.md"]);
+    expect(d!.files.map((f) => f.body)).toEqual(["# API v2", "# UI v2"]);
+    expect(d!.problems).toEqual([
+      "duplicate id api: kept the last fence in the first one's slot",
+      "duplicate id ui: kept the last fence in the first one's slot",
+    ]);
   });
 
   it("a fence without frontmatter gets a generated id from the H1", () => {
