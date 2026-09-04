@@ -7,6 +7,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { request as httpRequest } from "node:http";
 import { startHealthServer, type HealthServerHandle } from "../src/healthServer.js";
 import { makeChatRoutes, type ChatRoutesManager } from "../src/chat/chatRoutes.js";
+import { DRAFT_DESTINATIONS, DRAFT_KINDS, DRAFT_STATUSES } from "../src/agent/transcriptSchema.js";
 import type { ChatSubscriber } from "../src/chat/chatSession.js";
 
 function fakeMetrics() {
@@ -308,6 +309,25 @@ describe("/chat routes (spec 2026-09-01 §5)", () => {
       ).status,
     ).toBe(202);
     expect(m.calls.filter((c) => c[0] === "note")).toHaveLength(1);
+  });
+
+  it("POST /chat/note accepts every kind/status/destination the schema declares (#447)", async () => {
+    const m = fakeManager();
+    const url = await serve(m);
+    const base = { type: "junco_chat_draft", draftId: "d1", ids: ["t"], destination: null };
+    const post = (record: unknown): Promise<Response> =>
+      fetch(`${url}/chat/note`, { method: "POST", body: JSON.stringify({ key: "k", record }) });
+    // The validator's sets are DERIVED from these arrays, so an eighth draft
+    // kind can never answer 400 while the union already accepts it.
+    for (const kind of DRAFT_KINDS)
+      expect((await post({ ...base, kind, status: "parked" })).status, kind).toBe(202);
+    for (const status of DRAFT_STATUSES)
+      expect((await post({ ...base, kind: "ticket", status })).status, status).toBe(202);
+    for (const destination of [...DRAFT_DESTINATIONS, null])
+      expect(
+        (await post({ ...base, kind: "ticket", status: "submitted", destination })).status,
+        String(destination),
+      ).toBe(202);
   });
 
   it("POST /chat/decide: 202 when it settled a pending confirmation, 409 when nothing is pending, 400 on a bad body", async () => {
