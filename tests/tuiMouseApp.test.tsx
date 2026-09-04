@@ -725,6 +725,35 @@ describe("footer chips: mouse", () => {
     expect(r.lastFrame() ?? "").toContain("status"); // unfiltered list
   });
 
+  // #488: on pane 2 the wide layout renders ONE combined cap for both
+  // directions (`s("←/→", "panes")`, footerModel's mainBodyNav) instead of the
+  // separate `←`/`→` caps #461 wired up. Its dispatch id is `←/→` — which
+  // structuralChipActions never mapped — while the FRAME shows the glyph
+  // `←→` (footerModel's GLYPHS), hence the two spellings here. One cap, one
+  // direction: forward with wrap, the recipe `tab` already runs, so the chip
+  // and the key cannot drift.
+  it("pane 2: the '←→  panes' chip advances a pane, wrapping like tab", async () => {
+    const r = renderApp();
+    await until(() =>
+      /→ {2}issues/.test(rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""))),
+    );
+    r.stdin.write("l"); // pane 2 — the only pane drawing the combined cap
+    await until(() =>
+      /←→ {2}panes/.test(rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""))),
+    );
+
+    const f = r.lastFrame() ?? "";
+    const y = navigateY(f);
+    const x = rowAt(f, y).search(/←→ {2}panes/);
+    expect(x).toBeGreaterThan(0);
+    // Pane 3's navigate row is its own vocabulary (`← issues`, no `panes`
+    // cap), so the landing unmounts the chip at that x — the retry
+    // self-terminates rather than cycling on to pane 1.
+    await fireUntil(r.stdin, press(x, y), () =>
+      /← {2}issues/.test(rowAt(r.lastFrame() ?? "", navigateY(r.lastFrame() ?? ""))),
+    );
+  });
+
   it("pane 1: the '→  issues' chip focuses the issues pane", async () => {
     const r = renderApp();
     await until(() =>
