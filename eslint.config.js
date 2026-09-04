@@ -90,8 +90,12 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // (2026-09-03, 1,880 → 1,882): `chatPending` on the useFooterBindings call
   // (+1) and `decide` in the structuralChipActions dep array (+1) — the card's
   // y/n chip recipe replaces the chat case's `return {}` in place, and the
-  // `decide` it dispatches rides the existing chatApi destructure.
-  { file: "src/tui/App.tsx", max: 1882 },
+  // `decide` it dispatches rides the existing chatApi destructure. +1 for the
+  // empty issue list (#473, 1,882 → 1,883): `issueSelected: currentIssue !==
+  // undefined` on the useFooterBindings call — the footer must not advertise
+  // the per-issue verbs with no issue under the cursor, and `currentIssue` is
+  // App's own state, so the flag can only be read here.
+  { file: "src/tui/App.tsx", max: 1883 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
