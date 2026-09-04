@@ -71,6 +71,9 @@ const STATUS: Record<ChatError, number> = {
   no_checkout: 409,
   not_a_repo: 409,
   chat_disabled: 503,
+  // The daemon is shutting down (#446): the manager refuses the prompt rather
+  // than let it rebuild the SDK session drain() just disposed.
+  draining: 503,
 };
 
 function json(res: ServerResponse, status: number, body: unknown): void {

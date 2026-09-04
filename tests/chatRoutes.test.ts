@@ -207,6 +207,18 @@ describe("/chat routes (spec 2026-09-01 §5)", () => {
     }
   });
 
+  it("POST /chat/prompt → 503 {error:'draining'} once the daemon is stopping (#446)", async () => {
+    const url = await serve(
+      fakeManager({ prompt: async () => ({ ok: false, error: "draining" }) }),
+    );
+    const r = await fetch(`${url}/chat/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ key: "k", text: "t" }),
+    });
+    expect(r.status).toBe(503);
+    expect(await r.json()).toEqual({ error: "draining" });
+  });
+
   it("bad requests: malformed JSON 400, missing key 400, oversized text 413, wrong method 405, unknown route 404", async () => {
     const url = await serve(fakeManager(), { maxTextBytes: 16 });
     expect((await fetch(`${url}/chat/prompt`, { method: "POST", body: "{nope" })).status).toBe(400);

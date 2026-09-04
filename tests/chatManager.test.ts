@@ -328,6 +328,51 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     expect(m.health().sessions[0]?.streaming).toBe(false);
     if (p.ok) await p.value.done;
   });
+
+  it("a prompt that lands once drain() has started is refused, and rebuilds nothing (#446)", async () => {
+    let built = 0;
+    const factory = fakeChatSession([chatScriptText("hi", 0.1), chatScriptText("again", 0.1)]);
+    const { m } = setup({
+      session: {
+        makeSessionManager: fakeSm,
+        sessionFactoryFor: () => async () => {
+          built++;
+          return factory();
+        },
+      },
+    });
+    expect(await runTurn(m, "acme/api", "one")).toEqual({ ok: true, mode: "prompt" });
+    expect(built).toBe(1);
+    // Mid-drain: `drain()` has bumped the generation and disposed the SDK
+    // session, so admitting this would rebuild one that nothing disposes.
+    const draining = m.drain();
+    expect(await m.prompt("acme/api", "two")).toEqual({ ok: false, error: "draining" });
+    await draining;
+    expect(await m.prompt("acme/api", "three")).toEqual({ ok: false, error: "draining" });
+    expect(built).toBe(1);
+  });
+
+  it("drain() is bounded by a grace, not by the turn timeout (#446)", async () => {
+    let entered = false;
+    let release!: () => void;
+    const stuck = new Promise<void>((r) => (release = r));
+    const { m } = setup({
+      drainGraceMs: 30,
+      onTurnComplete: async () => {
+        entered = true;
+        await stuck;
+      },
+    });
+    const p = await m.prompt("acme/api", "hello");
+    expect(p.ok).toBe(true);
+    // The tail is wedged in the draft hook — a turn tail that never settles.
+    await vi.waitFor(() => expect(entered).toBe(true));
+    const started = Date.now();
+    await m.drain();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    release();
+    if (p.ok) await p.value.done;
+  });
 });
 
 describe("ChatManager.decide (spec 2026-09-03 §3.3)", () => {

@@ -49,7 +49,7 @@ export interface AdmittedPrompt {
   mode: "prompt" | "steer" | "rejected";
   done: Promise<void>;
 }
-export type ChatError = ChatCwdError | "chat_disabled";
+export type ChatError = ChatCwdError | "chat_disabled" | "draining";
 export type ChatResult<T> = { ok: true; value: T } | { ok: false; error: ChatError };
 
 export interface ChatManagerDeps {
@@ -78,8 +78,19 @@ export interface ChatManagerDeps {
   ) => Promise<{ followUp?: string } | void>;
   draftsParkedFor?: (slug: string) => number;
   abortGraceMs?: number;
+  /** How long `drain()` waits for the sessions and their detached tails
+   *  before giving up and letting shutdown proceed (default
+   *  DRAIN_GRACE_MS). */
+  drainGraceMs?: number;
   now?: () => number;
 }
+
+/** Shutdown's whole chat budget (#446). The per-turn abort grace
+ * (chatTurn.ts's ABORT_GRACE_MS) already bounds a wedged MODEL, so what this
+ * bounds is everything after it: a draft hook that hangs, or a turn admitted
+ * in the window before `draining` latched. Deliberately far below
+ * `chat.turnTimeoutMinutes` — a shutdown must not sit out a 30-minute turn. */
+const DRAIN_GRACE_MS = 10_000;
 
 export class ChatManager {
   private readonly sessions = new Map<string, ChatSession>();
@@ -179,6 +190,11 @@ export class ChatManager {
     text: string,
     opts: { source?: "operator" | "auto_lint" } = {},
   ): Promise<ChatResult<AdmittedPrompt>> {
+    // Before `get()` — the manager's half of the draining 503 (#446). A
+    // prompt admitted after drain() bumped the generation would have
+    // `ensureSession()` rebuild the SDK session it just disposed, and the
+    // new tail would be tracked by a drain that is already past its wait.
+    if (this.draining) return { ok: false, error: "draining" };
     const got = await this.get(key);
     if (!got.ok) return got;
     const session = got.value;
@@ -364,12 +380,46 @@ export class ChatManager {
    * clients open past the shutdown deadline. Then the detached tails (R33):
    * the abort above makes each turn settle, and this is what waits for the
    * spend/hook/record work that used to sit inside the POST. `draining`
-   * stops an auto-lint follow-up from being admitted mid-shutdown, which is
-   * also what makes the loop terminate. */
+   * stops an auto-lint follow-up — and, since #446, any new prompt — from
+   * being admitted mid-shutdown, which is also what makes the loop terminate.
+   *
+   * Bounded by DRAIN_GRACE_MS (#446): the wait is best-effort, so a hook that
+   * never returns leaves its tail detached and shutdown carries on rather
+   * than holding the health server open for the rest of the turn timeout.
+   * Every subscriber has already had its terminal event by then — that
+   * happens inside `session.drain()`, which the grace only ever cuts short in
+   * the pathological case. */
   async drain(): Promise<void> {
     this.draining = true;
-    await Promise.all([...this.sessions.values()].map((s) => s.drain()));
-    while (this.inFlightTurns.size > 0)
-      await Promise.all([...this.inFlightTurns.values()].flatMap((s) => [...s]));
+    const work = (async () => {
+      await Promise.all([...this.sessions.values()].map((s) => s.drain()));
+      while (this.inFlightTurns.size > 0)
+        await Promise.all([...this.inFlightTurns.values()].flatMap((s) => [...s]));
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const grace = new Promise<"grace">((resolve) => {
+      timer = setTimeout(() => resolve("grace"), this.deps.drainGraceMs ?? DRAIN_GRACE_MS);
+      // Never the reason the process stays alive: the daemon is stopping.
+      timer.unref?.();
+    });
+    try {
+      const outcome = await Promise.race([
+        work.then(
+          () => "done" as const,
+          (e: unknown) => {
+            log.warn("chat drain failed", { error: e instanceof Error ? e.message : String(e) });
+            return "done" as const;
+          },
+        ),
+        grace,
+      ]);
+      if (outcome === "grace")
+        log.warn("chat drain grace expired; leaving turn tails detached", {
+          sessions: this.sessions.size,
+          pending: this.inFlightTurns.size,
+        });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
