@@ -27,11 +27,14 @@ import {
   WIDE_COLS_TEST,
 } from "./helpers/localFixtures.js";
 import { makeDashPr } from "./helpers/dashFixtures.js";
+import { Box } from "ink";
+import { Footer } from "../src/tui/components/Chrome.js";
 import { renderWide, cleanupWide, type WideInstance } from "./helpers/renderWide.js";
 import { until } from "./helpers/until.js";
 import type { AppProps } from "../src/tui/App.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { LocalHeavy } from "../src/tui/localSnapshot.js";
+import type { FooterChip, FooterRows } from "../src/tui/footerModel.js";
 
 afterEach(cleanupWide);
 
@@ -81,11 +84,50 @@ const footer = (r: WideInstance): { actions: string; navigate: string } => {
   const lines = frame(r).split("\n");
   return { actions: lines[lines.length - 2] ?? "", navigate: lines[lines.length - 1] ?? "" };
 };
-/** The chat pill is the only chip drawn as ` c hat ` — frames carry no ANSI,
- * so the pill's PRESENCE is read as its padded label, exactly where §3.1 puts
- * it: immediately after the target slot. */
-const hasPill = (actions: string): boolean => / chat {2}/.test(actions);
+/** Frames carry no ANSI, so the pill has to be read off its GEOMETRY. A pill's
+ * segments carry a padding space inside the chip (footerSegments, spec §3.4)
+ * and the run puts two more between chips: `chat` followed by THREE spaces.
+ * A plain `chat` mnemonic chip has only the run's two — which is why the old
+ * `/ chat {2}/` here would have survived the pill degrading to one (#467).
+ * The `it` below pins that discrimination against the real renderer. */
+const hasPill = (actions: string): boolean => /chat {3}/.test(actions);
 const LOADED = "First issue";
+
+describe("hasPill reads the pill, not any chip labelled chat (#467)", () => {
+  const row = (chat: FooterChip): FooterRows => ({
+    actions: {
+      label: "acme/api",
+      chips: [
+        chat,
+        {
+          kind: "mnemonic",
+          id: "browser",
+          key: "b",
+          label: "browser",
+          charIndex: 0,
+          guarded: false,
+        },
+      ],
+      pinned: [],
+    },
+    navigate: { label: "navigate", chips: [], pinned: [] },
+  });
+  const line = (rows: FooterRows): string =>
+    (
+      renderWide(
+        <Box width={120} flexDirection="column">
+          <Footer rows={rows} toast={null} />
+        </Box>,
+        120,
+      ).lastFrame() ?? ""
+    ).split("\n")[0] ?? "";
+
+  it("is true for the pill and false for a plain chat mnemonic chip", () => {
+    const base = { id: "chat", key: "c", label: "chat", charIndex: 0, guarded: false } as const;
+    expect(hasPill(line(row({ ...base, kind: "pill" })))).toBe(true);
+    expect(hasPill(line(row({ ...base, kind: "mnemonic" })))).toBe(false);
+  });
+});
 
 describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => {
   it("rail, repo row: the nwo, the pill, the rail verbs │ the go-globals", async () => {
