@@ -6,6 +6,7 @@ import {
   type Decision,
 } from "../src/chat/submitTool.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
+import { DRAFT_NOT_PARKED } from "../src/chat/submitExec.js";
 
 const draft = (over: Partial<PendingDraft> = {}): PendingDraft => ({
   id: "acme__api-1",
@@ -102,6 +103,61 @@ describe("junco_submit (pure)", () => {
     expect(text(r)).toMatch(/^submit failed \(exit 1\)/);
     expect(h.records).toHaveLength(1);
     expect(h.records[0]).toMatchObject({ status: "failed", exitCode: 1, route: "issue" });
+  });
+
+  it("exit 0 with a failed archive is a RAN submit that says the card stays parked", async () => {
+    // The CLI queued the ticket; only the JSON archive failed. Calling that
+    // `failed` made the model relay "submit failed" for a queued ticket, and
+    // the operator's follow-up `s` then hit "already queued" (final review
+    // #2a). It is `ran` — but with no `junco_chat_draft{submitted}` note,
+    // because the draft really is still parked on disk.
+    const h = harness({
+      run: {
+        code: 0,
+        output: "queued add-readme\n",
+        timedOut: false,
+        archived: false,
+        detail: "submitted, but the draft did not archive: EACCES",
+      },
+    });
+    const r = await h.tool.execute("call_3", {}, undefined);
+    expect(text(r)).toMatch(/^submitted → inbox · add-readme \(exit 0\)/);
+    expect(text(r)).toContain(
+      "the draft did not archive (EACCES); its card will still show as parked",
+    );
+    expect(text(r)).toContain("queued add-readme");
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]).toMatchObject({
+      type: "junco_chat_command",
+      status: "ran",
+      exitCode: 0,
+      output: "queued add-readme\n",
+      detail: "submitted, but the draft did not archive: EACCES",
+    });
+  });
+
+  it("a draft that vanished while the operator decided reports that nothing ran", async () => {
+    // The dashboard submitted or discarded it meanwhile: submitExec spawns
+    // nothing. "the draft stays parked" contradicted itself (review #2b).
+    const h = harness({
+      run: {
+        code: null,
+        output: "",
+        timedOut: false,
+        archived: false,
+        detail: DRAFT_NOT_PARKED,
+      },
+    });
+    const r = await h.tool.execute("call_4", {}, undefined);
+    expect(text(r)).toBe(
+      "nothing ran — the draft is no longer parked (submitted or discarded from the dashboard meanwhile)",
+    );
+    expect(h.records).toHaveLength(1);
+    expect(h.records[0]).toMatchObject({
+      status: "failed",
+      exitCode: null,
+      detail: DRAFT_NOT_PARKED,
+    });
   });
 
   it("decline / expired / aborted record their status and say the draft stays parked", async () => {

@@ -13,7 +13,7 @@
 import type { ChatWriteRecord } from "./chatSession.js";
 import type { DraftLookup, PendingDraft } from "./draftStore.js";
 import { draftTicketIds } from "./submitArgv.js";
-import type { SubmitRunResult } from "./submitExec.js";
+import { DRAFT_NOT_PARKED, type SubmitRunResult } from "./submitExec.js";
 
 export const SUBMIT_TOOL_NAME = "junco_submit";
 export type SubmitRoute = "inbox" | "issue";
@@ -103,6 +103,15 @@ function resolveDraft(deps: SubmitToolDeps, ref: string | undefined): PendingDra
 const OUTPUT_TAIL = 4096;
 const tail = (s: string): string => (s.length <= OUTPUT_TAIL ? s : s.slice(s.length - OUTPUT_TAIL));
 
+/** The clause a queued-but-unarchived submit adds to its result text.
+ * `submitExec` phrases the detail as "submitted, but the draft did not
+ * archive[: <err>]"; the head already says "submitted", so only the reason
+ * is relayed. An unrecognised detail is passed through whole. */
+function archiveClause(detail: string | null): string {
+  const why = detail?.replace(/^submitted, but the draft did not archive(: )?/, "") ?? "";
+  return ` — the draft did not archive${why === "" ? "" : ` (${why})`}; its card will still show as parked`;
+}
+
 export function makeSubmitTool(deps: SubmitToolDeps): ChatToolDefinition {
   const text = (
     t: string,
@@ -167,20 +176,38 @@ export function makeSubmitTool(deps: SubmitToolDeps): ChatToolDefinition {
         return text(`submit failed — ${detail} — the draft stays parked`);
       }
       const output = tail(r.output);
-      if (r.code === 0 && r.archived) {
-        deps.record({
-          type: "junco_chat_draft",
-          draftId: draft.id,
-          kind: draft.kind,
-          status: "submitted",
-          ids,
-          destination: route,
-        });
-        deps.record({ ...base, status: "ran", exitCode: 0, output, detail: null });
-        return text(`submitted → ${route} · ${ids.join(", ")} (exit 0)\n${output}`.trimEnd());
-      }
       const detail = r.detail ?? (r.timedOut ? "timed out" : null);
+      if (r.code === 0) {
+        // Exit 0 means the CLI queued every file — the submission RAN even
+        // when the ARCHIVE failed afterwards (`submitExec` never raises once
+        // the files are queued: `archived: false` plus a detail). Reporting
+        // that as `failed` told the model — which relays this text verbatim
+        // — that a queued ticket had not been submitted, and the operator
+        // then pressed `s` and got the CLI's "already queued" (final review
+        // #2a). The draft JSON is still parked on disk in that case, so the
+        // `junco_chat_draft{submitted}` note is NOT written: the card must
+        // keep saying parked, and the text says so.
+        if (r.archived)
+          deps.record({
+            type: "junco_chat_draft",
+            draftId: draft.id,
+            kind: draft.kind,
+            status: "submitted",
+            ids,
+            destination: route,
+          });
+        deps.record({ ...base, status: "ran", exitCode: 0, output, detail });
+        const head = `submitted → ${route} · ${ids.join(", ")} (exit 0)`;
+        return text(`${r.archived ? head : head + archiveClause(detail)}\n${output}`.trimEnd());
+      }
       deps.record({ ...base, status: "failed", exitCode: r.code, output, detail });
+      if (r.code === null && r.detail === DRAFT_NOT_PARKED)
+        // Nothing was spawned, and "the draft stays parked" would contradict
+        // itself: the dashboard submitted or discarded it while the operator
+        // was deciding (final review #2b).
+        return text(
+          "nothing ran — the draft is no longer parked (submitted or discarded from the dashboard meanwhile)",
+        );
       return text(
         `submit failed (exit ${r.code ?? "?"})${detail ? ` — ${detail}` : ""} — the draft stays parked\n${output}`.trimEnd(),
       );

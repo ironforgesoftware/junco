@@ -320,7 +320,12 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
             ],
             ran: [`   ✓ submitted → ${n.route} · ${what} · exit ${n.exitCode ?? "?"}`, "success"],
             failed: [
-              `   ✗ submit failed · exit ${n.exitCode ?? "?"} · ${what} — draft stays parked`,
+              // The detail carries the only thing the row cannot infer — and
+              // sometimes contradicts the tail (a draft the dashboard already
+              // submitted is not "parked"), so it replaces it (final review #2c).
+              n.detail === null
+                ? `   ✗ submit failed · exit ${n.exitCode ?? "?"} · ${what} — draft stays parked`
+                : `   ✗ submit failed · exit ${n.exitCode ?? "?"} · ${what} · ${n.detail}`,
               "error",
             ],
             declined: [`   – submit declined · ${what} · draft stays parked`, "dim"],

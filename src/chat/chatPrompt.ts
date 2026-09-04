@@ -109,8 +109,12 @@ export function buildChatPrompt(
   // read-only/action-tool clause and the #475 draft-card paragraph's callout
   // for `junco_submit` — folded into this one ternary rather than a second
   // `opts.submitTool ? … : …` written elsewhere in the function.
-  const { submitClause, submitCardCallout } = opts.submitTool
+  const { readOnlyFraming, submitClause, submitCardCallout } = opts.submitTool
     ? {
+        // The tool is the one exception to the read-only framing; naming it
+        // there keeps the next sentence ("You have exactly one action tool")
+        // from reading as a contradiction (final review, Minor).
+        readOnlyFraming: "READ-ONLY except for `junco_submit`",
         submitClause: `You have exactly one action tool, \`junco_submit\`: it submits a draft this chat has
 ALREADY parked — to the inbox, or as a parked GitHub issue — after the operator confirms in
 the dashboard. The call blocks until they decide; use it only when the operator asks to
@@ -122,6 +126,7 @@ action is the operator's, on the dashboard.`,
         submitCardCallout: " — or, when `junco_submit` is available, call it",
       }
     : {
+        readOnlyFraming: "READ-ONLY",
         submitClause: `You never run, submit, or dispatch anything; junco parks every draft for the operator
 to review and submit. Never claim that a ticket was submitted, that a PR exists, or that
 work has started.`,
@@ -129,7 +134,7 @@ work has started.`,
       };
   const framing = `You are the coding agent behind junco, a task-queue worker, chatting with its operator
 about the repository \`${repo}\` (your working directory: ${opts.cwd}). This session is
-READ-ONLY: explore with your tools, answer questions, and — when the operator asks for work
+${readOnlyFraming}: explore with your tools, answer questions, and — when the operator asks for work
 to be done — DRAFT it as a junco ticket. ${submitClause}
 
 How a parked draft gets submitted: the dashboard shows it as a draft card under your

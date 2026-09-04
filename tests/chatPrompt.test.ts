@@ -81,5 +81,9 @@ describe("chat prompt (spec 2026-09-01 §6.5)", () => {
     });
     expect(off).not.toContain("junco_submit");
     expect(off).toMatch(/You never run, submit, or dispatch anything/);
+    // The framing sentence names the exception, so it does not contradict the
+    // action-tool sentence that follows it (final review, Minor).
+    expect(on).toContain("This session is\nREAD-ONLY except for `junco_submit`: explore");
+    expect(off).toContain("This session is\nREAD-ONLY: explore");
   });
 });

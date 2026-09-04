@@ -536,6 +536,14 @@ describe("junco_chat_command rows", () => {
     expect(row(lines({ status: "aborted" })).text).toContain("aborted with the turn");
   });
 
+  it("a failed row shows its detail instead of the parked tail (final review #2c)", () => {
+    // "draft stays parked" is a lie when the detail says the draft is gone —
+    // and the detail is the only thing the row cannot infer from the record.
+    expect(
+      row(lines({ status: "failed", exitCode: null, detail: "draft no longer parked" })).text,
+    ).toBe("   ✗ submit failed · exit ? · add-readme · draft no longer parked");
+  });
+
   it("expands the CLI output under a ran/failed row, dim and indented", () => {
     const rows = lines({ status: "ran", exitCode: 0, output: "queued add-readme\ninbox: 1" }, [
       commandAnchor("call_1"),

@@ -24,6 +24,12 @@ export interface SubmitExecDeps extends CliRunnerDeps {
   store?: ReviewStoreDeps;
 }
 
+/** The `detail` of the one outcome where NOTHING was spawned: the dashboard
+ * submitted or discarded the draft while the operator was deciding (spec
+ * §3.4). `submitTool.ts` matches on it to report "nothing ran" instead of a
+ * failure that says the draft stays parked. */
+export const DRAFT_NOT_PARKED = "draft no longer parked";
+
 export async function runSubmit(
   cfg: Config,
   draft: PendingDraft,
@@ -37,7 +43,7 @@ export async function runSubmit(
       output: "",
       timedOut: false,
       archived: false,
-      detail: "draft no longer parked",
+      detail: DRAFT_NOT_PARKED,
     };
   const argvs = submitArgv({ ...live, routeOverride: route }, (name) =>
     draftFilePath(cfg, live.id, name),
