@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSubmit } from "../src/chat/submitExec.js";
+import { DRAFT_NOT_PARKED, runSubmit } from "../src/chat/submitExec.js";
 import {
   draftFilePath,
+  draftJsonPath,
   listChatDrafts,
   writeChatDraft,
   type PendingDraft,
@@ -141,6 +142,21 @@ describe("runSubmit (spec 2026-09-03 §3.4)", () => {
     });
     expect(calls).toEqual([]);
     expect(r).toMatchObject({ code: null, archived: false, detail: "draft no longer parked" });
+  });
+
+  it("a draft whose JSON is corrupt says SO — not 'no longer parked' (#480)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-se-"));
+    const cfg = cfgAt(root);
+    const d = draft("acme__api-6", ["a.md"]);
+    writeChatDraft(cfg, d);
+    writeFileSync(draftJsonPath(cfg, d.id), "{ not json", "utf8");
+    const { spawnFn, calls } = fakeSpawn(() => {});
+    const r = await runSubmit(cfg, d, "inbox", { spawnFn, cliPath: "/dist/cli.js" });
+    expect(calls).toEqual([]);
+    expect(r.code).toBeNull();
+    expect(r.archived).toBe(false);
+    expect(r.detail).not.toBe(DRAFT_NOT_PARKED);
+    expect(r.detail).toMatch(/^could not read the parked draft: .*not valid JSON/);
   });
 
   it("a draft with no argv to run is refused without spawning", async () => {

@@ -36,14 +36,19 @@ export async function runSubmit(
   route: SubmitRoute,
   deps: SubmitExecDeps = {},
 ): Promise<SubmitRunResult> {
-  const live = readChatDraft(cfg, draft.id, deps.store).entry;
+  // The store's read never throws: a missing draft and a CORRUPT one both come
+  // back as `entry: null`, and only the second carries an `error`. Folding it
+  // into the detail is what keeps an unreadable JSON from being reported as
+  // "the draft is no longer parked" — it is still parked, and still broken
+  // (#480).
+  const { entry: live, error } = readChatDraft(cfg, draft.id, deps.store);
   if (live === null)
     return {
       code: null,
       output: "",
       timedOut: false,
       archived: false,
-      detail: DRAFT_NOT_PARKED,
+      detail: error === null ? DRAFT_NOT_PARKED : `could not read the parked draft: ${error}`,
     };
   const argvs = submitArgv({ ...live, routeOverride: route }, (name) =>
     draftFilePath(cfg, live.id, name),

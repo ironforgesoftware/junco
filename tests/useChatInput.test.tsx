@@ -513,7 +513,9 @@ describe("useChatInput — the slash router (spec §8.2)", () => {
     );
     const none = mount({ chat: chatState({ drafts: [] }) });
     none.api.onComposerSubmit("/submit");
-    expect(none.calls).toEqual(["toast:error:nothing is parked — /draft first"]);
+    // The shared wording (#480): the tool throws the same sentences, and the
+    // `/draft` hint is the composer's only local flavour.
+    expect(none.calls).toEqual(["toast:error:nothing is parked for this chat — /draft first"]);
     const busy = mount({
       chat: chatState({
         drafts: [d1],
