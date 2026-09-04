@@ -632,7 +632,11 @@ in the view switches the subscription.
 ### 8.2 Layout
 
 - **Header strip:** key · state (`idle` / `streaming` / `blocked: <reason> until <t>` /
-  `daemon down` / `transcript degraded`) · turns · today's chat spend · model.
+  `daemon down` / `transcript degraded`) · turns · today's chat spend (`/health.chats`'s
+  `chatTodayUsd`, #456 — the ledger's current day, not the daemon's lifetime `costUsd`) ·
+  model, with the scroll status (`following`/`paused` and the window indicator) at the
+  right edge. There is no in-pane hint row: the two-row footer says the keys with
+  keycaps, and duplicating them cost the transcript a row (#471).
 - **Transcript region:** `TranscriptView`'s row renderers (`transcriptRender.ts`) over the
   record buffer: collapsible tool rows, `t` thinking, `f` follow, `[`/`]` scroll. Draft cards
   render inline at their `junco_chat_draft` record; `j`/`k` walks tool rows and cards alike.

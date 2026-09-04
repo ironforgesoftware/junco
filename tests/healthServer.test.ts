@@ -442,8 +442,11 @@ describe("healthServer", () => {
       chatStatus: () => ({
         enabled: true,
         sessions: [],
-        turns: 0,
-        costUsd: 0,
+        turns: 3,
+        costUsd: 1.25,
+        // #456: today's chat spend, the window the dashboard header shows —
+        // distinct from `costUsd`, this daemon's lifetime total.
+        chatTodayUsd: 0.4,
         tokensIn: 0,
         tokensOut: 0,
       }),
@@ -452,8 +455,9 @@ describe("healthServer", () => {
     expect(body.chats).toEqual({
       enabled: true,
       sessions: [],
-      turns: 0,
-      costUsd: 0,
+      turns: 3,
+      costUsd: 1.25,
+      chatTodayUsd: 0.4,
       tokensIn: 0,
       tokensOut: 0,
     });

@@ -113,8 +113,9 @@ describe("mouse row/wheel on the issues surface", () => {
 // starts at row 3.
 const BAR_X = WIDE_COLS_TEST - 3;
 const TRACK_TOP = 3;
-/** Chat: height 27 − borders 2 − header 1 − footer 1 − composer 6 = 17 rows. */
-const CHAT_TRACK_BOTTOM = TRACK_TOP + 17 - 1;
+/** Chat: height 27 − borders 2 − header 1 − composer 6 = 18 rows. (#471 took
+ *  the in-pane hint row out; chatVisibleRows reserves 3 + composer now.) */
+const CHAT_TRACK_BOTTOM = TRACK_TOP + 18 - 1;
 
 /** A chat client whose subscribe handler is kept so a test can feed records. */
 function chatClient(): { client: DashboardClient; push: (offset: number, line: string) => void } {

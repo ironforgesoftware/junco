@@ -265,7 +265,8 @@ export function buildFooterRows({
             // While a junco_submit card waits, `esc` only blurs — #476 made
             // the abort conditional on `streaming && pending === null`
             // (useChatInput.ts), and an inert chip may not claim otherwise
-            // (#479). ChatView's own hint line already reads `esc blur` here.
+            // (#479). The chip is the only place this is said now — #471 took
+            // the duplicate key text out of ChatView's own header strip.
             s("esc", context.pending === true ? "blur" : "blur/abort"),
           ]
         : [];

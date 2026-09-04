@@ -460,6 +460,38 @@ describe("ChatManager watchlist reconciliation (#452, #453)", () => {
   });
 });
 
+// #456: spec §8.2 asks the header for TODAY's chat spend; `costUsd` is this
+// daemon's lifetime. The day boundary is the spend ledger's own
+// (`nextMidnightMs`), read and never written — a second writer on spend.json
+// loses updates and can silently disable the budget cap.
+describe("ChatManager chatTodayUsd (#456)", () => {
+  it("accumulates the day's chat spend and drops it on the ledger's rollover", async () => {
+    let now = 1_000;
+    let midnight = 10_000;
+    const spend = {
+      recordUsd: () => {},
+      todayUsd: () => 0,
+      nextMidnightMs: () => midnight,
+    };
+    const { m } = setup({ spend, now: () => now }, [
+      chatScriptText("one", 0.25),
+      chatScriptText("two", 0.5),
+      chatScriptText("three", 0.75),
+    ]);
+    expect(m.health()).toMatchObject({ costUsd: 0, chatTodayUsd: 0 });
+    await runTurn(m, "acme/api", "a");
+    await runTurn(m, "acme/api", "b");
+    expect(m.health()).toMatchObject({ costUsd: 0.75, chatTodayUsd: 0.75 });
+    // Past the ledger's midnight: the day bucket resets, the lifetime total
+    // does not, and the next boundary is read from the ledger again.
+    now = 10_001;
+    midnight = 20_000;
+    expect(m.health()).toMatchObject({ costUsd: 0.75, chatTodayUsd: 0 });
+    await runTurn(m, "acme/api", "c");
+    expect(m.health()).toMatchObject({ costUsd: 1.5, chatTodayUsd: 0.75 });
+  });
+});
+
 describe("ChatManager.decide (spec 2026-09-03 §3.3)", () => {
   it("settles a pending confirmation and reports false for an unknown id", async () => {
     const { m } = setup();

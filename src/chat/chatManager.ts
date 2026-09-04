@@ -38,7 +38,13 @@ export interface ChatHealth {
   enabled: boolean;
   sessions: ChatStatus[];
   turns: number;
+  /** This DAEMON's lifetime chat total. */
   costUsd: number;
+  /** The chat's spend for the ledger's current day (#456, spec §8.2) — the
+   *  window the dashboard header shows. Rolls over on the SAME boundary the
+   *  spend ledger uses (`spend.nextMidnightMs()`, read only: the ledger stays
+   *  the daemon's single writer), so there is one notion of "today". */
+  chatTodayUsd: number;
   tokensIn: number;
   tokensOut: number;
 }
@@ -106,6 +112,9 @@ export class ChatManager {
   private draining = false;
   private turns = 0;
   private costUsd = 0;
+  private chatTodayUsd = 0;
+  /** When the ledger's current day ends; 0 until the first rollDay(). */
+  private chatDayEndsMs = 0;
   private tokensIn = 0;
   private tokensOut = 0;
 
@@ -352,6 +361,8 @@ export class ChatManager {
       if (result.mode === "steer") return;
       this.turns++;
       this.costUsd += result.usage.costUsd;
+      this.rollDay();
+      this.chatTodayUsd += result.usage.costUsd;
       this.tokensIn += result.usage.input;
       this.tokensOut += result.usage.output;
       if (result.usage.costUsd > 0) this.deps.spend.recordUsd(result.usage.costUsd);
@@ -477,12 +488,24 @@ export class ChatManager {
     };
   }
 
+  /** Drop the day bucket when the ledger's day has rolled over (#456). Reads
+   *  the ledger's own boundary and never writes to it — a second writer on
+   *  spend.json loses updates and can silently disable the budget cap. */
+  private rollDay(): void {
+    const now = this.deps.now?.() ?? Date.now();
+    if (now < this.chatDayEndsMs) return;
+    this.chatTodayUsd = 0;
+    this.chatDayEndsMs = this.deps.spend.nextMidnightMs();
+  }
+
   health(): ChatHealth {
+    this.rollDay();
     return {
       enabled: this.enabled(),
       sessions: [...this.sessions.values()].map((s) => this.statusOf(s)),
       turns: this.turns,
       costUsd: this.costUsd,
+      chatTodayUsd: this.chatTodayUsd,
       tokensIn: this.tokensIn,
       tokensOut: this.tokensOut,
     };

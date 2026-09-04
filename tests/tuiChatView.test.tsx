@@ -161,7 +161,7 @@ describe("ChatView", () => {
       <ChatView
         state={state}
         modelId="local/m1"
-        costUsd={0.42}
+        chatTodayUsd={0.42}
         scroll={0}
         height={24}
         width={80}
@@ -174,15 +174,13 @@ describe("ChatView", () => {
     const f = r.lastFrame()!;
     expect(f).toContain("◐ streaming");
     expect(f).toContain("local/m1");
-    // ChatHealth.costUsd counts this DAEMON's lifetime, not today's spend —
-    // the label has to say so, or it reads as the daily ledger the budget cap
-    // uses (spec §8.2).
-    expect(f).toContain("chat $0.42 since start");
+    // #456: the figure is ChatHealth.chatTodayUsd — the chat's spend for the
+    // ledger's current day, which is the window spec §8.2 asks for. The label
+    // says "today" because the value finally is today's.
+    expect(f).toContain("chat $0.42 today");
     // Header segments in order: 2 turns (many), $ cost, model id — all in one
     // contiguous string, which also proves nothing extra snuck in between.
-    expect(f).toContain(
-      "chat · acme/api · ◐ streaming · 2 turns · chat $0.42 since start · local/m1",
-    );
+    expect(f).toContain("chat · acme/api · ◐ streaming · 2 turns · chat $0.42 today · local/m1");
     expect(f).toContain("you: why is the build slow?");
     expect(f).toContain("junco: because of X"); // the answer carries the other label
     expect(f).toContain("▌"); // cursor on the draft card (the only anchor)
@@ -191,12 +189,56 @@ describe("ChatView", () => {
     // does not appear out of nowhere when the turn ends.
     expect(f).toContain("junco: thinking about it");
     expect(f).toContain("type a message"); // composer placeholder (blurred still renders)
-    expect(f).toContain("i compose"); // footer: composer blurred variant
+    // #471: the in-pane hint row is gone — the two-row footer says the keys
+    // with keycaps — and its one non-duplicate, the scroll status, moved to
+    // the header's right edge.
+    expect(f).not.toContain("i compose");
+    expect(f).not.toContain("↑/↓ scroll · ⇞⇟ page");
+    expect(f).toMatch(/paused · \d+–\d+\/\d+/);
   });
 
-  // Spec 2026-09-03 §4.3: the view's own hint line may not advertise the draft
-  // verbs while a junco_submit card holds that draft — they are off the keymap.
-  it("a pending submit rewrites the blurred hint line to the card's keys", async () => {
+  // The window indicator is the view's only live scroll feedback; #471 keeps
+  // it (and the follow state) on EVERY frame, composing or not.
+  it("the header's scroll status shows on both follow states and while composing", async () => {
+    const summary = summarizeTranscript([
+      metaLine({ ticketId: "acme__api" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: null, text: "because of X", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const frameOf = (over: Parameters<typeof base>[0]) => {
+      const r = render(
+        <ChatView
+          state={base({ summary, ...over })}
+          modelId={null}
+          chatTodayUsd={null}
+          scroll={0}
+          height={20}
+          width={100}
+          focused
+          onComposerChange={() => {}}
+          onComposerSubmit={() => {}}
+        />,
+      );
+      return r;
+    };
+    const composing = frameOf({ composerFocused: true, follow: true });
+    await until(() => /following · \d+–\d+\/\d+/.test(composing.lastFrame() ?? ""));
+    const blurred = frameOf({ composerFocused: false, follow: false });
+    await until(() => /paused · \d+–\d+\/\d+/.test(blurred.lastFrame() ?? ""));
+    // Nothing else is left of the old hint row. (`ctrl+j newline` is not a
+    // marker for it: the Composer's own placeholder says that too.)
+    expect(blurred.lastFrame()).not.toContain("↑/↓ scroll · ⇞⇟ page");
+    expect(composing.lastFrame()).not.toContain("esc blur");
+  });
+
+  // Spec 2026-09-03 §4.3 + #471: the hint row that used to carry the card's
+  // keys is gone (the footer's chatConfirm row carries them), so what the view
+  // itself must still say about a waiting card is the header word.
+  it("a pending submit says so in the header and advertises no draft verbs", async () => {
     const r = render(
       <ChatView
         state={base({
@@ -210,7 +252,7 @@ describe("ChatView", () => {
           },
         })}
         modelId={null}
-        costUsd={null}
+        chatTodayUsd={null}
         scroll={0}
         height={20}
         width={100}
@@ -219,10 +261,10 @@ describe("ChatView", () => {
         onComposerSubmit={() => {}}
       />,
     );
-    await until(() => (r.lastFrame() ?? "").includes("y submit · n keep parked"));
+    await until(() => (r.lastFrame() ?? "").includes("◐ awaiting your confirmation"));
     const f = r.lastFrame()!;
-    expect(f).toContain("◐ awaiting your confirmation");
     expect(f).not.toContain("s submit · e edit");
+    expect(f).not.toContain("y submit · n keep parked"); // the footer's row now
   });
 
   it("shows the overflow note and disables the composer when the daemon is down", async () => {
@@ -230,7 +272,7 @@ describe("ChatView", () => {
       <ChatView
         state={base({ connection: "down", overflowed: true })}
         modelId={null}
-        costUsd={null}
+        chatTodayUsd={null}
         scroll={0}
         height={20}
         width={80}
@@ -245,7 +287,8 @@ describe("ChatView", () => {
     // No turns, no cost, no model — the header collapses to just key + status
     // + the overflow note, contiguous (proves the hidden segments are absent).
     expect(f).toContain("chat · acme/api · daemon down · showing last 2000");
-    expect(f).toContain("esc blur/abort"); // footer: composer focused variant (base's default)
+    // #471: the key text moved out of the pane entirely — the footer says it.
+    expect(f).not.toContain("esc blur/abort");
     expect(f).toContain("daemon down — chat unavailable"); // composer disabledReason (down)
   });
 
@@ -254,7 +297,7 @@ describe("ChatView", () => {
       <ChatView
         state={base({ connection: "down", downReason: "chat_disabled" })}
         modelId={null}
-        costUsd={null}
+        chatTodayUsd={null}
         scroll={0}
         height={20}
         width={80}
@@ -283,7 +326,7 @@ describe("ChatView", () => {
       <ChatView
         state={base({ summary })}
         modelId={null}
-        costUsd={null}
+        chatTodayUsd={null}
         scroll={0}
         height={20}
         width={80}
@@ -303,7 +346,7 @@ describe("ChatView", () => {
       <ChatView
         state={base()}
         modelId={null}
-        costUsd={null}
+        chatTodayUsd={null}
         scroll={0}
         height={20}
         width={80}
@@ -321,7 +364,7 @@ describe("ChatView", () => {
       <ChatView
         state={base({ connection: "connecting" })}
         modelId={null}
-        costUsd={null}
+        chatTodayUsd={null}
         scroll={0}
         height={20}
         width={80}
@@ -348,7 +391,7 @@ describe("ChatView", () => {
       <ChatView
         state={base({ summary, liveText: "" })}
         modelId="m"
-        costUsd={null}
+        chatTodayUsd={null}
         scroll={0}
         height={20}
         width={80}

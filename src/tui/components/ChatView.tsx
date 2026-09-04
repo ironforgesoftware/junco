@@ -86,7 +86,9 @@ export function chatHeaderStatus(
 export interface ChatViewProps {
   state: ChatState;
   modelId: string | null;
-  costUsd: number | null; // ChatHealth.costUsd — this daemon lifetime
+  /** ChatHealth.chatTodayUsd — the chat's spend for the ledger's current day
+   *  (#456), null on an older daemon or with the health server off. */
+  chatTodayUsd: number | null;
   scroll: number;
   height: number;
   width: number;
@@ -109,10 +111,14 @@ export interface ChatViewProps {
 const COMPOSER_ROWS = 6; // border ×2 + up to 4 lines
 
 /** Transcript rows visible inside a `height`-row chat view — reserved:
- * borders ×2, header, footer, composer. Exported because App's key cascade
- * needs the SAME number to page by (hooks/useChatInput.ts's PgUp/PgDn). */
+ * borders ×2, header, composer. The in-pane hint row is gone (#471): the
+ * two-row footer says the keys with keycaps, so the pane spent a row on a
+ * duplicate; the only thing on it that was NOT a duplicate — the window
+ * indicator and the follow state — moved onto the header's right edge, and
+ * the row went to the transcript. Exported because App's key cascade needs
+ * the SAME number to page by (hooks/useChatInput.ts's PgUp/PgDn). */
 export function chatVisibleRows(height: number): number {
-  return Math.max(1, height - 4 - COMPOSER_ROWS);
+  return Math.max(1, height - 3 - COMPOSER_ROWS);
 }
 
 /** Memoized (perf pass #259 discipline) — same rationale as TranscriptView:
@@ -170,15 +176,26 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
       height={p.height}
       flexGrow={1}
     >
-      <Text bold wrap="truncate">
-        chat · {state.key} · <Text {...toneProps(status.tone)}>{status.text}</Text>
-        {turns > 0 ? ` · ${turns} turn${turns === 1 ? "" : "s"}` : ""}
-        {/* "since start": ChatHealth.costUsd is this daemon's lifetime total,
-            not today's ledger — an unqualified "$" reads as the latter. */}
-        {p.costUsd !== null ? ` · chat $${p.costUsd.toFixed(2)} since start` : ""}
-        {p.modelId ? ` · ${p.modelId}` : ""}
-        {state.overflowed ? ` · showing last ${CHAT_RING}` : ""}
-      </Text>
+      {/* Two children so the identity half can truncate on a narrow terminal
+          while the scroll status — the view's ONLY live scroll feedback — keeps
+          its place at the right edge (#471). */}
+      <Box>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text bold wrap="truncate">
+            chat · {state.key} · <Text {...toneProps(status.tone)}>{status.text}</Text>
+            {turns > 0 ? ` · ${turns} turn${turns === 1 ? "" : "s"}` : ""}
+            {/* "today": ChatHealth.chatTodayUsd is the chat's spend for the
+                ledger's current day (#456), which is what spec §8.2 asks for. */}
+            {p.chatTodayUsd !== null ? ` · chat $${p.chatTodayUsd.toFixed(2)} today` : ""}
+            {p.modelId ? ` · ${p.modelId}` : ""}
+            {state.overflowed ? ` · showing last ${CHAT_RING}` : ""}
+          </Text>
+        </Box>
+        <Text dimColor wrap="truncate">
+          {` ${state.follow ? "following" : "paused"}`}
+          {rows.length > 0 ? ` · ${start + 1}–${end}/${rows.length}` : ""}
+        </Text>
+      </Box>
       <TranscriptBody
         rows={rows}
         anchors={anchors}
@@ -193,20 +210,6 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
         onScrollTo={p.onScrollTo}
         onReveal={p.onReveal}
       />
-      <Text dimColor wrap="truncate">
-        {state.composerFocused
-          ? // esc does not abort while a submit card waits (useChatInput):
-            // aborting the turn would settle the very card the operator is
-            // being asked about, so there esc only blurs back to it.
-            `esc blur${state.pending === null ? "/abort" : ""} · ctrl+j newline · / commands · ⇞⇟ scroll`
-          : state.pending !== null
-            ? // The draft verbs are unbound while a junco_submit waits (spec
-              // 2026-09-03 §4.3, chatConfirm's empty keymap), so this line
-              // must not advertise them — it mirrors the footer's two rows.
-              "y submit · n keep parked · ↑/↓ scroll · ⇞⇟ page · enter expand · i compose · esc back"
-            : "i compose · ↑/↓ scroll · ⇞⇟ page · tab card · enter expand · s submit · e edit · r route · D discard · t thinking · f follow"}
-        {rows.length > 0 ? ` · ${start + 1}–${end}/${rows.length}` : ""}
-      </Text>
       <Composer
         value={state.composer}
         onChange={p.onComposerChange}
