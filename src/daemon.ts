@@ -850,6 +850,22 @@ export async function mainLoop(
       draftsParkedFor: (slug) => draftsParkedFor(activeCfg(), slug),
     });
 
+  // Chat watchlist reconciliation (#452): `junco unwatch owner/repo` removes
+  // the repo's chat dir but only blocks on live TICKETS, so a live
+  // ChatSession for that key would keep appending to a dir that is gone. One
+  // cheap pass per poll — free while no session exists — off the LIVE config,
+  // so a hot-reloaded watchlist reaches it too. Never fatal: the queue is
+  // unaffected by a chat bookkeeping failure.
+  const maybeChatReconcile = async (): Promise<void> => {
+    try {
+      await chat.reconcile();
+    } catch (e) {
+      log.warn("chat reconcile failed; sessions unchanged", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
   // Health endpoint (optional). A start failure must NOT crash the daemon — we
   // log a warning and continue headless. The server closes after the loop ends.
   let health: HealthServerHandle | null = null;
@@ -893,6 +909,7 @@ export async function mainLoop(
           await maybeBridgeSweep();
           await maybeOutboxDrain();
           await maybeDepSweep();
+          await maybeChatReconcile();
         },
         reporter,
         gate,
@@ -907,6 +924,7 @@ export async function mainLoop(
         await maybeBridgeSweep();
         await maybeOutboxDrain();
         await maybeDepSweep();
+        await maybeChatReconcile();
         // A stop can land during the bridge sweep (multi-repo gh calls,
         // seconds), the outbox drain, or the dependency sweep — re-check
         // before claiming brand-new work, mirroring the scheduler's per-claim

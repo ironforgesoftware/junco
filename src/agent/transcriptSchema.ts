@@ -71,14 +71,29 @@ export interface GuardDecisionRecord {
 // junco_chat_turn_start/_end/_aborted the way runs are by junco_run_start/_end.
 // ---------------------------------------------------------------------------
 
-export type DraftKind =
-  | "ticket"
-  | "amend"
-  | "apply"
-  | "audit"
-  | "investigate"
-  | "ticketSet"
-  | "planSet";
+/**
+ * The three `junco_chat_draft` vocabularies as DATA, with the unions derived
+ * from them (#447). `chatRoutes.ts` builds its /chat/note validation sets from
+ * these same arrays, so an eighth draft kind is one edit here — it can never
+ * be a union member the route silently answers 400 for.
+ */
+export const DRAFT_KINDS = [
+  "ticket",
+  "amend",
+  "apply",
+  "audit",
+  "investigate",
+  "ticketSet",
+  "planSet",
+] as const;
+export type DraftKind = (typeof DRAFT_KINDS)[number];
+
+export const DRAFT_STATUSES = ["parked", "lint_failed", "submitted", "discarded"] as const;
+export type DraftStatus = (typeof DRAFT_STATUSES)[number];
+
+/** null until submitted; "command" for audit/investigate. */
+export const DRAFT_DESTINATIONS = ["inbox", "issue", "command"] as const;
+export type DraftDestination = (typeof DRAFT_DESTINATIONS)[number];
 
 export interface ChatPromptRecord {
   type: "junco_chat_prompt";
@@ -122,11 +137,11 @@ export interface ChatDraftRecord {
   type: "junco_chat_draft";
   draftId: string;
   kind: DraftKind;
-  status: "parked" | "lint_failed" | "submitted" | "discarded";
+  status: DraftStatus;
   /** Ticket ids / audit-investigate ids once known. */
   ids: string[];
   /** null until submitted; "command" for audit/investigate. */
-  destination: "inbox" | "issue" | "command" | null;
+  destination: DraftDestination | null;
   ts: string;
 }
 /** The chat's one action tool (spec 2026-09-03): a `junco_submit` call is
@@ -152,7 +167,9 @@ export interface ChatCommandRecord {
 }
 export interface ChatSessionResetRecord {
   type: "junco_chat_session_reset";
-  reason: "corrupt" | "missing" | "operator_new";
+  /** cwd_changed: the checkout moved under a live session and it was rebuilt
+   *  on the new path (spec §2.2, #453) — the transcript continues. */
+  reason: "corrupt" | "missing" | "operator_new" | "cwd_changed";
   ts: string;
 }
 export interface ChatTranscriptDegradedRecord {

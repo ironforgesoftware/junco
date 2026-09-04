@@ -10,7 +10,12 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ChatManager, ChatError } from "./chatManager.js";
-import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
+import {
+  DRAFT_DESTINATIONS,
+  DRAFT_KINDS,
+  DRAFT_STATUSES,
+  type ChatDraftRecord,
+} from "../agent/transcriptSchema.js";
 
 export type ChatRoutesManager = Pick<
   ChatManager,
@@ -66,6 +71,9 @@ const STATUS: Record<ChatError, number> = {
   no_checkout: 409,
   not_a_repo: 409,
   chat_disabled: 503,
+  // The daemon is shutting down (#446): the manager refuses the prompt rather
+  // than let it rebuild the SDK session drain() just disposed.
+  draining: 503,
 };
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -104,17 +112,13 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
-const DRAFT_KINDS = new Set<string>([
-  "ticket",
-  "amend",
-  "apply",
-  "audit",
-  "investigate",
-  "ticketSet",
-  "planSet",
-]);
-const DRAFT_STATUSES = new Set<string>(["parked", "lint_failed", "submitted", "discarded"]);
-const DRAFT_DESTINATIONS = new Set<string>(["inbox", "issue", "command"]);
+// Built from transcriptSchema's arrays, which the `DraftKind` /
+// `ChatDraftRecord` unions are themselves derived from (#447): the sets and
+// the types cannot drift, so a new draft kind reaches this validator by
+// construction instead of answering 400 for a record the schema accepts.
+const KIND_SET: ReadonlySet<string> = new Set<string>(DRAFT_KINDS);
+const STATUS_SET: ReadonlySet<string> = new Set<string>(DRAFT_STATUSES);
+const DESTINATION_SET: ReadonlySet<string> = new Set<string>(DRAFT_DESTINATIONS);
 
 /** The whole `junco_chat_draft` shape, not just its type tag: this record is
  *  appended verbatim to the transcript, and `junco transcript` (plus the
@@ -128,13 +132,13 @@ function draftRecord(v: unknown): Omit<ChatDraftRecord, "ts"> | null {
     typeof r.draftId === "string" &&
     r.draftId !== "" &&
     typeof r.kind === "string" &&
-    DRAFT_KINDS.has(r.kind) &&
+    KIND_SET.has(r.kind) &&
     typeof r.status === "string" &&
-    DRAFT_STATUSES.has(r.status) &&
+    STATUS_SET.has(r.status) &&
     Array.isArray(r.ids) &&
     r.ids.every((x) => typeof x === "string") &&
     (r.destination === null ||
-      (typeof r.destination === "string" && DRAFT_DESTINATIONS.has(r.destination)));
+      (typeof r.destination === "string" && DESTINATION_SET.has(r.destination)));
   return ok ? (v as Omit<ChatDraftRecord, "ts">) : null;
 }
 
