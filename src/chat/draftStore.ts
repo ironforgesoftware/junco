@@ -21,6 +21,7 @@ import { dataTreePaths } from "../dataTree.js";
 import { log } from "../logging.js";
 import { makeReviewStore, type ReviewStoreDeps } from "../reviewStore.js";
 import { slugifyId } from "../slug.js";
+import { draftTicketIds } from "./submitArgv.js";
 
 export interface DraftFile {
   name: string;
@@ -184,28 +185,62 @@ export type DraftLookup =
   | { ok: true; draft: PendingDraft }
   | { ok: false; reason: "none" | "unknown" | "ambiguous"; candidates: PendingDraft[] };
 
-/** Resolve the draft a chat verb names (spec 2026-09-03 §3.1): a draft id,
- * or a ticket id (the file stem). No `ref` → the ONLY parked draft of this
- * chat; two or more → ambiguous, the caller must name one. Scoped to `key`,
- * so a chat can never touch another repo's draft. */
+/**
+ * THE draft-resolution rule (spec 2026-09-03 §3.1), pure and shared by all
+ * three callers — `findChatDraft` below (the tool's `findDraft` dep), the
+ * composer's `/submit` over the drafts the dashboard holds in memory, and
+ * anything else that has to turn an operator's or a model's word into one
+ * draft (#480: it used to be three hand-copied copies).
+ *
+ * A `ref` matches a draft id, a file name, or a file name without its `.md`;
+ * no `ref` → the ONLY parked draft; two or more → ambiguous, and the
+ * candidates are what the caller must offer back. `drafts` is the candidate
+ * set the caller already scoped (by chat `key`).
+ */
+export function resolveDraftRef(drafts: PendingDraft[], ref: string | undefined): DraftLookup {
+  if (drafts.length === 0) return { ok: false, reason: "none", candidates: [] };
+  if (ref === undefined) {
+    return drafts.length === 1
+      ? { ok: true, draft: drafts[0]! }
+      : { ok: false, reason: "ambiguous", candidates: drafts };
+  }
+  const hit = drafts.filter(
+    (d) => d.id === ref || d.files.some((f) => f.name === ref || f.name === `${ref}.md`),
+  );
+  if (hit.length === 1) return { ok: true, draft: hit[0]! };
+  return hit.length === 0
+    ? { ok: false, reason: "unknown", candidates: drafts }
+    : { ok: false, reason: "ambiguous", candidates: hit };
+}
+
+/** How a draft names itself in an error: its ticket ids, else its draft id. */
+const listDrafts = (ds: PendingDraft[]): string =>
+  ds.map((d) => draftTicketIds(d).join(", ") || d.id).join("; ");
+
+/** The ONE wording for a failed `resolveDraftRef` — the tool throws it at the
+ * model, the composer toasts it at the operator. `noneHint` is the only thing
+ * that differs between them: the operator gets told about `/draft`. */
+export function draftLookupError(
+  miss: Extract<DraftLookup, { ok: false }>,
+  ref: string | undefined,
+  noneHint = "draft a ticket first",
+): string {
+  if (miss.reason === "none") return `nothing is parked for this chat — ${noneHint}`;
+  if (miss.reason === "unknown")
+    return `no parked draft named "${ref}" — parked: ${listDrafts(miss.candidates)}`;
+  return `several drafts are parked — name one: ${listDrafts(miss.candidates)}`;
+}
+
+/** `resolveDraftRef` over what is parked for this chat. Scoped to `key`, so a
+ * chat can never touch another repo's draft. */
 export function findChatDraft(
   cfg: Config,
   key: string,
   ref: string | undefined,
   deps: ReviewStoreDeps = {},
 ): DraftLookup {
-  const mine = listChatDrafts(cfg, deps).filter((d) => d.key === key);
-  if (mine.length === 0) return { ok: false, reason: "none", candidates: [] };
-  if (ref === undefined) {
-    return mine.length === 1
-      ? { ok: true, draft: mine[0]! }
-      : { ok: false, reason: "ambiguous", candidates: mine };
-  }
-  const hit = mine.filter(
-    (d) => d.id === ref || d.files.some((f) => f.name === ref || f.name === `${ref}.md`),
+  return resolveDraftRef(
+    listChatDrafts(cfg, deps).filter((d) => d.key === key),
+    ref,
   );
-  if (hit.length === 1) return { ok: true, draft: hit[0]! };
-  return hit.length === 0
-    ? { ok: false, reason: "unknown", candidates: mine }
-    : { ok: false, reason: "ambiguous", candidates: hit };
 }

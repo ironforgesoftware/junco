@@ -239,7 +239,7 @@ function dedupeById<T extends SplitResult>(results: T[], problems: string[]): T[
     if (r.file.id !== null) lastIdx.set(r.file.id, i);
   });
   const emitted = new Set<string>();
-  return results.flatMap((r, i): T[] => {
+  return results.flatMap((r): T[] => {
     const id = r.file.id;
     if (id === null) return [r];
     if (emitted.has(id)) {
@@ -247,7 +247,7 @@ function dedupeById<T extends SplitResult>(results: T[], problems: string[]): T[
       return [];
     }
     emitted.add(id);
-    // No duplicate → lastIdx.get(id) === i, i.e. `r` itself.
+    // No duplicate → lastIdx.get(id) is this very entry, i.e. `r` itself.
     return [results[lastIdx.get(id)!]!];
   });
 }

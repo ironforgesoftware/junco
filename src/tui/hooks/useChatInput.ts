@@ -6,8 +6,8 @@ import type { ToastKind } from "../theme.js";
 import type { View } from "../App.js";
 import type { ChatApi } from "./useChat.js";
 import type { ChatDraftActions } from "./useChatDrafts.js";
+import { draftLookupError, resolveDraftRef } from "../../chat/draftStore.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
-import { draftTicketIds } from "../../chat/submitArgv.js";
 import { useFollowLatch } from "../useFollowLatch.js";
 
 export interface ChatInputDeps {
@@ -201,30 +201,15 @@ export function useChatInput({
         }
         case "submit": {
           // Spec 2026-09-03 §4.4: the operator's own path — the card's `s`,
-          // no model turn. Resolution is findChatDraft's (§3.1) re-read off
-          // the drafts the dashboard already has in memory.
+          // no model turn. Resolution and its wording are the SHARED rule
+          // (#480), run over the drafts the dashboard already has in memory
+          // instead of a re-read; the tool throws the same sentences.
           if (chat?.pending)
             return void showToast("info", "a submit is already awaiting your confirmation (y/n)");
-          const mine = chat?.drafts ?? [];
           const ref = arg?.trim() || undefined;
-          const hit =
-            ref === undefined
-              ? mine
-              : mine.filter(
-                  (d) =>
-                    d.id === ref || d.files.some((f) => f.name === ref || f.name === `${ref}.md`),
-                );
-          const names = (ds: PendingDraft[]): string =>
-            ds.map((d) => draftTicketIds(d).join(", ") || d.id).join("; ");
-          if (mine.length === 0) return void showToast("error", "nothing is parked — /draft first");
-          if (hit.length === 0)
-            return void showToast(
-              "error",
-              `no parked draft named "${ref}" — parked: ${names(mine)}`,
-            );
-          if (hit.length > 1)
-            return void showToast("error", `several drafts are parked — name one: ${names(hit)}`);
-          return void chatDraftActions.submit(hit[0]!);
+          const got = resolveDraftRef(chat?.drafts ?? [], ref);
+          if (!got.ok) return void showToast("error", draftLookupError(got, ref, "/draft first"));
+          return void chatDraftActions.submit(got.draft);
         }
         case "abort":
           return void abort();
