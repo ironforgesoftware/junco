@@ -60,6 +60,17 @@ export const TARGET_WIDTH = 24;
  * `columns` (Ruling R10) — they stay in the keymap + help regardless. Keyed
  * on dispatch key, not id: every chip here is structural. */
 export const NAV_DROP_ORDER: readonly string[] = [",", ":", "g/G", "[/]"];
+/** The fit step that gives up the two rows' shared label slot — not a key, so
+ * it can never collide with a chip's. */
+export const NAV_DROP_LABEL = "label slot";
+/** The full fit order (#464). After the four keys above, a main row could
+ * still need ~72 columns (~88 behind a full-width target) and what got
+ * clipped between MIN_COLS and there was the pinned `? help  quit` — the one
+ * run spec §3.2 says never moves. So the row sheds two more things: the label
+ * slot (the header crumb already names the target), then `/ filter`. The
+ * issue's third candidate, shortening `first/last`, is unreachable — `g/G`
+ * leaves at step 3. */
+export const NAV_FIT_ORDER: readonly string[] = [...NAV_DROP_ORDER, NAV_DROP_LABEL, "/"];
 const SEP: FooterChip = {
   kind: "separator",
   id: "|",
@@ -301,33 +312,40 @@ export function buildFooterRows({
     actions = [...pill, ...rest];
   }
   const navRaw = context.kind === "main" ? navigateChips(context, mode) : structural;
-  // Chrome.tsx's Footer computes ONE labelWidth from both rows' labels, and
-  // every navigate row's label is the literal "navigate" — the structuralOnly
-  // branch above uses it too, so this is the width there as well.
-  const labelWidth = Math.max(label.length, "navigate".length);
-  const navigate = fitNavigate(navRaw, pinned, labelWidth, columns);
+  const fit = fitNavigate(navRaw, pinned, label, columns);
   return {
-    actions: { label, chips: actions, pinned: [] },
-    navigate: { label: "navigate", chips: navigate, pinned },
+    actions: { label: fit.label, chips: actions, pinned: [] },
+    navigate: { label: fit.label === "" ? "" : "navigate", chips: fit.chips, pinned },
   };
 }
 
-/** Ruling R10: drops `NAV_DROP_ORDER` keys one at a time — a no-op for a key
- * absent from `chips` (an overlay's own vocabulary rarely has one) — until
+/** Chrome.tsx's Footer sizes ONE label slot from both rows' labels, and every
+ * navigate row's label is the literal "navigate" — so this is the width the
+ * renderer will use, and `""` means no slot at all. */
+const slotWidth = (label: string): number =>
+  label === "" ? 0 : Math.max(label.length, "navigate".length);
+
+/** Ruling R10 + #464: walks `NAV_FIT_ORDER` one step at a time — a no-op for a
+ * key absent from `chips` (an overlay's own vocabulary rarely has one) — until
  * the row fits `columns`, or the list is exhausted (the renderer clips the
- * rest from the right; it never wraps). */
+ * rest from the right; it never wraps). The label step returns `""`, which
+ * takes the slot off BOTH rows, since they share its width. */
 function fitNavigate(
   chips: FooterChip[],
   pinned: FooterChip[],
-  labelWidth: number,
+  label: string,
   columns: number,
-): FooterChip[] {
+): { chips: FooterChip[]; label: string } {
   let out = chips;
-  for (const key of NAV_DROP_ORDER) {
-    if (rowWidth({ label: "navigate", chips: out, pinned }, labelWidth) <= columns) break;
-    out = out.filter((c) => c.key !== key);
+  let lbl = label;
+  const fits = (): boolean =>
+    rowWidth({ label: lbl, chips: out, pinned }, slotWidth(lbl)) <= columns;
+  for (const step of NAV_FIT_ORDER) {
+    if (fits()) break;
+    if (step === NAV_DROP_LABEL) lbl = "";
+    else out = out.filter((c) => c.key !== step);
   }
-  return out;
+  return { chips: out, label: lbl };
 }
 
 export interface Segment {
@@ -384,7 +402,8 @@ export function footerSegments(chip: FooterChip): Segment[] {
 
 /** Estimates one footer row's rendered width exactly as Chrome.tsx's
  * `FooterLine`/`ChipRun` lay it out (Ruling R10): `paddingX={1}` (both
- * sides), the label slot (`labelWidth`, `marginRight={2}`), then each run's
+ * sides), the label slot (`labelWidth`, `marginRight={2}` — absent entirely
+ * at width 0, #464), then each run's
  * chips — `footerSegments` text length summed (keycap/pill padding spaces
  * are already part of those strings) plus the run's `gap={2}` BETWEEN its
  * chips (#460: no trailing margin on the last one), and the pinned run's own
@@ -398,7 +417,7 @@ export function rowWidth(row: FooterRow, labelWidth: number): number {
     chips.reduce((n, c) => n + chipWidth(c), 0) + 2 * Math.max(0, chips.length - 1);
   return (
     2 +
-    (labelWidth + 2) +
+    (labelWidth > 0 ? labelWidth + 2 : 0) +
     runWidth(row.chips) +
     (row.pinned.length > 0 ? 2 + runWidth(row.pinned) : 0)
   );

@@ -551,13 +551,35 @@ describe("Footer with the REAL derived rows (wide, pinned chips past col 100)", 
     expect(nav).not.toContain("config"); // "," (config) is the one dropped
   });
 
-  it("clips from the right when the row genuinely does not fit (60 columns)", () => {
-    // Even after all four NAV_DROP_ORDER entries, the remaining chips (move /
-    // panes / preview / filter) plus the pinned run still don't fit 60 —
-    // Chrome.tsx's overflow="hidden" clips it, never wraps to a third line.
-    const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, "acme/api", 60);
-    expect(nav.length).toBeLessThanOrEqual(60);
-    expect(nav).not.toContain("quit");
+  it("#464: at 60 columns the pinned run survives — the label slot and / filter go instead", () => {
+    // Pre-#464 the four NAV_DROP_ORDER keys left this row needing 72 columns,
+    // so between MIN_COLS and ~76 what Chrome.tsx clipped was `? help  quit`
+    // — the one run the design says never moves. Rendered, not modelled: this
+    // is the assertion that would catch a rowWidth that drifts optimistic.
+    for (const target of ["acme/api", "alxedelwe…/arkanoid_oq4e"]) {
+      const nav = navigateLine({ kind: "main", body: "issues", pane: 2 }, target, 60);
+      expect(nav.length, target).toBeLessThanOrEqual(60);
+      expect(nav.trimEnd(), target).toMatch(/ {2}\? help {2}quit$/);
+      // The label slot and `/ filter` are what paid for it; the movement keys
+      // and `⏎ preview` stay.
+      expect(nav, target).not.toContain("navigate");
+      expect(nav, target).not.toContain("filter");
+      expect(nav, target).toContain("preview");
+    }
+  });
+  it("both rows lose the label slot together, so the chip runs stay aligned (#464)", () => {
+    const r = renderWide(
+      <Box width={60} flexDirection="column">
+        <Footer
+          rows={rowsFor({ kind: "main", body: "issues", pane: 2 }, "acme/api", 60)}
+          toast={null}
+        />
+      </Box>,
+      60,
+    );
+    const [actions, nav] = (r.lastFrame() ?? "").split("\n");
+    expect(actions).not.toContain("acme/api");
+    expect(actions!.indexOf("chat")).toBe(nav!.indexOf("↑↓"));
   });
 });
 

@@ -11,7 +11,7 @@ const km = (c: BindingContext): Record<string, string> =>
  * pane-scoped `t` KEYMAP swap is withdrawn — spec 2026-09-02 D5): the keymap
  * is the same on every pane of a body, so the other bodies pin at pane 2 and
  * mean the same thing on any pane. */
-const main = (body: MainBody, pane: 1 | 2 | 3 = 2): BindingContext => ({
+const main = (body: MainBody, pane: 1 | 2 | 3 = 2): Extract<BindingContext, { kind: "main" }> => ({
   kind: "main",
   body,
   pane,

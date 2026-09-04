@@ -8,10 +8,12 @@ import {
   buildFooterRows,
   footerSegments,
   keyGlyph,
+  rowWidth,
   TARGET_WIDTH,
   type FooterChip,
   type FooterInput,
 } from "../src/tui/footerModel.js";
+import { MIN_COLS } from "../src/tui/layout.js";
 
 const rows = (
   context: BindingContext,
@@ -265,6 +267,55 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "structural:g/G:first/last",
       "structural:::palette",
       "structural:,:config",
+    ]);
+  });
+  it("#464: at MIN_COLS every main navigate row still shows ? help and quit", () => {
+    // Between 60 and ~76 columns the pinned run — the one thing §3.2 says
+    // never moves — was what got clipped: after the four NAV_DROP_ORDER keys
+    // the issue-list row still measured 72 columns (88 behind a full-width
+    // target). The last two fit steps are the shared label slot and `/
+    // filter`, in that order.
+    const at60 = (context: BindingContext, target: string) => {
+      const r = rows(context, { target, columns: MIN_COLS });
+      const labelWidth = Math.max(r.actions.label.length, r.navigate.label.length);
+      return { r, width: rowWidth(r.navigate, labelWidth) };
+    };
+    for (const context of [
+      { kind: "main", body: "issues", pane: 1 },
+      { kind: "main", body: "issues", pane: 2 },
+      { kind: "main", body: "issues", pane: 3 },
+      { kind: "main", body: "queue", pane: 2 },
+      { kind: "main", body: "repoDetail", pane: 2 },
+    ] as BindingContext[]) {
+      for (const target of ["acme/api", "alxedelwe…/arkanoid_oq4e"]) {
+        const { r, width } = at60(context, target);
+        expect(width, `${JSON.stringify(context)} ${target}`).toBeLessThanOrEqual(MIN_COLS);
+        expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:quit:quit"]);
+      }
+    }
+  });
+  it("#464: the label slot goes before / filter, and only when the keys are exhausted", () => {
+    const at = (columns: number) => rows({ kind: "main", body: "issues", pane: 2 }, { columns });
+    // 72 is the width of this row with all four keys dropped and the label
+    // still there — one column more and nothing else has to go.
+    expect(at(72).actions.label).toBe("acme/api");
+    expect(texts(at(72).navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←/→:panes",
+      "structural:enter:preview",
+      "structural:/:filter",
+    ]);
+    // At 62 the label slot goes — both rows lose it, because Chrome.tsx sizes
+    // one slot from the two of them.
+    const tight = at(62);
+    expect(tight.actions.label).toBe("");
+    expect(tight.navigate.label).toBe("");
+    expect(texts(tight.navigate.chips)).toContain("structural:/:filter");
+    // Below that `/ filter` is the last thing left to shed.
+    expect(texts(at(MIN_COLS).navigate.chips)).toEqual([
+      "structural:↑/↓:move",
+      "structural:←/→:panes",
+      "structural:enter:preview",
     ]);
   });
   it("Ruling R10: a row that cannot fit even after all four drops overflows untouched (review overlay, 60 cols)", () => {

@@ -281,7 +281,8 @@ function ChipRun({
 }
 
 /** One footer row: dim label in a fixed-width slot, the chips, a spacer, the
- * pinned chips. `overflow="hidden"` + `flexShrink={0}` chips = clip, never
+ * pinned chips. `labelWidth` 0 = no slot at all: the narrowest terminals
+ * spend those columns on keeping the pinned run visible instead (#464). `overflow="hidden"` + `flexShrink={0}` chips = clip, never
  * wrap — the row is informational and the two-line invariant holds. */
 function FooterLine({
   row,
@@ -294,11 +295,13 @@ function FooterLine({
 }): React.JSX.Element {
   return (
     <Box paddingX={1} height={1} overflow="hidden">
-      <Box width={labelWidth} flexShrink={0} marginRight={2}>
-        <Text dimColor wrap="truncate">
-          {row.label}
-        </Text>
-      </Box>
+      {labelWidth > 0 && (
+        <Box width={labelWidth} flexShrink={0} marginRight={2}>
+          <Text dimColor wrap="truncate">
+            {row.label}
+          </Text>
+        </Box>
+      )}
       <ChipRun chips={row.chips} chipActions={chipActions} />
       <Box flexGrow={1} />
       <ChipRun chips={row.pinned} chipActions={chipActions} marginLeft={2} />

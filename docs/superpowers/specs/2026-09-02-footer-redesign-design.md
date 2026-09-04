@@ -80,6 +80,9 @@ the right (the row is informational; the invariant "chrome = 3 rows" holds).
 - `? help` and `q`uit (or `q` close in overlays) are pinned to the right edge (a flex spacer).
 - Medium width (60–109 columns): `g G`, `:` and `,` are dropped from the row (they stay in the
   help modal and the keymap). `tooSmall` renders as today.
+  (Superseded by Ruling R10 and #464: the row fits itself to `columns` at every width, dropping
+  `,` → `:` → `g G` → `[ ]` → the shared label slot → `/ filter`, in that order, so the pinned
+  run survives to `MIN_COLS`.)
 
 ### 3.3 Toast
 
