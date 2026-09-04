@@ -1516,6 +1516,7 @@ export function App(props: AppProps): React.JSX.Element {
     cmd,
     runPaletteCommand,
     transcript,
+    closeTranscript,
     toggleTranscriptThinking,
     setTranscriptFollow,
     toEnd,

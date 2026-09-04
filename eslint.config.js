@@ -99,8 +99,11 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // navigate-row chips (#461, 1,884 → 1,890): `→ issues` is one line, and the
   // `: palette` chip is the `openQueueTranscript` precedent again — the key and
   // the chip must run ONE recipe, so `openPalette` is a stable useCallback (+5
-  // net against the three key-handler lines it replaces with two).
-  { file: "src/tui/App.tsx", max: 1890 },
+  // net against the three key-handler lines it replaces with two). +1 for the
+  // transcript's chat exit (#462, 1,890 → 1,891): `closeTranscript` joins the
+  // useViewActions call so `c` releases the transcript's live poll on the way
+  // out — the hook owns the recipe, App only names the closer.
+  { file: "src/tui/App.tsx", max: 1891 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
