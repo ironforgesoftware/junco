@@ -105,8 +105,13 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // out — the hook owns the recipe, App only names the closer. +1 for the
   // unhandled-rejection net (#455, 1,891 → 1,892): one `useRejectionToast`
   // call; the listener and its message shape live in the hook, and the
-  // whole-process half is src/dashboardCmd.ts's.
-  { file: "src/tui/App.tsx", max: 1892 },
+  // whole-process half is src/dashboardCmd.ts's. +6 for the combined panes cap
+  // (#488, 1,892 → 1,898): the wide layout draws ONE `←/→` cap for both
+  // directions, so it needs its own chip entry (+1) — and the same
+  // openQueueTranscript precedent as #461, so the direction lives in a stable
+  // `cyclePane` useCallback (+5 net) that `tab` dispatches too, rather than in
+  // a second copy of the maxPane rule.
+  { file: "src/tui/App.tsx", max: 1898 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
