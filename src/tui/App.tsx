@@ -73,6 +73,7 @@ import { useScroll } from "./useScroll.js";
 import { useFollowLatch } from "./useFollowLatch.js";
 import type { LogReaderDeps } from "../logReader.js";
 import { useToast } from "./hooks/useToast.js";
+import { useRejectionToast } from "./hooks/useRejectionToast.js";
 import { useConfirm } from "./hooks/useConfirm.js";
 import { useHealth } from "./hooks/useHealth.js";
 import { useQueueSnapshot } from "./hooks/useQueueSnapshot.js";
@@ -425,6 +426,7 @@ export function App(props: AppProps): React.JSX.Element {
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
   const { toast, showToast, dismissToast } = useToast();
+  useRejectionToast(showToast); // #455: a stray `void verb()` toasts, never exits
   const health = useHealth(client, healthPollMs);
   const { queueSnap } = useQueueSnapshot(queueFn, queuePollMs);
   const now = useClock(clockMs);

@@ -102,8 +102,11 @@ const GRANDFATHERED_FUNCTION_LINES = [
   // net against the three key-handler lines it replaces with two). +1 for the
   // transcript's chat exit (#462, 1,890 → 1,891): `closeTranscript` joins the
   // useViewActions call so `c` releases the transcript's live poll on the way
-  // out — the hook owns the recipe, App only names the closer.
-  { file: "src/tui/App.tsx", max: 1891 },
+  // out — the hook owns the recipe, App only names the closer. +1 for the
+  // unhandled-rejection net (#455, 1,891 → 1,892): one `useRejectionToast`
+  // call; the listener and its message shape live in the hook, and the
+  // whole-process half is src/dashboardCmd.ts's.
+  { file: "src/tui/App.tsx", max: 1892 },
   // `runPrFlow` (552): #353 lifted Phase 9 into postSessionReview.ts; the other
   // phases come out the same way, one PR at a time (#387).
   { file: "src/prFlow.ts", max: 552 },
