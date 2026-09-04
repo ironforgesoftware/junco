@@ -2907,11 +2907,12 @@ describe("queue system row", () => {
     // esc returns focus to the rail; the queue body stays (body follows the
     // cursor, and the cursor is still on the queue row).
     r.stdin.write(ESC);
-    // Rail focus, read off the NAVIGATE row: pane 1 offers `→ issues` /
-    // `⏎ detail`, the queue BODY offers `⏎ transcript` / `← rail`. (Ruling
-    // R11 retired the old proxy: a system row on the rail no longer
-    // advertises the repo verbs, so `add repo` is gone from this frame.)
-    await until(() => (r.lastFrame() ?? "").includes("→  issues"));
+    // Rail focus, read off the NAVIGATE row: pane 1 on a system row offers
+    // `→ open` / `⏎ open` (#470), the queue BODY offers `⏎ transcript` /
+    // `← rail`. (Ruling R11 retired the old proxy: a system row on the rail
+    // no longer advertises the repo verbs, so `add repo` is gone from this
+    // frame.)
+    await until(() => (r.lastFrame() ?? "").includes("→  open"));
     expect(r.lastFrame()).toContain("running (1/1)");
     // k moves the cursor back onto the repo row — the issues body returns.
     r.stdin.write("k");

@@ -11,7 +11,7 @@ const km = (c: BindingContext): Record<string, string> =>
  * pane-scoped `t` KEYMAP swap is withdrawn — spec 2026-09-02 D5): the keymap
  * is the same on every pane of a body, so the other bodies pin at pane 2 and
  * mean the same thing on any pane. */
-const main = (body: MainBody, pane: 1 | 2 | 3 = 2): BindingContext => ({
+const main = (body: MainBody, pane: 1 | 2 | 3 = 2): Extract<BindingContext, { kind: "main" }> => ({
   kind: "main",
   body,
   pane,
@@ -68,9 +68,27 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
   });
   it("c is chat on every pane of every main body; t is the transcript on the issue list only (spec 2026-09-02 D5)", () => {
     for (const pane of [1, 2, 3] as const) {
-      expect(km(main("issues", pane))).toMatchObject({ c: "chat", t: "transcript" });
+      expect(km(main("issues", pane))).toMatchObject({ c: "chat" });
       expect(km(main("repoDetail", pane))).toEqual({ ...GLOBALS });
       expect(km(main("queue", pane))).toMatchObject({ c: "chat", t: "retry" });
+    }
+  });
+  it("t is the ticket transcript on PANE 2 of the issue list only (spec §5, #466)", () => {
+    // Spec §5: "`t` … is unbound on the rail and the PR pane." It used to be
+    // bound on all three panes, so `t` on the rail opened the transcript of
+    // pane 2's unseen cursor issue. Dropping it does not disturb the other
+    // derivations — the letters below are the pane-2 map minus `t`.
+    expect(km(main("issues", 2))).toMatchObject({ t: "transcript" });
+    for (const pane of [1, 3] as const) {
+      expect(km(main("issues", pane)), `pane ${pane}`).toEqual({
+        ...GLOBALS,
+        m: "dispatch",
+        o: "approve",
+        n: "analyze",
+        I: "dispatchAsk",
+        A: "assessAutoPlan",
+        R: "replan",
+      });
     }
   });
   it("the palette has no mnemonic — `:` is structural, `c` belongs to chat", () => {
@@ -332,12 +350,21 @@ describe("invariants", () => {
     }
   });
 
-  it("chips: pane 1 on a LOCAL-ONLY repo row (repoDetail body) keeps the rail set (R11)", () => {
-    const b = buildContextBindings(main("repoDetail", 1), "wide");
-    const ids = b.chips.flatMap((ch) => (ch.kind === "mnemonic" ? [ch.id] : []));
+  it("chips: pane 1 on an UNWATCHED repo row (repoDetail body) keeps the rail set minus Unwatch (#459)", () => {
     // …including the pinned pair, which `chipOrder` carries and footerModel
     // re-homes to `navigate.pinned` (the section orders never listed them).
-    expect(ids).toEqual([
+    const ids = (c: BindingContext): string[] =>
+      buildContextBindings(c, "wide").chips.flatMap((ch) =>
+        ch.kind === "mnemonic" ? [ch.id] : [],
+      );
+    const RAIL = ["chat", "assess", "browser", "refresh", "addRepo", ...GO, "quit", "help"];
+    // `watched: false` is what App derives from the rail row's own UnifiedRepo
+    // — the same gate useMainActions' handler uses, which otherwise toasts
+    // "not in watchlist" at a chip the bar advertised.
+    expect(ids({ ...main("repoDetail", 1), watched: false })).toEqual(RAIL);
+    // github.enabled = false routes WATCHED repos to the repoDetail body too,
+    // and `U` is live there — the flag, not the body, is the discriminator.
+    expect(ids({ ...main("repoDetail", 1), watched: true })).toEqual([
       "chat",
       "assess",
       "browser",
@@ -348,6 +375,8 @@ describe("invariants", () => {
       "quit",
       "help",
     ]);
+    // Omitted → watched, the pre-#459 default (a watched issues row).
+    expect(ids(main("issues", 1))).toContain("unwatch");
   });
 
   it("chips: the repoDetail BODY carries the repo verbs and chat, not a bare review/PRs (R11)", () => {

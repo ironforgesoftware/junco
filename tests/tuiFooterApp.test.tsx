@@ -18,13 +18,23 @@ import { describe, it, expect, afterEach } from "vitest";
 import React from "react";
 import { App } from "../src/tui/App.js";
 import { MouseProvider } from "../src/tui/MouseProvider.js";
-import { makeAppProps, okv, stubClient, HEAVY, WIDE_COLS_TEST } from "./helpers/localFixtures.js";
+import {
+  makeAppProps,
+  okv,
+  stubClient,
+  HEAVY,
+  ISSUES,
+  WIDE_COLS_TEST,
+} from "./helpers/localFixtures.js";
 import { makeDashPr } from "./helpers/dashFixtures.js";
+import { Box } from "ink";
+import { Footer } from "../src/tui/components/Chrome.js";
 import { renderWide, cleanupWide, type WideInstance } from "./helpers/renderWide.js";
 import { until } from "./helpers/until.js";
 import type { AppProps } from "../src/tui/App.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { LocalHeavy } from "../src/tui/localSnapshot.js";
+import type { FooterChip, FooterRows } from "../src/tui/footerModel.js";
 
 afterEach(cleanupWide);
 
@@ -54,6 +64,8 @@ const PR_12 = makeDashPr({ number: 12, nwo: "acme/api" });
 const client: DashboardClient = {
   ...stubClient,
   listPrs: async (nwo) => okv({ prs: nwo === "acme/api" ? [PR_12] : [], staleAt: null }),
+  // beta/two is the watched repo with an EMPTY issue list (#473).
+  listIssues: async (nwo) => okv({ issues: nwo === "beta/two" ? [] : ISSUES, staleAt: null }),
 };
 
 function mount(over: Partial<AppProps> = {}): WideInstance {
@@ -72,11 +84,50 @@ const footer = (r: WideInstance): { actions: string; navigate: string } => {
   const lines = frame(r).split("\n");
   return { actions: lines[lines.length - 2] ?? "", navigate: lines[lines.length - 1] ?? "" };
 };
-/** The chat pill is the only chip drawn as ` c hat ` — frames carry no ANSI,
- * so the pill's PRESENCE is read as its padded label, exactly where §3.1 puts
- * it: immediately after the target slot. */
-const hasPill = (actions: string): boolean => / chat {2}/.test(actions);
+/** Frames carry no ANSI, so the pill has to be read off its GEOMETRY. A pill's
+ * segments carry a padding space inside the chip (footerSegments, spec §3.4)
+ * and the run puts two more between chips: `chat` followed by THREE spaces.
+ * A plain `chat` mnemonic chip has only the run's two — which is why the old
+ * `/ chat {2}/` here would have survived the pill degrading to one (#467).
+ * The `it` below pins that discrimination against the real renderer. */
+const hasPill = (actions: string): boolean => /chat {3}/.test(actions);
 const LOADED = "First issue";
+
+describe("hasPill reads the pill, not any chip labelled chat (#467)", () => {
+  const row = (chat: FooterChip): FooterRows => ({
+    actions: {
+      label: "acme/api",
+      chips: [
+        chat,
+        {
+          kind: "mnemonic",
+          id: "browser",
+          key: "b",
+          label: "browser",
+          charIndex: 0,
+          guarded: false,
+        },
+      ],
+      pinned: [],
+    },
+    navigate: { label: "navigate", chips: [], pinned: [] },
+  });
+  const line = (rows: FooterRows): string =>
+    (
+      renderWide(
+        <Box width={120} flexDirection="column">
+          <Footer rows={rows} toast={null} />
+        </Box>,
+        120,
+      ).lastFrame() ?? ""
+    ).split("\n")[0] ?? "";
+
+  it("is true for the pill and false for a plain chat mnemonic chip", () => {
+    const base = { id: "chat", key: "c", label: "chat", charIndex: 0, guarded: false } as const;
+    expect(hasPill(line(row({ ...base, kind: "pill" })))).toBe(true);
+    expect(hasPill(line(row({ ...base, kind: "mnemonic" })))).toBe(false);
+  });
+});
 
 describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => {
   it("rail, repo row: the nwo, the pill, the rail verbs │ the go-globals", async () => {
@@ -103,6 +154,10 @@ describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => 
     const f = footer(r);
     expect(f.actions).not.toContain("no repo");
     expect(hasPill(f.actions)).toBe(true);
+    // …and NOT `Unwatch`: this checkout is not in the watchlist, so the
+    // handler behind that chip only toasts "not in watchlist" (#459).
+    expect(f.actions).not.toContain("Unwatch");
+    expect(f.actions).toContain("add repo");
   });
 
   it("rail, SYSTEM row: that section's verbs against its own name — no pill, no repo verbs (R11)", async () => {
@@ -125,6 +180,11 @@ describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => 
     // Spec §4: the main view pins [help, quit] on a system row too.
     expect(f.navigate).toContain("? help");
     expect(f.navigate).toContain("quit");
+    // …and the navigate row says what the keys do HERE (#470): both open the
+    // section's body — neither goes to an issue list or a repo detail.
+    expect(f.navigate).toMatch(/→\s+open\s+⏎\s+open/);
+    expect(f.navigate).not.toContain("issues");
+    expect(f.navigate).not.toContain("detail");
   });
 
   it("issue list (pane 2): the target is the ISSUE, not the repo (R12)", async () => {
@@ -136,6 +196,21 @@ describe("the App footer at 120 columns (spec §3/§4, Rulings R11/R12)", () => 
     expect(f.actions.trimStart().startsWith("issue #1")).toBe(true);
     expect(f.actions).not.toContain("acme/api");
     expect(hasPill(f.actions)).toBe(true);
+  });
+
+  it("issue list with NO issues: the per-issue verbs are gone, the repo verbs stay (#473)", async () => {
+    const r = mount();
+    await until(() => frame(r).includes(LOADED));
+    r.stdin.write("j");
+    await until(() => footer(r).actions.includes("beta/two"));
+    r.stdin.write("l"); // into beta/two's empty issue list
+    await until(() => footer(r).navigate.includes("filter"));
+    const f = footer(r);
+    for (const dead of ["import", "approve", "investigate", "transcript"]) {
+      expect(f.actions, dead).not.toContain(dead);
+    }
+    expect(hasPill(f.actions)).toBe(true);
+    expect(f.actions).toMatch(/audit\s+browser\s+│\s+PRs\s+review\s+queue/);
   });
 
   it("PR monitor (pane 3): the target is the PR, not the repo (R12)", async () => {

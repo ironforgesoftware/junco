@@ -25,6 +25,9 @@ export interface FooterBindingsInput {
   logOverlay: boolean;
   filtering: boolean;
   composerFocused: boolean;
+  /** Is there an issue under the cursor (App's `currentIssue`)? An empty or
+   * fully filtered issue list must not advertise the per-issue verbs (#473). */
+  issueSelected: boolean;
   /** A junco_submit card is waiting on the operator (spec 2026-09-03 §4.3) →
    * the blurred chat's context is `chatConfirm`, whose keymap is empty. */
   chatPending: boolean;
@@ -52,6 +55,13 @@ export interface FooterBindings {
 
 const mainBody = (body: BodyKind | null): MainBody =>
   body?.kind === "issues" ? "issues" : body?.kind === "section" ? body.section : "repoDetail";
+/** Pane 1's `Unwatch` gate (#459): the rail row's repo is in the watchlist —
+ * exactly useMainActions' own `watched && nwo` test, so the chip and the
+ * handler agree. An issues body is watched by construction (`bodyKindFor`),
+ * and a section body has no repo at all — its chip order never lists
+ * `unwatch`, so `true` there is inert. */
+const railWatched = (body: BodyKind | null): boolean =>
+  body?.kind === "repoDetail" ? body.repo.watched && body.repo.nwo !== null : true;
 
 export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
   const {
@@ -61,6 +71,7 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     logOverlay,
     filtering,
     composerFocused,
+    issueSelected,
     chatPending,
     mode,
     columns,
@@ -84,7 +95,9 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
     // what keeps typed prose off the mnemonic dispatch at layer 3d.
     if (view === "chat")
       return composerFocused
-        ? { kind: "structuralOnly", view: "chatCompose" }
+        ? // `pending` only relabels the composer's `esc` chip (#479): esc
+          // blurs while a submit card waits, it does not abort.
+          { kind: "structuralOnly", view: "chatCompose", pending: chatPending }
         : chatPending
           ? { kind: "structuralOnly", view: "chatConfirm" }
           : { kind: "view", view: "chat" };
@@ -102,9 +115,15 @@ export function useFooterBindings(input: FooterBindingsInput): FooterBindings {
       case "transcript":
         return { kind: "view", view };
       case "main":
-        return { kind: "main", pane, body: mainBody(body) };
+        return {
+          kind: "main",
+          pane,
+          body: mainBody(body),
+          watched: railWatched(body),
+          issueSelected,
+        };
     }
-  }, [logOverlay, filtering, view, composerFocused, chatPending, body, pane]);
+  }, [logOverlay, filtering, view, composerFocused, chatPending, issueSelected, body, pane]);
   const bindings = useMemo(
     () => buildContextBindings(bindingContext, mode),
     [bindingContext, mode],

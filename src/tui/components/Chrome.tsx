@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { theme, toastColor, type ToastKind } from "../theme.js";
+import { theme, toastColor, segmentColors, type ToastKind } from "../theme.js";
 import type { LayoutMode } from "../layout.js";
 import type { HealthInfo } from "../ghClient.js";
 import { fmtDurShort } from "../queueFmt.js";
@@ -227,8 +227,7 @@ function SegmentText({ chip }: { chip: FooterChip }): React.JSX.Element {
       {footerSegments(chip).map((s, j) => (
         <Text
           key={j}
-          color={s.pill ? theme.pillFg : s.accent ? theme.accent : undefined}
-          backgroundColor={s.pill ? theme.accent : s.keycap ? theme.keycapBg : undefined}
+          {...segmentColors(s)}
           bold={s.pill || s.accent}
           underline={s.underline}
           dimColor={s.dim}
@@ -240,24 +239,32 @@ function SegmentText({ chip }: { chip: FooterChip }): React.JSX.Element {
   );
 }
 
-/** A run of chips. One with a `chipActions` entry is clickable — pill and
- * mnemonic chips by their mnemonic ID, structural chips by their KEY (which
- * IS their `FooterChip.id`, footerModel.ts); the rest render inert. A
- * separator dispatches nothing at all: it names no key. */
+/** A run of chips, two columns apart. The spacing is `gap` on the RUN, not a
+ * `marginRight` on each chip: a trailing margin on the last chip pushed the
+ * pinned run three columns in from the right edge while the label sat one
+ * column in from the left (#460). `marginLeft` keeps the two runs apart when
+ * the flex spacer between them has shrunk to nothing.
+ *
+ * One chip with a `chipActions` entry is clickable — pill and mnemonic chips
+ * by their mnemonic ID, structural chips by their KEY (which IS their
+ * `FooterChip.id`, footerModel.ts); the rest render inert. A separator
+ * dispatches nothing at all: it names no key. */
 function ChipRun({
   chips,
   chipActions,
+  marginLeft = 0,
 }: {
   chips: FooterChip[];
   chipActions?: Record<string, () => void>;
+  marginLeft?: number;
 }): React.JSX.Element {
   return (
-    <>
+    <Box flexShrink={0} gap={2} marginLeft={chips.length > 0 ? marginLeft : 0}>
       {chips.map((chip, i) => {
         const run = chip.kind === "separator" ? undefined : chipActions?.[chip.id];
         const body = <SegmentText chip={chip} />;
         return (
-          <Box key={`${chip.id}-${i}`} flexShrink={0} marginRight={2}>
+          <Box key={`${chip.id}-${i}`} flexShrink={0}>
             {run ? (
               <ClickableBox onPress={run} hoverBg={theme.hoverBg}>
                 {body}
@@ -268,12 +275,13 @@ function ChipRun({
           </Box>
         );
       })}
-    </>
+    </Box>
   );
 }
 
 /** One footer row: dim label in a fixed-width slot, the chips, a spacer, the
- * pinned chips. `overflow="hidden"` + `flexShrink={0}` chips = clip, never
+ * pinned chips. `labelWidth` 0 = no slot at all: the narrowest terminals
+ * spend those columns on keeping the pinned run visible instead (#464). `overflow="hidden"` + `flexShrink={0}` chips = clip, never
  * wrap — the row is informational and the two-line invariant holds. */
 function FooterLine({
   row,
@@ -286,14 +294,16 @@ function FooterLine({
 }): React.JSX.Element {
   return (
     <Box paddingX={1} height={1} overflow="hidden">
-      <Box width={labelWidth} flexShrink={0} marginRight={2}>
-        <Text dimColor wrap="truncate">
-          {row.label}
-        </Text>
-      </Box>
+      {labelWidth > 0 && (
+        <Box width={labelWidth} flexShrink={0} marginRight={2}>
+          <Text dimColor wrap="truncate">
+            {row.label}
+          </Text>
+        </Box>
+      )}
       <ChipRun chips={row.chips} chipActions={chipActions} />
       <Box flexGrow={1} />
-      <ChipRun chips={row.pinned} chipActions={chipActions} />
+      <ChipRun chips={row.pinned} chipActions={chipActions} marginLeft={2} />
     </Box>
   );
 }
