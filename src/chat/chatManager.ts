@@ -20,7 +20,7 @@ import { classifyProviderFailure, GATE_CLASSES } from "../providerFailure.js";
 import { dataTreePaths } from "../dataTree.js";
 import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
 import { log } from "../logging.js";
-import { chatSlug } from "./chatKey.js";
+import { chatSlug, isWatchedKey } from "./chatKey.js";
 import { resolveChatCwd, type ChatCwdError } from "./chatCwd.js";
 import { ChatSession, type ChatSessionDeps, type ChatSubscriber } from "./chatSession.js";
 import type { ChatTurnResult } from "./chatTurn.js";
@@ -157,6 +157,47 @@ export class ChatManager {
     );
     this.sessions.set(slug, session);
     return { ok: true, value: session };
+  }
+
+  /** Drop a session for good: out of the registry FIRST (so nothing new
+   *  reaches it), then drained — subscribers get their terminal event, the
+   *  SDK session is disposed. Never throws. */
+  private async evict(slug: string, session: ChatSession, reason: string): Promise<void> {
+    this.sessions.delete(slug);
+    try {
+      await session.drain();
+    } catch (e) {
+      log.warn("chat session drain failed while evicting", {
+        slug,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    log.info("chat session dropped", { slug, reason });
+  }
+
+  /**
+   * Watchlist reconciliation (#452), called off the daemon's poll loop so an
+   * `unwatch` — or a config reload that drops a repo — is picked up within a
+   * tick. `junco unwatch owner/repo` deletes the repo's chat dir and parked
+   * drafts but only blocks on live TICKETS: a live ChatSession for that key
+   * would keep appending to the removed dir (latching `degraded`) and keep
+   * showing in /health.chats until the daemon restarted.
+   *
+   * Watched keys only: a local row is not in the watchlist to begin with, and
+   * resolving one costs a `git rev-parse` we will not pay every poll. Free
+   * when there are no sessions, which is the common case.
+   */
+  async reconcile(): Promise<void> {
+    if (this.draining || this.sessions.size === 0) return;
+    const cfg = this.deps.cfg();
+    const resolve = this.deps.resolveCwd ?? resolveChatCwd;
+    for (const [slug, session] of [...this.sessions]) {
+      if (!isWatchedKey(session.key)) continue;
+      const cwd = await resolve(cfg, session.key);
+      // Only "unknown_key" means the repo left the watchlist; a checkout that
+      // is merely absent right now is transient and keeps its session.
+      if (!cwd.ok && cwd.error === "unknown_key") await this.evict(slug, session, "unwatched");
+    }
   }
 
   /** daemon.ts gatedReady's two checks, verbatim in order: budget (live

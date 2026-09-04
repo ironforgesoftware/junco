@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatManager, type ChatManagerDeps } from "../src/chat/chatManager.js";
+import type { ChatCwdError } from "../src/chat/chatCwd.js";
 import { makeConfig } from "./helpers/config.js";
 import { fakeChatSession, chatScriptText } from "./helpers/fakeSession.js";
 import type { SessionManagerMode } from "../src/agent/session.js";
@@ -372,6 +373,45 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     release();
     if (p.ok) await p.value.done;
+  });
+});
+
+describe("ChatManager watchlist reconciliation (#452, #453)", () => {
+  /** A movable/removable watchlist entry behind the `resolveCwd` seam. */
+  function movable(initial: string) {
+    const state: { cwd: string; error: ChatCwdError | null } = { cwd: initial, error: null };
+    const resolveCwd: ChatManagerDeps["resolveCwd"] = async () =>
+      state.error === null
+        ? { ok: true, cwd: state.cwd, kind: "watched", nwo: "acme/api" }
+        : { ok: false, error: state.error };
+    return { state, resolveCwd };
+  }
+  const tmp = (): string => mkdtempSync(join(tmpdir(), "junco-cm-cwd-"));
+
+  it("reconcile drains and drops a session whose repo has left the watchlist (#452)", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    const ends: string[] = [];
+    await m.subscribe("acme/api", 0, { onLine: () => {}, onEnd: (r) => ends.push(r) });
+    await runTurn(m, "acme/api", "hello");
+    expect(m.health().sessions).toHaveLength(1);
+
+    state.error = "unknown_key"; // `junco unwatch acme/api`, or a config reload
+    await m.reconcile();
+    expect(m.health().sessions).toEqual([]);
+    expect(ends).toEqual(["daemon_stopped"]);
+    // ...and the next verb 404s instead of resurrecting it on the removed dir.
+    expect(await m.prompt("acme/api", "again")).toEqual({ ok: false, error: "unknown_key" });
+  });
+
+  it("reconcile keeps a session whose checkout is merely absent right now", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    await runTurn(m, "acme/api", "hello");
+    // Still watched — the clone is just being re-created. Not an eviction.
+    state.error = "no_checkout";
+    await m.reconcile();
+    expect(m.health().sessions).toHaveLength(1);
   });
 });
 
