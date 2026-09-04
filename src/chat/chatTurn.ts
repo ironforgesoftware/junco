@@ -51,6 +51,12 @@ export class TurnDeadline {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private onFire: (() => void) | null = null;
   private isPaused = false;
+  /** One-shot: set by a fire and by clear(). `remaining` is 0 (or a leftover
+   *  budget) at that point, so re-arming would fire immediately or run on a
+   *  stale clock. No caller reuses an instance — a fresh TurnDeadline is minted
+   *  per turn in chatSession.admit — and this makes a reuse inert rather than
+   *  a surprise (#481). */
+  private spent = false;
 
   constructor(
     ms: number,
@@ -70,6 +76,7 @@ export class TurnDeadline {
   }
 
   arm(onFire: () => void): void {
+    if (this.spent) return;
     this.onFire = onFire;
     if (!this.isPaused) this.start();
   }
@@ -83,10 +90,11 @@ export class TurnDeadline {
   resume(): void {
     if (!this.isPaused) return;
     this.isPaused = false;
-    if (this.onFire !== null) this.start();
+    if (this.onFire !== null && !this.spent) this.start();
   }
 
   clear(): void {
+    this.spent = true;
     this.stop();
     this.onFire = null;
   }
@@ -97,6 +105,7 @@ export class TurnDeadline {
       this.timer = null;
       this.armedAt = null;
       this.remaining = 0;
+      this.spent = true;
       this.onFire?.();
     }, this.remaining);
   }

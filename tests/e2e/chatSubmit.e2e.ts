@@ -137,7 +137,7 @@ describe("e2e: chat junco_submit", () => {
       timeoutMs: 60_000,
       label: "draft parked",
     });
-    const draftId = chatDrafts(sandbox)[0];
+    const draftId = chatDrafts(sandbox)[0]!; // waitFor above proved there is one
     // Parked, not lint_failed: a lint failure would refuse the tool AND spend
     // the auto-lint retry turn (chatDrafts.ts's lintFollowUp).
     expect(records().some((r) => r.type === "junco_chat_draft" && r.status === "parked")).toBe(
@@ -184,9 +184,14 @@ describe("e2e: chat junco_submit", () => {
     });
 
     // The ticket the model drafted is queued, and the draft is archived.
-    expect(queueState(sandbox, TICKET_ID).dir).toBe("inbox");
+    // `!== null` on purpose: `inbox` would additionally pin the scenario to
+    // this daemon's `worker.pollIntervalSeconds: 3600` (nothing claims it
+    // within the test's life). What is being asserted is that the CLI really
+    // queued it — which survives a future wake-on-submit moving it straight
+    // to processing/.
+    expect(queueState(sandbox, TICKET_ID).dir).not.toBeNull();
     expect(chatDrafts(sandbox)).toEqual([]);
-    const archived = chatDraftArchivePath(sandbox, draftId ?? "");
+    const archived = chatDraftArchivePath(sandbox, draftId);
     expect(archived === null ? false : existsSync(archived)).toBe(true);
     expect(records().some((r) => r.type === "junco_chat_draft" && r.status === "submitted")).toBe(
       true,

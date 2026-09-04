@@ -198,7 +198,13 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
       chat: chatState({
         composerFocused: true,
         streaming: true,
-        pending: { commandId: "c1", draftId: "d1", ids: ["add-readme"], route: "inbox" },
+        pending: {
+          commandId: "c1",
+          draftId: "d1",
+          ids: ["add-readme"],
+          route: "inbox",
+          running: false,
+        },
       }),
     });
     expect(p.api.handleChatKey("", K({ escape: true }))).toBe(true);
@@ -359,7 +365,13 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
   // the cascade layer above this hook derives), so the same draft cannot be
   // submitted twice.
   it("blurred with a pending submit: y runs, n declines; nothing answers without a card", () => {
-    const pending = { commandId: "c1", draftId: "d", ids: ["t"], route: "inbox" as const };
+    const pending = {
+      commandId: "c1",
+      draftId: "d",
+      ids: ["t"],
+      route: "inbox" as const,
+      running: false,
+    };
     const h = mount({ chat: chatState({ pending }) });
     h.api.handleChatKey("y", K());
     h.api.handleChatKey("n", K());
@@ -519,7 +531,13 @@ describe("useChatInput — the slash router (spec §8.2)", () => {
     const busy = mount({
       chat: chatState({
         drafts: [d1],
-        pending: { commandId: "c", draftId: "acme__api-1", ids: ["add-readme"], route: "inbox" },
+        pending: {
+          commandId: "c",
+          draftId: "acme__api-1",
+          ids: ["add-readme"],
+          route: "inbox",
+          running: false,
+        },
       }),
     });
     busy.api.onComposerSubmit("/submit");

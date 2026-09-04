@@ -83,7 +83,8 @@ model calls junco_submit ──► session.propose()  writes  junco_chat_command
                                                awaits decision | abort | confirm timeout
 dashboard shows the card ──► operator y/n ──► POST /chat/decide ──► session.decide()
                                                resolves the pending promise
-                             on "run":         runs `junco submit …` (spawned CLI, §3.4)
+                             on "run":         writes junco_chat_command{status:"running"}
+                                               runs `junco submit …` (spawned CLI, §3.4)
                                                archives the draft, writes junco_chat_draft
                                                {status:"submitted"} + junco_chat_command
                                                {status:"ran"|"failed"}
@@ -99,8 +100,20 @@ dashboard shows the card ──► operator y/n ──► POST /chat/decide ─�
 - `ChatSession.abort()` settles a pending confirmation as `aborted` before signalling the
   turn (belt and braces — the SDK also aborts the tool's own signal).
 - `drain()` (daemon stop) settles it as `aborted` too; on the next start,
-  `stampCrashIfNeeded` closes any `proposed` record with no terminal record as
-  `expired` (`detail: "daemon restarted"`), the way it stamps a crashed turn.
+  `stampCrashIfNeeded` closes any OPEN record — `proposed` or `running` — with no
+  terminal record as `expired` (`detail: "daemon restarted"`), the way it stamps a
+  crashed turn.
+- **Amendment (#478).** The operator's `y` settles the pending slot at once, but the
+  terminal record only lands when the spawned CLI exits (≈1 s for the inbox route,
+  up to the 120 s budget for `--as-issue`). For that window the card used to still
+  read `awaiting you`, the header still `◐ awaiting your confirmation`, and a second
+  `y` toasted "that confirmation is no longer pending" against a card that said
+  otherwise. `confirmSubmit` therefore writes an additive
+  `junco_chat_command{status:"running"}` the instant a `run` decision releases the
+  tool into `runSubmit`. A RECORD rather than a local dashboard flag on purpose: the
+  transcript replays on every (re)connect, so a dashboard restarted mid-submit
+  rebuilds the same state. It does not make `abort()` able to interrupt the spawned
+  CLI — that stays out of scope.
 
 ### 3.4 Executing the submit
 
@@ -130,7 +143,8 @@ export interface ChatCommandRecord {
   draftId: string;
   ids: string[]; // the draft's ticket ids, for the row
   route: "inbox" | "issue"; // effective destination
-  status: "proposed" | "ran" | "failed" | "declined" | "expired" | "aborted";
+  // `proposed` and `running` are both OPEN; exactly one of the other five closes it.
+  status: "proposed" | "running" | "ran" | "failed" | "declined" | "expired" | "aborted";
   exitCode: number | null; // ran/failed only
   output: string | null; // ran/failed only; ≤ 4 KiB tail
   detail: string | null; // human context: "no decision in 10m", "daemon restarted", …
@@ -147,17 +161,21 @@ and expandable. `transcriptRender.ts` renders one row per record (§4.2); `junco
 
 ### 4.1 State
 
-`ChatState.pending: { commandId, draftId, ids, route } | null`, derived in `useChat`'s
-record handler: a `proposed` record sets it (and blurs the composer, and parks the cursor
-on the card's anchor); a terminal record with the same `commandId` clears it and reloads
-the drafts list (the daemon archived the draft). Replay on (re)connect rebuilds it, so a
-dashboard restarted mid-confirmation shows the card still pending.
+`ChatState.pending: { commandId, draftId, ids, route, running } | null`, derived in
+`useChat`'s record handler: a `proposed` record sets it (and blurs the composer, and parks
+the cursor on the card's anchor); a `running` record with the same `commandId` flips
+`running: true` and nothing else (the card is still the operator's — it is not a terminal
+record, so no drafts reload and the composer stays blurred); a terminal record clears it
+and reloads the drafts list (the daemon archived the draft). Replay on (re)connect
+rebuilds it, so a dashboard restarted mid-confirmation — or mid-submit — shows the card in
+the state the transcript left it.
 
 ### 4.2 Rows
 
 | status   | row (tone)                                                                                  |
 | -------- | ------------------------------------------------------------------------------------------- |
 | proposed | `   ▸ submit <ids> → <route> — awaiting you · y submit · n keep parked` (accent)            |
+| running  | `   ▸ submitting <ids> → <route>…` (accent) — the CLI is running (#478)                     |
 | ran      | `   ✓ submitted → <route> · <ids> · exit 0` (success) — `⏎` expands the CLI output          |
 | failed   | `   ✗ submit failed · exit N · <ids> — draft stays parked` (error) — `⏎` expands the output |
 | declined | `   – submit declined · <ids> · draft stays parked` (dim)                                   |
@@ -177,7 +195,10 @@ be submitted twice. `y`/`n` are handled in `useChatInput`'s blurred branch and P
 decision; the footer chips are clickable through the existing chip dispatch. `i` still
 focuses the composer (a steer typed now is delivered after the tool returns — the SDK
 queues it at the next tool boundary); `esc` leaves the view as today, the card keeps
-waiting. The header reads `◐ awaiting your confirmation`.
+waiting. The header reads `◐ awaiting your confirmation` — and, once the card is
+`running` (#478), `▸ submitting…`, with `y`/`n` disarmed in `useChat.decide` (a keystroke
+there toasts "that submit is already running" instead of posting a decision the daemon
+would 409).
 
 ### 4.4 `/submit`
 

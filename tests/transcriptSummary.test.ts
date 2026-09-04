@@ -396,6 +396,33 @@ describe("junco_chat_command", () => {
     expect(anchorIds(done)).toEqual([commandAnchor("call_1")]);
   });
 
+  // What the reducer's `out.runs.some(...)` scan exists for: a proposal in a
+  // CLOSED run, settled only after the next turn opened (the daemon-restart
+  // `expired` stamp lands before any new run, but a `running`/terminal pair
+  // straddling a turn boundary is the same shape). One row, in the run that
+  // proposed it — never a stray note at the tail.
+  it("a terminal record replaces its proposal ACROSS runs, leaving no note in the new one", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      cmd({}),
+      chatTurnAborted(),
+      chatPrompt({ text: "still there?" }),
+      chatTurnStart(),
+      cmd({ status: "expired", detail: "daemon restarted" }),
+    ]);
+    expect(s.runs).toHaveLength(2);
+    expect(s.runs[0]!.notes).toHaveLength(1);
+    expect(s.runs[0]!.notes[0]).toMatchObject({
+      kind: "command",
+      status: "expired",
+      detail: "daemon restarted",
+    });
+    expect(s.runs[1]!.notes).toEqual([]);
+    expect(anchorIds(s)).toEqual([commandAnchor("call_1")]);
+  });
+
   it("a terminal record for an UNKNOWN command id is kept as its own note (forward compat)", () => {
     const s = summarizeTranscript([
       metaLine(),

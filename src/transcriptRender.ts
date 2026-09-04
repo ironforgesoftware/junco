@@ -318,6 +318,8 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
               `   ▸ submit ${what} → ${n.route} — awaiting you · y submit · n keep parked`,
               "accent",
             ],
+            // #478: the window between the operator's `y` and the CLI's exit.
+            running: [`   ▸ submitting ${what} → ${n.route}…`, "accent"],
             ran: [
               // A `ran` CAN carry a caveat (the CLI queued the ticket but the
               // draft did not archive), and without it the row reads as a clean

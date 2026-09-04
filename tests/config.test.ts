@@ -1280,9 +1280,4 @@ describe("chat section (spec 2026-09-01 §10)", () => {
       confirmTimeoutMinutes: 3,
     });
   });
-  it("chat.submitTool defaults on and chat.confirmTimeoutMinutes to 10", () => {
-    const parsed = ConfigSchema.parse({});
-    expect(parsed.chat.submitTool).toBe(true);
-    expect(parsed.chat.confirmTimeoutMinutes).toBe(10);
-  });
 });

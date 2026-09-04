@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { ChatManager, type ChatManagerDeps } from "../src/chat/chatManager.js";
 import type { ChatCwdError } from "../src/chat/chatCwd.js";
 import { makeConfig } from "./helpers/config.js";
-import { fakeChatSession, chatScriptText } from "./helpers/fakeSession.js";
+import { fakeChatSession, chatScriptText, chatScriptToolCall } from "./helpers/fakeSession.js";
+import { fakeSpawn } from "./helpers/fakeSpawn.js";
+import { draftFilePath, writeChatDraft } from "../src/chat/draftStore.js";
 import type { SessionManagerMode } from "../src/agent/session.js";
 import type { GateStatus } from "../src/providerGate.js";
 import type { ProviderFailureClass } from "../src/providerFailure.js";
@@ -471,6 +473,76 @@ describe("ChatManager.decide (spec 2026-09-03 §3.3)", () => {
     });
     expect(await m.decide("acme/api", "c1", "run")).toEqual({ ok: true, value: { settled: true } });
     expect(await p).toBe("run");
+  });
+
+  // #481: the manager's `submit` dep is what a confirmed junco_submit runs
+  // through — threaded into every ChatSession it creates. Asserted end to end
+  // (the fake session CALLS the registered tool) because a plumbing-only
+  // assertion would not notice the key being dropped on the way in.
+  it("threads ChatManagerDeps.submit into the session's junco_submit executor", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-cm-"));
+    const cfg = makeConfig({
+      dataDir: root,
+      queueRoot: join(root, "queue"),
+      worktreeRoot: join(root, "wt"),
+      tools: ["read", "grep", "bash"],
+      criticEnabled: false,
+      planLintEnabled: false,
+      verifyEnabled: false,
+      supervisorEnabled: false,
+      healthEnabled: false,
+      removeWorktreeOnSuccess: true,
+    });
+    writeChatDraft(cfg, {
+      id: "acme__api-1",
+      key: "acme/api",
+      slug: "acme__api",
+      kind: "ticket",
+      files: [
+        {
+          name: "add-readme.md",
+          content: "---\nid: add-readme\n---\n# T\n",
+          lint: [],
+          route: null,
+          droppedKeys: [],
+        },
+      ],
+      cwd: root,
+      nwo: "acme/api",
+      createdAt: "2026-09-03T00:00:00.000Z",
+      lintFailed: false,
+      blocked: null,
+      routeOverride: "auto",
+      commandArgs: null,
+    });
+    const { spawnFn, calls } = fakeSpawn((c) => c.emit("close", 0));
+    const m = new ChatManager({
+      cfg: () => cfg,
+      gate: fakeGate(),
+      spend: fakeSpend(),
+      resolveCwd: async () => ({ ok: true, cwd: root, kind: "watched", nwo: "acme/api" }),
+      session: {
+        makeSessionManager: fakeSm,
+        sessionFactoryFor: (_c, _w, o) => fakeChatSession([chatScriptToolCall("call-1")], o),
+      },
+      submit: { spawnFn, cliPath: "/dist/cli.js" },
+      abortGraceMs: 20,
+    });
+    const p = await m.prompt("acme/api", "submit it");
+    if (!p.ok) throw new Error(p.error);
+    const got = await m.get("acme/api");
+    if (!got.ok) throw new Error(got.error);
+    await vi.waitFor(() => expect(got.value.pendingCommandId).toBe("call-1"));
+    expect(await m.decide("acme/api", "call-1", "run")).toEqual({
+      ok: true,
+      value: { settled: true },
+    });
+    await p.value.done;
+    expect(calls[0]).toEqual([
+      "/dist/cli.js",
+      "submit",
+      draftFilePath(cfg, "acme__api-1", "add-readme.md"),
+    ]);
   });
 
   it("answers a disabled chat the way every other verb does", async () => {

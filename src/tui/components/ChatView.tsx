@@ -68,8 +68,13 @@ export function chatHeaderStatus(
     };
   // Spec 2026-09-03 §4.3: the turn IS still streaming while junco_submit
   // blocks on the operator, and "◐ streaming" would say nothing about what it
-  // is waiting for — so the card's word wins.
-  if (s.pending) return { text: "◐ awaiting your confirmation", tone: "accent" };
+  // is waiting for — so the card's word wins. #478: once they answered `y`
+  // the wait is the daemon's CLI, not them, and the header must say so.
+  if (s.pending)
+    return {
+      text: s.pending.running ? "▸ submitting…" : "◐ awaiting your confirmation",
+      tone: "accent",
+    };
   if (s.streaming) return { text: "◐ streaming", tone: "accent" };
   if (s.connection !== "live") return { text: s.connection, tone: "dim" };
   return {

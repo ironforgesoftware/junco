@@ -163,4 +163,29 @@ describe("TurnDeadline", () => {
     const r = await p;
     expect(r.abortReason).toBe("timeout");
   });
+
+  // #481: `remaining` is 0 after a fire and a leftover budget after clear(),
+  // so a re-armed instance would fire immediately or run on a stale clock.
+  // No caller reuses one; the guard makes a reuse inert rather than a trap.
+  it("is one-shot: re-arming after a fire or a clear never fires again", async () => {
+    let fired = 0;
+    const d = new TurnDeadline(10);
+    d.arm(() => fired++);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fired).toBe(1);
+    d.arm(() => fired++);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fired).toBe(1);
+
+    let cleared = 0;
+    const c = new TurnDeadline(10);
+    c.arm(() => cleared++);
+    c.clear();
+    c.arm(() => cleared++);
+    // A pause/resume cycle must not revive it either.
+    c.pause();
+    c.resume();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(cleared).toBe(0);
+  });
 });

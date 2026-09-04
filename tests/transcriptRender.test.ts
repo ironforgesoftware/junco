@@ -521,6 +521,11 @@ describe("junco_chat_command rows", () => {
       text: "   ▸ submit add-readme → inbox — awaiting you · y submit · n keep parked",
       tone: "accent",
     });
+    // #478: the window between the operator's `y` and the CLI's exit.
+    expect(row(lines({ status: "running" }))).toMatchObject({
+      text: "   \u25b8 submitting add-readme \u2192 inbox\u2026",
+      tone: "accent",
+    });
     expect(row(lines({ status: "ran", exitCode: 0, output: "ok" }))).toMatchObject({
       text: "   ✓ submitted → inbox · add-readme · exit 0",
       tone: "success",
@@ -529,11 +534,19 @@ describe("junco_chat_command rows", () => {
       text: "   ✗ submit failed · exit 1 · add-readme — draft stays parked",
       tone: "error",
     });
-    expect(row(lines({ status: "declined" }))).toMatchObject({ tone: "dim" });
+    expect(row(lines({ status: "declined" }))).toEqual({
+      text: "   – submit declined · add-readme · draft stays parked",
+      tone: "dim",
+      anchor: commandAnchor("call_1"),
+    });
     expect(row(lines({ status: "expired", detail: "no decision in 10m" })).text).toBe(
       "   ⌛ submit expired · no decision in 10m · draft stays parked",
     );
-    expect(row(lines({ status: "aborted" })).text).toContain("aborted with the turn");
+    expect(row(lines({ status: "aborted" }))).toEqual({
+      text: "   – submit aborted with the turn · add-readme · draft stays parked",
+      tone: "dim",
+      anchor: commandAnchor("call_1"),
+    });
   });
 
   it("a ran row appends its detail — a queued-but-unarchived submit says so (#479)", () => {
@@ -571,5 +584,17 @@ describe("junco_chat_command rows", () => {
     expect(
       lines({ status: "ran", exitCode: 0, output: "x" }).some((r) => r.text.includes("      x")),
     ).toBe(false);
+  });
+
+  // A CLI that printed nothing still has an expandable body: `output: ""` is
+  // "it ran and said nothing", which must not read as "not expandable yet".
+  // (`null` — the non-ran statuses — has no body at all.)
+  it("an expanded empty output says (no output); a null output has no body row", () => {
+    const at = (rows: ReturnType<typeof lines>) =>
+      rows.findIndex((r) => r.anchor === commandAnchor("call_1"));
+    const empty = lines({ status: "ran", exitCode: 0, output: "" }, [commandAnchor("call_1")]);
+    expect(empty[at(empty) + 1]).toEqual({ text: "      (no output)", tone: "dim" });
+    const none = lines({ status: "declined" }, [commandAnchor("call_1")]);
+    expect(none[at(none) + 1]?.text ?? "").not.toContain("(no output)");
   });
 });

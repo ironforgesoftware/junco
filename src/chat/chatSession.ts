@@ -375,10 +375,11 @@ export class ChatSession {
   }
 
   /** Spec §11 + spec 2026-09-03 §3.3: a turn record left at turn_start, or a
-   *  command left at proposed, died with the daemon. */
+   *  command left open — `proposed` (nobody decided) or `running` (#478: the
+   *  spawned CLI died with the daemon) — died with the daemon. */
   private stampDanglingIfNeeded(): void {
     let lastTurn: string | null = null;
-    // commandId → the proposal no terminal record has closed yet.
+    // commandId → the open command no terminal record has closed yet.
     const open = new Map<string, ChatCommandRecord>();
     for (const { line } of this.readLines(0)) {
       const p = parseTranscriptLine(line);
@@ -392,7 +393,7 @@ export class ChatSession {
         lastTurn = t;
       if (p.record.type === "junco_chat_command") {
         const c = p.record;
-        if (c.status === "proposed") open.set(c.commandId, c);
+        if (c.status === "proposed" || c.status === "running") open.set(c.commandId, c);
         else open.delete(c.commandId);
       }
     }
@@ -741,6 +742,12 @@ export class ChatSession {
   async confirmSubmit(p: SubmitProposal, signal?: AbortSignal): Promise<Decision> {
     if (this.pending !== null)
       throw new Error("a submit is already awaiting the operator's confirmation");
+    // Unreachable from `junco_submit` (submitTool.execute checks the same
+    // signal one line earlier and returns its own text), and deliberately
+    // kept: this is a PUBLIC method, and a pre-aborted signal must never
+    // write a `proposed` record that would then hang a card nobody can
+    // answer. Pinned by chatSession.test.ts's "a pre-aborted signal never
+    // even proposes" (#481).
     if (signal?.aborted) return "aborted";
     this.writeRecord({
       type: "junco_chat_command",
@@ -756,7 +763,7 @@ export class ChatSession {
     });
     this.turnDeadline?.pause();
     try {
-      return await new Promise<Decision>((resolve) => {
+      const decision = await new Promise<Decision>((resolve) => {
         const settle = (d: Decision): void => {
           clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
@@ -768,6 +775,28 @@ export class ChatSession {
         signal?.addEventListener("abort", onAbort, { once: true });
         this.pending = { commandId: p.commandId, settle };
       });
+      // Spec 2026-09-03 §3.5 (#478): the tool calls `run` the instant this
+      // resolves, but the CLI's own terminal record only lands when it
+      // finishes (~1 s for the inbox, up to 120 s for `--as-issue`). Without
+      // this the dashboard's card would keep saying "awaiting you" — and a
+      // second `y` would toast "no longer pending" against a card that
+      // contradicts it — for that whole window. `running` is a RECORD rather
+      // than a local flag on purpose: it survives a dashboard reconnect,
+      // which replays the transcript.
+      if (decision === "run")
+        this.writeRecord({
+          type: "junco_chat_command",
+          commandId: p.commandId,
+          command: "submit",
+          draftId: p.draftId,
+          ids: p.ids,
+          route: p.route,
+          status: "running",
+          exitCode: null,
+          output: null,
+          detail: null,
+        });
+      return decision;
     } finally {
       this.turnDeadline?.resume();
     }
@@ -789,6 +818,13 @@ export class ChatSession {
       record: (rec) => this.writeRecord(rec),
       confirmTimeoutMinutes: this.cfg.chat.confirmTimeoutMinutes,
     };
+  }
+
+  /** Tests only (#477): the clock the RUNNING turn is on, so a confirmation
+   *  pending inside a real `prompt()` can be observed as paused. Null between
+   *  turns. */
+  get turnDeadlineForTest(): TurnDeadline | null {
+    return this.turnDeadline;
   }
 
   /** Tests only: a turn deadline without a turn, so the pause is observable. */

@@ -472,6 +472,7 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
       draftId: "acme__api-20260901-120000-1",
       ids: ["add-readme"],
       route: "inbox",
+      running: false,
     });
     expect(api.chat!.composerFocused).toBe(false);
     expect(anchorIds(api.chat!.summary!)[api.chat!.cursor]).toBe(commandAnchor("call_1"));
@@ -484,6 +485,46 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     // draft-card rule, and a `cmd:` anchor has a body to show.
     api.toggleExpanded();
     await until(() => api.chat!.expanded.has(commandAnchor("call_1")));
+  });
+
+  // #478: between the operator's `y` and the CLI's exit the card must stop
+  // saying "awaiting you" — and must not be answerable a second time.
+  it("a running junco_submit keeps the card, marks it running, and disarms decide", async () => {
+    const decided: string[] = [];
+    const c = makeClient({
+      decide: async (_k, _id, d) => (decided.push(d), okv({ settled: true })),
+    });
+    let listCalls = 0;
+    c.client.listChatDrafts = async () => (listCalls++, { ok: true, value: [] });
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    await until(() => listCalls === 1);
+    c.push(10, metaLine());
+    c.push(20, chatPrompt({ text: "submit it" }));
+    c.push(30, chatTurnStart());
+    c.push(40, chatCommand({ status: "proposed" }));
+    await until(() => api.chat!.pending?.commandId === "call_1");
+    c.push(50, chatCommand({ status: "running" }));
+    await until(() => api.chat!.pending?.running === true);
+    expect(api.chat!.pending).toEqual({
+      commandId: "call_1",
+      draftId: "acme__api-20260901-120000-1",
+      ids: ["add-readme"],
+      route: "inbox",
+      running: true,
+    });
+    expect(api.chat!.composerFocused).toBe(false);
+    // Not a terminal record: no drafts reload, and y/n no longer POST.
+    expect(listCalls).toBe(1);
+    await api.decide("run");
+    expect(decided).toEqual([]);
+    await until(() => api.chat!.error === "that submit is already running");
+    // The CLI's own record still settles it the usual way.
+    c.push(60, chatCommand({ status: "ran", exitCode: 0, output: "queued" }));
+    await until(() => api.chat!.pending === null);
+    await until(() => listCalls === 2);
   });
 
   // Fix round 1 (controller ruling R2): the client fires status("live") BEFORE

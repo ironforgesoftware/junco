@@ -45,8 +45,16 @@ export interface ChatState {
   expanded: ReadonlySet<string>;
   lastOffset: number | null;
   error: string | null; // last POST failure (toast-worthy)
-  /** A junco_submit awaiting the operator's y/n (spec 2026-09-03 §4.1). */
-  pending: { commandId: string; draftId: string; ids: string[]; route: "inbox" | "issue" } | null;
+  /** A junco_submit the operator still owns (spec 2026-09-03 §4.1): awaiting
+   *  their y/n, or — once they said y — `running` while the daemon's CLI is
+   *  still going (#478), which disarms y/n and re-words the header. */
+  pending: {
+    commandId: string;
+    draftId: string;
+    ids: string[];
+    route: "inbox" | "issue";
+    running: boolean;
+  } | null;
 }
 
 export interface ChatApi {
@@ -146,10 +154,12 @@ export function useChat({
    *  without closing over a render's state. Every writer of `composer` below
    *  keeps it in sync. */
   const composerRef = useRef("");
-  /** The card `decide` answers, mirrored so the POST reads the state React has
-   *  already committed rather than a render's closure (the y/n key and the
-   *  footer chip both call it from outside this hook). Written in the render
-   *  body below — the only writer is `chat` itself. */
+  /** The card `decide` answers, mirrored so the POST reads the latest record
+   *  rather than a render's closure (the y/n key and the footer chip both call
+   *  it from outside this hook). Written by every writer of `pending`, the way
+   *  `composerRef` is (#481) — NOT in an effect: `decide` runs off a keystroke
+   *  that can land before React has flushed a passive effect, and a ref that
+   *  lags there drops the operator's `y` outright (CI, PR #484). */
   const pendingRef = useRef<ChatState["pending"]>(null);
   const lastOffsetRef = useRef<number | null>(null);
   // Bumped by closeChat and by every connect() call: a callback or timer
@@ -200,11 +210,29 @@ export function useChat({
       // may run the updater lazily, so a flag set and read inside it can
       // observe the read happening before the write.
       const draftsChanged = rec?.type === "junco_chat_draft";
-      // Spec 2026-09-03 §4.1: a `proposed` command is the operator's card; any
-      // other status is its one terminal record (the daemon archived the draft
-      // it submitted, hence the reload below).
+      // Spec 2026-09-03 §4.1: a `proposed` command is the operator's card and
+      // `running` is that same card mid-submit (#478); any other status is its
+      // one terminal record (the daemon archived the draft it submitted, hence
+      // the reload below).
       const command = rec?.type === "junco_chat_command" ? rec : null;
-      const settledCommand = command !== null && command.status !== "proposed";
+      const settledCommand =
+        command !== null && command.status !== "proposed" && command.status !== "running";
+      // Ruling R20 again: outside the updater, which React may run lazily.
+      // The same three transitions the updater below makes, on the ref the
+      // y/n keystroke reads.
+      if (command !== null) {
+        if (settledCommand) {
+          if (pendingRef.current?.commandId === command.commandId) pendingRef.current = null;
+        } else {
+          pendingRef.current = {
+            commandId: command.commandId,
+            draftId: command.draftId,
+            ids: command.ids,
+            route: command.route,
+            running: command.status === "running",
+          };
+        }
+      }
       setChat((s) => {
         if (s === null) return s;
         const n = anchorIds(summary).length;
@@ -236,9 +264,27 @@ export function useChat({
               draftId: command.draftId,
               ids: command.ids,
               route: command.route,
+              running: false,
             },
             composerFocused: false,
             ...(at >= 0 ? { cursor: at, follow: false, reveal: true } : {}),
+          };
+        } else if (command?.status === "running") {
+          // #478: the card stays — it is the operator's until the CLI's
+          // terminal record lands — but `running` disarms y/n (`decide`
+          // refuses) and re-words the header. A replayed transcript rebuilds
+          // this the same way, so a dashboard restarted mid-submit shows it
+          // too; the composer stays blurred until the command settles.
+          next = {
+            ...next,
+            pending: {
+              commandId: command.commandId,
+              draftId: command.draftId,
+              ids: command.ids,
+              route: command.route,
+              running: true,
+            },
+            composerFocused: false,
           };
         } else if (settledCommand && next.pending?.commandId === command.commandId) {
           // Controller ruling R2 (fix round 1): the settling record undoes the
@@ -300,6 +346,7 @@ export function useChat({
               ring.current = [];
               pendingDelta.current = "";
               lastOffsetRef.current = null;
+              pendingRef.current = null;
               setChat((st) =>
                 st === null
                   ? st
@@ -343,6 +390,7 @@ export function useChat({
     keyRef.current = null;
     lastOffsetRef.current = null;
     composerRef.current = "";
+    pendingRef.current = null;
     ring.current = [];
     pendingDelta.current = "";
     if (flushTimer.current !== null) clearTimeout(flushTimer.current);
@@ -502,12 +550,18 @@ export function useChat({
   );
   /** Spec 2026-09-03 §4.5: `settled: false` is the daemon saying nothing was
    *  pending under that id — another dashboard answered first, or it expired.
-   *  Not a transport error, but the operator's error to see. */
+   *  Not a transport error, but the operator's error to see. A `running` card
+   *  (#478) is already decided: y/n are disarmed here rather than sent for a
+   *  409 the operator would read as a lost keystroke. */
   const decide = useCallback(
     async (decision: "run" | "decline"): Promise<void> => {
       const key = keyRef.current;
       const pending = pendingRef.current;
       if (key === null || pending === null) return;
+      if (pending.running) {
+        setChat((s) => (s === null ? s : { ...s, error: "that submit is already running" }));
+        return;
+      }
       const r = await client.chat.decide(key, pending.commandId, decision);
       if (!aliveRef.current) return;
       const error = !r.ok
@@ -527,7 +581,6 @@ export function useChat({
     return chat.drafts.find((d) => d.id === draftId) ?? null;
   }, [chat]);
 
-  pendingRef.current = chat?.pending ?? null;
   return {
     chat,
     openChat,
