@@ -154,11 +154,12 @@ export function useChat({
    *  without closing over a render's state. Every writer of `composer` below
    *  keeps it in sync. */
   const composerRef = useRef("");
-  /** The card `decide` answers, mirrored so the POST reads the state React has
-   *  already committed rather than a render's closure (the y/n key and the
-   *  footer chip both call it from outside this hook). Synced in an EFFECT,
-   *  not in the render body (#481): a render can be thrown away, and a commit
-   *  is exactly the moment the operator can see — and answer — the card. */
+  /** The card `decide` answers, mirrored so the POST reads the latest record
+   *  rather than a render's closure (the y/n key and the footer chip both call
+   *  it from outside this hook). Written by every writer of `pending`, the way
+   *  `composerRef` is (#481) — NOT in an effect: `decide` runs off a keystroke
+   *  that can land before React has flushed a passive effect, and a ref that
+   *  lags there drops the operator's `y` outright (CI, PR #484). */
   const pendingRef = useRef<ChatState["pending"]>(null);
   const lastOffsetRef = useRef<number | null>(null);
   // Bumped by closeChat and by every connect() call: a callback or timer
@@ -216,6 +217,22 @@ export function useChat({
       const command = rec?.type === "junco_chat_command" ? rec : null;
       const settledCommand =
         command !== null && command.status !== "proposed" && command.status !== "running";
+      // Ruling R20 again: outside the updater, which React may run lazily.
+      // The same three transitions the updater below makes, on the ref the
+      // y/n keystroke reads.
+      if (command !== null) {
+        if (settledCommand) {
+          if (pendingRef.current?.commandId === command.commandId) pendingRef.current = null;
+        } else {
+          pendingRef.current = {
+            commandId: command.commandId,
+            draftId: command.draftId,
+            ids: command.ids,
+            route: command.route,
+            running: command.status === "running",
+          };
+        }
+      }
       setChat((s) => {
         if (s === null) return s;
         const n = anchorIds(summary).length;
@@ -329,6 +346,7 @@ export function useChat({
               ring.current = [];
               pendingDelta.current = "";
               lastOffsetRef.current = null;
+              pendingRef.current = null;
               setChat((st) =>
                 st === null
                   ? st
@@ -372,6 +390,7 @@ export function useChat({
     keyRef.current = null;
     lastOffsetRef.current = null;
     composerRef.current = "";
+    pendingRef.current = null;
     ring.current = [];
     pendingDelta.current = "";
     if (flushTimer.current !== null) clearTimeout(flushTimer.current);
@@ -554,9 +573,6 @@ export function useChat({
     },
     [client, aliveRef],
   );
-  useEffect(() => {
-    pendingRef.current = chat?.pending ?? null;
-  }, [chat?.pending]);
   const selectedDraft = useCallback((): PendingDraft | null => {
     if (chat === null || chat.summary === null) return null;
     const id = anchorIds(chat.summary)[chat.cursor];
