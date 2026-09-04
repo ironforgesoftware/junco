@@ -742,6 +742,12 @@ export class ChatSession {
   async confirmSubmit(p: SubmitProposal, signal?: AbortSignal): Promise<Decision> {
     if (this.pending !== null)
       throw new Error("a submit is already awaiting the operator's confirmation");
+    // Unreachable from `junco_submit` (submitTool.execute checks the same
+    // signal one line earlier and returns its own text), and deliberately
+    // kept: this is a PUBLIC method, and a pre-aborted signal must never
+    // write a `proposed` record that would then hang a card nobody can
+    // answer. Pinned by chatSession.test.ts's "a pre-aborted signal never
+    // even proposes" (#481).
     if (signal?.aborted) return "aborted";
     this.writeRecord({
       type: "junco_chat_command",

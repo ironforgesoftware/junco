@@ -156,8 +156,9 @@ export function useChat({
   const composerRef = useRef("");
   /** The card `decide` answers, mirrored so the POST reads the state React has
    *  already committed rather than a render's closure (the y/n key and the
-   *  footer chip both call it from outside this hook). Written in the render
-   *  body below — the only writer is `chat` itself. */
+   *  footer chip both call it from outside this hook). Synced in an EFFECT,
+   *  not in the render body (#481): a render can be thrown away, and a commit
+   *  is exactly the moment the operator can see — and answer — the card. */
   const pendingRef = useRef<ChatState["pending"]>(null);
   const lastOffsetRef = useRef<number | null>(null);
   // Bumped by closeChat and by every connect() call: a callback or timer
@@ -553,6 +554,9 @@ export function useChat({
     },
     [client, aliveRef],
   );
+  useEffect(() => {
+    pendingRef.current = chat?.pending ?? null;
+  }, [chat?.pending]);
   const selectedDraft = useCallback((): PendingDraft | null => {
     if (chat === null || chat.summary === null) return null;
     const id = anchorIds(chat.summary)[chat.cursor];
@@ -561,7 +565,6 @@ export function useChat({
     return chat.drafts.find((d) => d.id === draftId) ?? null;
   }, [chat]);
 
-  pendingRef.current = chat?.pending ?? null;
   return {
     chat,
     openChat,

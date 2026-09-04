@@ -103,6 +103,23 @@ describe("buildSandbox", () => {
     expect(res.customTools).toEqual([{ __tool: "read" }]);
   });
 
+  // Spec 2026-09-03 §3.2: the chat passes `[...READ_ONLY, "junco_submit"]` as
+  // its allowlist, and buildSandbox must SKIP the name it does not know rather
+  // than throw — pinned here so it holds on every runner, not only the
+  // sandbox-capable hosts the platform-gated integration suite runs on.
+  it("skips junco_submit (§3.2): the chat's four read-only names build four tools, no throw", () => {
+    const { factories, calls } = fakeFactories();
+    const res = buildSandbox(factories as any, {
+      cwd: "/work/tree",
+      toolNames: ["read", "grep", "find", "ls", "junco_submit"],
+      backend: noneBackend,
+      policy,
+      home: "/home/x",
+    });
+    expect(calls.map((c) => c.name)).toEqual(["read", "grep", "find", "ls"]);
+    expect(res.customTools).toHaveLength(4);
+  });
+
   it("threads appendSystemPrompt into the loader as an override plus the four no* flags; absent, the args are unchanged", () => {
     const { factories, loaderOpts } = fakeFactories();
     buildSandbox(factories as any, {

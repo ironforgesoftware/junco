@@ -26,7 +26,7 @@ import {
 import { makeDashPr } from "./helpers/dashFixtures.js";
 import { githubTicketId } from "../src/githubInbox.js";
 import { expandHome } from "../src/config.js";
-import { until, fireUntil } from "./helpers/until.js";
+import { until, fireUntil, tick } from "./helpers/until.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
@@ -257,6 +257,9 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     c.push(10, metaLine({ ticketId: "acme__api" }));
     c.push(20, chatPrompt({ text: "submit it" }));
     c.push(30, chatTurnStart());
+    // The draft this command holds is on the transcript too, so `s` below has
+    // a real target under the cursor and the pin discriminates (#481).
+    c.push(35, chatDraft());
     c.push(40, chatCommand({ status: "proposed" }));
     // The card's own row says "y submit · n keep parked" too, so the FOOTER
     // (the frame's last two lines) is what proves the chatConfirm context.
@@ -270,13 +273,18 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     expect(footerActions()).toContain("y submit");
     expect(r.lastFrame()).not.toContain("esc blur/abort"); // composer blurred
     // The draft verbs are OFF the keymap while the daemon holds this draft:
-    // `s` must not submit the parked draft a second time (the `y` round trip
-    // below is the bounded window a buggy dispatch would have landed in).
+    // `s` must not submit the parked draft a second time. The proposal parked
+    // the cursor on the COMMAND card, where `s` would only ever toast "no
+    // draft under the cursor" — so step back onto the draft card first (the
+    // `▌` gutter is the cursor) and press `s` with a live target under it.
+    await fireUntil(r.stdin, "\x1b[Z", () => /▌.*draft parked/.test(r.lastFrame() ?? ""));
     r.stdin.write("s");
+    await tick();
     r.stdin.write("y");
     await until(() => decisions.length === 1);
     expect(decisions).toEqual(["call_1:run"]);
-    expect(ran).toEqual([]);
+    expect(ran).toEqual([]); // `s` was unbound, not merely target-less
+    expect(r.lastFrame()).not.toContain("no draft under the cursor");
     c.push(50, chatCommand({ status: "ran", exitCode: 0, output: "queued add-readme" }));
     c.push(60, chatTurnEnd());
     await until(() => r.lastFrame()!.includes("✓ submitted → inbox · add-readme · exit 0"));
@@ -286,6 +294,9 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     expect(footerActions()).not.toContain("keep parked");
     r.stdin.write("\x1b"); // blur again to reach the card's keys
     await until(() => footerActions().includes("thinking"));
+    // The cursor is still on the draft card the `s` probe stepped onto; tab
+    // forward until the command card holds it again.
+    await fireUntil(r.stdin, "\t", () => /▌.*submitted → inbox/.test(r.lastFrame() ?? ""));
     r.stdin.write("\r"); // ⏎ on the card expands the CLI output
     await until(() => r.lastFrame()!.includes("queued add-readme"));
   });

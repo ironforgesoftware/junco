@@ -320,7 +320,8 @@ describe("/chat routes (spec 2026-09-01 §5)", () => {
     expect(stale.status).toBe(409);
     expect(await stale.json()).toEqual({ error: "not_pending" });
     expect((await post({ key: "k", commandId: "live", decision: "maybe" })).status).toBe(400);
-    expect((await post({ key: "k", decision: "run" })).status).toBe(400);
+    expect((await post({ key: "k", decision: "run" })).status).toBe(400); // missing
+    expect((await post({ key: "k", commandId: "", decision: "run" })).status).toBe(400); // empty
     expect(m.calls.filter((c) => c[0] === "decide")).toEqual([
       ["decide", "k", "live", "run"],
       ["decide", "k", "old", "decline"],

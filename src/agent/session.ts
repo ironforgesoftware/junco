@@ -911,7 +911,9 @@ export function makePiSessionFactory(
       // intentionally SDK-free (unknown[]); cast here at the single SDK
       // boundary. Shapes are validated by tests/sandboxBuild +
       // tests/submitTool + the platform-gated integration suite.
-      ...(sandboxTools || overrides?.customTools
+      // `?.length`, not truthiness: an EMPTY array is present-but-nothing, and
+      // passing `customTools: []` is not the same as omitting the key.
+      ...(sandboxTools?.length || overrides?.customTools?.length
         ? { customTools: [...(sandboxTools ?? []), ...(overrides?.customTools ?? [])] as never }
         : {}),
       ...(sandboxLoader ? { resourceLoader: sandboxLoader as never } : {}),
