@@ -20,8 +20,8 @@ import { classifyProviderFailure, GATE_CLASSES } from "../providerFailure.js";
 import { dataTreePaths } from "../dataTree.js";
 import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
 import { log } from "../logging.js";
-import { chatSlug } from "./chatKey.js";
-import { resolveChatCwd, type ChatCwdError } from "./chatCwd.js";
+import { chatSlug, isWatchedKey } from "./chatKey.js";
+import { resolveChatCwd, type ChatCwd, type ChatCwdError } from "./chatCwd.js";
 import { ChatSession, type ChatSessionDeps, type ChatSubscriber } from "./chatSession.js";
 import type { ChatTurnResult } from "./chatTurn.js";
 import type { SubmitExecDeps } from "./submitExec.js";
@@ -49,7 +49,7 @@ export interface AdmittedPrompt {
   mode: "prompt" | "steer" | "rejected";
   done: Promise<void>;
 }
-export type ChatError = ChatCwdError | "chat_disabled";
+export type ChatError = ChatCwdError | "chat_disabled" | "draining";
 export type ChatResult<T> = { ok: true; value: T } | { ok: false; error: ChatError };
 
 export interface ChatManagerDeps {
@@ -78,8 +78,19 @@ export interface ChatManagerDeps {
   ) => Promise<{ followUp?: string } | void>;
   draftsParkedFor?: (slug: string) => number;
   abortGraceMs?: number;
+  /** How long `drain()` waits for the sessions and their detached tails
+   *  before giving up and letting shutdown proceed (default
+   *  DRAIN_GRACE_MS). */
+  drainGraceMs?: number;
   now?: () => number;
 }
+
+/** Shutdown's whole chat budget (#446). The per-turn abort grace
+ * (chatTurn.ts's ABORT_GRACE_MS) already bounds a wedged MODEL, so what this
+ * bounds is everything after it: a draft hook that hangs, or a turn admitted
+ * in the window before `draining` latched. Deliberately far below
+ * `chat.turnTimeoutMinutes` — a shutdown must not sit out a 30-minute turn. */
+const DRAIN_GRACE_MS = 10_000;
 
 export class ChatManager {
   private readonly sessions = new Map<string, ChatSession>();
@@ -88,6 +99,10 @@ export class ChatManager {
   private readonly pending = new Map<string, Promise<ChatResult<ChatSession>>>();
   /** Slug → the turn tails that outlived their HTTP response (Ruling R33). */
   private readonly inFlightTurns = new Map<string, Set<Promise<void>>>();
+  /** Slugs whose checkout path must be re-resolved the next time the session
+   *  is opened (#453): set by `/new` (the session object survives a reset —
+   *  Ruling R10) and by `reconcile()` when the watchlist entry moved. */
+  private readonly recheckCwd = new Set<string>();
   private draining = false;
   private turns = 0;
   private costUsd = 0;
@@ -109,18 +124,24 @@ export class ChatManager {
    * status()/health() would track only the map winner while the orphan kept
    * writing to the same transcript. `enabled()` stays first and outside the
    * cache so a disabled config is never memoized.
+   *
+   * A cached session is handed back untouched unless `reconcile()` or a
+   * reset flagged it: re-resolving on EVERY call would cost a watchlist read
+   * per HTTP request, and a `git rev-parse` per request for a local key.
    */
   async get(key: string): Promise<ChatResult<ChatSession>> {
     if (!this.enabled()) return { ok: false, error: "chat_disabled" };
     const slug = chatSlug(key);
     const existing = this.sessions.get(slug);
-    if (existing) return { ok: true, value: existing };
+    if (existing && !this.recheckCwd.has(slug)) return { ok: true, value: existing };
     const inFlight = this.pending.get(slug);
     if (inFlight) return inFlight;
     // Cleared on settle (failure included) so a transient resolution error —
     // a checkout that is not mounted yet — is retried on the next call rather
     // than replayed forever.
-    const p = this.create(key, slug).finally(() => this.pending.delete(slug));
+    const p = (existing ? this.reopen(key, slug, existing) : this.create(key, slug)).finally(() =>
+      this.pending.delete(slug),
+    );
     this.pending.set(slug, p);
     return p;
   }
@@ -129,7 +150,18 @@ export class ChatManager {
     const cfg = this.deps.cfg();
     const cwd = await (this.deps.resolveCwd ?? resolveChatCwd)(cfg, key);
     if (!cwd.ok) return { ok: false, error: cwd.error };
-    const session = new ChatSession(
+    const session = this.build(key, slug, cwd, cfg);
+    this.sessions.set(slug, session);
+    return { ok: true, value: session };
+  }
+
+  private build(
+    key: string,
+    slug: string,
+    cwd: Extract<ChatCwd, { ok: true }>,
+    cfg: Config,
+  ): ChatSession {
+    return new ChatSession(
       {
         cfg,
         key,
@@ -144,8 +176,97 @@ export class ChatManager {
         ...(this.deps.submit ? { submit: this.deps.submit } : {}),
       },
     );
+  }
+
+  /**
+   * Spec §2.2: the checkout path is re-resolved when a session is (RE)OPENED,
+   * not once per ChatSession lifetime (#453). A clone that moved — `clonesDir`
+   * changed, a user-owned checkout relocated — used to keep its stale cwd
+   * until the daemon restarted, because Ruling R10 keeps the reset session in
+   * the registry and nothing else ever re-resolved.
+   *
+   * The old session is drained (SDK disposed — it is bound to the old path —
+   * and subscribers ended, which is what makes the dashboard resubscribe) and
+   * a new one takes its place on the SAME dir, so the transcript continues
+   * with one `junco_chat_session_reset{reason:"cwd_changed"}` explaining the
+   * jump.
+   */
+  private async reopen(
+    key: string,
+    slug: string,
+    existing: ChatSession,
+  ): Promise<ChatResult<ChatSession>> {
+    // Never swap the session out from under a running turn (a steer lands
+    // here too): the flag stays set, so the next idle open re-checks.
+    if (existing.streaming) return { ok: true, value: existing };
+    this.recheckCwd.delete(slug);
+    const cfg = this.deps.cfg();
+    const cwd = await (this.deps.resolveCwd ?? resolveChatCwd)(cfg, key);
+    if (!cwd.ok) {
+      // The repo left the watchlist (#452): `junco unwatch` has already
+      // removed the dir this session appends to, so drop it rather than let
+      // the next write latch `degraded`. Any other error is transient — a
+      // checkout being re-created — and keeps the session it has.
+      if (cwd.error !== "unknown_key") return { ok: true, value: existing };
+      await this.evict(slug, existing, "unwatched");
+      return { ok: false, error: cwd.error };
+    }
+    if (cwd.cwd === existing.cwd) return { ok: true, value: existing };
+    await this.evict(slug, existing, "cwd_changed");
+    const session = this.build(key, slug, cwd, cfg);
     this.sessions.set(slug, session);
+    await session.ensureMeta();
+    session.writeRecord({ type: "junco_chat_session_reset", reason: "cwd_changed" });
     return { ok: true, value: session };
+  }
+
+  /** Drop a session for good: out of the registry FIRST (so nothing new
+   *  reaches it), then drained — subscribers get their terminal event, the
+   *  SDK session is disposed. Never throws. */
+  private async evict(slug: string, session: ChatSession, reason: string): Promise<void> {
+    this.sessions.delete(slug);
+    this.recheckCwd.delete(slug);
+    try {
+      await session.drain();
+    } catch (e) {
+      log.warn("chat session drain failed while evicting", {
+        slug,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    log.info("chat session dropped", { slug, reason });
+  }
+
+  /**
+   * Watchlist reconciliation (#452), called off the daemon's poll loop so an
+   * `unwatch` — or a config reload that drops a repo — is picked up within a
+   * tick. `junco unwatch owner/repo` deletes the repo's chat dir and parked
+   * drafts but only blocks on live TICKETS: a live ChatSession for that key
+   * would keep appending to the removed dir (latching `degraded`) and keep
+   * showing in /health.chats until the daemon restarted.
+   *
+   * Watched keys only: a local row is not in the watchlist to begin with, and
+   * resolving one costs a `git rev-parse` we will not pay every poll. Free
+   * when there are no sessions, which is the common case.
+   */
+  async reconcile(): Promise<void> {
+    if (this.draining || this.sessions.size === 0) return;
+    const cfg = this.deps.cfg();
+    const resolve = this.deps.resolveCwd ?? resolveChatCwd;
+    for (const [slug, session] of [...this.sessions]) {
+      if (!isWatchedKey(session.key)) continue;
+      const cwd = await resolve(cfg, session.key);
+      if (!cwd.ok) {
+        // Only "unknown_key" means the repo left the watchlist; a checkout
+        // that is merely absent right now keeps the session it has.
+        if (cwd.error === "unknown_key") await this.evict(slug, session, "unwatched");
+        continue;
+      }
+      // A moved entry is only FLAGGED here: swapping the session from a
+      // background tick would abort a turn the operator is watching stream.
+      // The next open pays for it (#453).
+      if (cwd.cwd !== session.cwd) this.recheckCwd.add(slug);
+    }
   }
 
   /** daemon.ts gatedReady's two checks, verbatim in order: budget (live
@@ -179,6 +300,11 @@ export class ChatManager {
     text: string,
     opts: { source?: "operator" | "auto_lint" } = {},
   ): Promise<ChatResult<AdmittedPrompt>> {
+    // Before `get()` — the manager's half of the draining 503 (#446). A
+    // prompt admitted after drain() bumped the generation would have
+    // `ensureSession()` rebuild the SDK session it just disposed, and the
+    // new tail would be tracked by a drain that is already past its wait.
+    if (this.draining) return { ok: false, error: "draining" };
     const got = await this.get(key);
     if (!got.ok) return got;
     const session = got.value;
@@ -304,6 +430,9 @@ export class ChatManager {
     const got = await this.get(key);
     if (!got.ok) return got;
     await got.value.reset("operator_new");
+    // ...but the checkout is re-resolved on the next open (spec §2.2, #453):
+    // "on open" is the contract, and a reset session is opened again.
+    this.recheckCwd.add(got.value.slug);
     return { ok: true, value: null };
   }
 
@@ -364,12 +493,46 @@ export class ChatManager {
    * clients open past the shutdown deadline. Then the detached tails (R33):
    * the abort above makes each turn settle, and this is what waits for the
    * spend/hook/record work that used to sit inside the POST. `draining`
-   * stops an auto-lint follow-up from being admitted mid-shutdown, which is
-   * also what makes the loop terminate. */
+   * stops an auto-lint follow-up — and, since #446, any new prompt — from
+   * being admitted mid-shutdown, which is also what makes the loop terminate.
+   *
+   * Bounded by DRAIN_GRACE_MS (#446): the wait is best-effort, so a hook that
+   * never returns leaves its tail detached and shutdown carries on rather
+   * than holding the health server open for the rest of the turn timeout.
+   * Every subscriber has already had its terminal event by then — that
+   * happens inside `session.drain()`, which the grace only ever cuts short in
+   * the pathological case. */
   async drain(): Promise<void> {
     this.draining = true;
-    await Promise.all([...this.sessions.values()].map((s) => s.drain()));
-    while (this.inFlightTurns.size > 0)
-      await Promise.all([...this.inFlightTurns.values()].flatMap((s) => [...s]));
+    const work = (async () => {
+      await Promise.all([...this.sessions.values()].map((s) => s.drain()));
+      while (this.inFlightTurns.size > 0)
+        await Promise.all([...this.inFlightTurns.values()].flatMap((s) => [...s]));
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const grace = new Promise<"grace">((resolve) => {
+      timer = setTimeout(() => resolve("grace"), this.deps.drainGraceMs ?? DRAIN_GRACE_MS);
+      // Never the reason the process stays alive: the daemon is stopping.
+      timer.unref?.();
+    });
+    try {
+      const outcome = await Promise.race([
+        work.then(
+          () => "done" as const,
+          (e: unknown) => {
+            log.warn("chat drain failed", { error: e instanceof Error ? e.message : String(e) });
+            return "done" as const;
+          },
+        ),
+        grace,
+      ]);
+      if (outcome === "grace")
+        log.warn("chat drain grace expired; leaving turn tails detached", {
+          sessions: this.sessions.size,
+          pending: this.inFlightTurns.size,
+        });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

@@ -11,7 +11,7 @@
  * transcript record.
  */
 import type { ChatWriteRecord } from "./chatSession.js";
-import type { DraftLookup, PendingDraft } from "./draftStore.js";
+import { draftLookupError, type DraftLookup, type PendingDraft } from "./draftStore.js";
 import { draftTicketIds } from "./submitArgv.js";
 import { DRAFT_NOT_PARKED, type SubmitRunResult } from "./submitExec.js";
 
@@ -76,18 +76,12 @@ export function effectiveRoute(d: PendingDraft, requested: SubmitRoute | undefin
   return d.files[0]?.route?.destination === "issue" ? "issue" : "inbox";
 }
 
-const list = (ds: PendingDraft[]): string =>
-  ds.map((d) => draftTicketIds(d).join(", ") || d.id).join("; ");
-
 function resolveDraft(deps: SubmitToolDeps, ref: string | undefined): PendingDraft {
   const got = deps.findDraft(ref);
-  if (!got.ok) {
-    if (got.reason === "none")
-      throw new Error("nothing is parked for this chat — draft a ticket first");
-    if (got.reason === "unknown")
-      throw new Error(`no parked draft named "${ref}" — parked: ${list(got.candidates)}`);
-    throw new Error(`several drafts are parked — name one: ${list(got.candidates)}`);
-  }
+  // One rule, one wording: `findDraft` is findChatDraft (resolveDraftRef over
+  // this chat's parked drafts) and the miss is worded by draftLookupError, the
+  // same text the composer's `/submit` toasts (#480).
+  if (!got.ok) throw new Error(draftLookupError(got, ref));
   const d = got.draft;
   if (d.lintFailed)
     throw new Error(

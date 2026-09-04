@@ -8,7 +8,12 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { DraftKind } from "../agent/transcriptSchema.js";
 import { PLAN_FENCE } from "../planPrompt.js";
-import { PLAN_SET_FENCE, allFencedBlocks, extractPatchBody } from "../githubInbox.js";
+import {
+  PLAN_SET_FENCE,
+  allFencedBlocks,
+  extractPatchBody,
+  longestBacktickRun,
+} from "../githubInbox.js";
 
 export const FRONTMATTER_ALLOWLIST: ReadonlySet<string> = new Set([
   "id",
@@ -217,23 +222,33 @@ function commandArgsFor(
 }
 
 /**
- * Ruling R35: one id, one file. `<id>.md` is the on-disk name, so two fences
+ * Ruling R35, as amended by #448: one id, one file — the FIRST fence's SLOT,
+ * the LAST fence's CONTENT. `<id>.md` is the on-disk name, so two fences
  * carrying the same id (the model drafts, reads a file, re-emits a corrected
  * version) would park a "set" whose two entries slugify onto ONE path: the
- * JSON lists two ids and `s` submits the same file twice. The LAST fence wins
- * — it is the model's corrected answer — and the drop is a visible problem,
- * never silent. Ids are compared as extracted (explicit or H1-derived): both
- * produce the same colliding name.
+ * JSON lists two ids and `s` submits the same file twice. The last fence wins
+ * on content — it is the model's corrected answer — but it is spliced into the
+ * first one's position, because a set is submitted in FILE ORDER (submitArgv)
+ * and a redraft must not move a ticket behind the sibling that `depends_on`
+ * it. The drop is a visible problem, never silent. Ids are compared as
+ * extracted (explicit or H1-derived): both produce the same colliding name.
  */
 function dedupeById<T extends SplitResult>(results: T[], problems: string[]): T[] {
   const lastIdx = new Map<string, number>();
   results.forEach((r, i) => {
     if (r.file.id !== null) lastIdx.set(r.file.id, i);
   });
-  return results.filter((r, i) => {
-    if (r.file.id === null || lastIdx.get(r.file.id) === i) return true;
-    problems.push(`duplicate id ${r.file.id}: kept the last fence`);
-    return false;
+  const emitted = new Set<string>();
+  return results.flatMap((r): T[] => {
+    const id = r.file.id;
+    if (id === null) return [r];
+    if (emitted.has(id)) {
+      problems.push(`duplicate id ${id}: kept the last fence in the first one's slot`);
+      return [];
+    }
+    emitted.add(id);
+    // No duplicate → lastIdx.get(id) is this very entry, i.e. `r` itself.
+    return [results[lastIdx.get(id)!]!];
   });
 }
 
@@ -286,12 +301,18 @@ export function extractDrafts(text: string, ctx: ExtractCtx): ExtractedDraft[] {
   const ticketDraft = extractTicketDraft(text, ctx);
   if (ticketDraft) out.push(ticketDraft);
   for (const plan of allFencedBlocks(text, PLAN_SET_FENCE)) {
+    // The outer fence must outrun any fence INSIDE the body, or the rewrapped
+    // plan truncates at the inner one — for the dashboard's relint and for
+    // `junco submit --plan`, which read these same bytes through
+    // extractPlanSetBody. Min 4, the count buildPlanComment uses and the
+    // planner prompt teaches (R16).
+    const fence = "`".repeat(Math.max(4, longestBacktickRun(plan) + 1));
     out.push({
       kind: "planSet",
       files: [
         {
           name: "plan.md",
-          content: `\`\`\`${PLAN_SET_FENCE}\n${plan}\n\`\`\`\n`,
+          content: `${fence}${PLAN_SET_FENCE}\n${plan}\n${fence}\n`,
           frontmatter: {},
           body: plan,
           droppedKeys: [],

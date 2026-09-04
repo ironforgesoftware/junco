@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatManager, type ChatManagerDeps } from "../src/chat/chatManager.js";
+import type { ChatCwdError } from "../src/chat/chatCwd.js";
 import { makeConfig } from "./helpers/config.js";
 import { fakeChatSession, chatScriptText, chatScriptToolCall } from "./helpers/fakeSession.js";
 import { fakeSpawn } from "./helpers/fakeSpawn.js";
@@ -329,6 +330,133 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     expect(ends).toEqual(["daemon_stopped"]);
     expect(m.health().sessions[0]?.streaming).toBe(false);
     if (p.ok) await p.value.done;
+  });
+
+  it("a prompt that lands once drain() has started is refused, and rebuilds nothing (#446)", async () => {
+    let built = 0;
+    const factory = fakeChatSession([chatScriptText("hi", 0.1), chatScriptText("again", 0.1)]);
+    const { m } = setup({
+      session: {
+        makeSessionManager: fakeSm,
+        sessionFactoryFor: () => async () => {
+          built++;
+          return factory();
+        },
+      },
+    });
+    expect(await runTurn(m, "acme/api", "one")).toEqual({ ok: true, mode: "prompt" });
+    expect(built).toBe(1);
+    // Mid-drain: `drain()` has bumped the generation and disposed the SDK
+    // session, so admitting this would rebuild one that nothing disposes.
+    const draining = m.drain();
+    expect(await m.prompt("acme/api", "two")).toEqual({ ok: false, error: "draining" });
+    await draining;
+    expect(await m.prompt("acme/api", "three")).toEqual({ ok: false, error: "draining" });
+    expect(built).toBe(1);
+  });
+
+  it("drain() is bounded by a grace, not by the turn timeout (#446)", async () => {
+    let entered = false;
+    let release!: () => void;
+    const stuck = new Promise<void>((r) => (release = r));
+    const { m } = setup({
+      drainGraceMs: 30,
+      onTurnComplete: async () => {
+        entered = true;
+        await stuck;
+      },
+    });
+    const p = await m.prompt("acme/api", "hello");
+    expect(p.ok).toBe(true);
+    // The tail is wedged in the draft hook — a turn tail that never settles.
+    await vi.waitFor(() => expect(entered).toBe(true));
+    const started = Date.now();
+    await m.drain();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    release();
+    if (p.ok) await p.value.done;
+  });
+});
+
+describe("ChatManager watchlist reconciliation (#452, #453)", () => {
+  /** A movable/removable watchlist entry behind the `resolveCwd` seam. */
+  function movable(initial: string) {
+    const state: { cwd: string; error: ChatCwdError | null } = { cwd: initial, error: null };
+    const resolveCwd: ChatManagerDeps["resolveCwd"] = async () =>
+      state.error === null
+        ? { ok: true, cwd: state.cwd, kind: "watched", nwo: "acme/api" }
+        : { ok: false, error: state.error };
+    return { state, resolveCwd };
+  }
+  const tmp = (): string => mkdtempSync(join(tmpdir(), "junco-cm-cwd-"));
+
+  it("reconcile drains and drops a session whose repo has left the watchlist (#452)", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    const ends: string[] = [];
+    await m.subscribe("acme/api", 0, { onLine: () => {}, onEnd: (r) => ends.push(r) });
+    await runTurn(m, "acme/api", "hello");
+    expect(m.health().sessions).toHaveLength(1);
+
+    state.error = "unknown_key"; // `junco unwatch acme/api`, or a config reload
+    await m.reconcile();
+    expect(m.health().sessions).toEqual([]);
+    expect(ends).toEqual(["daemon_stopped"]);
+    // ...and the next verb 404s instead of resurrecting it on the removed dir.
+    expect(await m.prompt("acme/api", "again")).toEqual({ ok: false, error: "unknown_key" });
+  });
+
+  it("reconcile keeps a session whose checkout is merely absent right now", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    await runTurn(m, "acme/api", "hello");
+    // Still watched — the clone is just being re-created. Not an eviction.
+    state.error = "no_checkout";
+    await m.reconcile();
+    expect(m.health().sessions).toHaveLength(1);
+  });
+
+  it("a moved checkout is re-resolved on the next open, with a cwd_changed record (#453)", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    const first = await m.get("acme/api");
+    if (!first.ok) throw new Error(first.error);
+    expect(first.value.cwd).toBe(state.cwd);
+    await runTurn(m, "acme/api", "hello");
+    const transcript = first.value.transcriptPath;
+
+    state.cwd = tmp(); // clonesDir moved, or the checkout was relocated
+    await m.reconcile();
+    const again = await m.get("acme/api");
+    if (!again.ok) throw new Error(again.error);
+    expect(again.value.cwd).toBe(state.cwd);
+    expect(again.value).not.toBe(first.value);
+    // Same transcript, one record explaining the jump.
+    expect(again.value.transcriptPath).toBe(transcript);
+    expect(lines(transcript).filter((r) => r.type === "junco_chat_session_reset")).toEqual([
+      expect.objectContaining({ reason: "cwd_changed" }),
+    ]);
+  });
+
+  it("/new re-resolves the checkout before the next turn (#453)", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    const first = await m.get("acme/api");
+    if (!first.ok) throw new Error(first.error);
+    await runTurn(m, "acme/api", "hello");
+    state.cwd = tmp();
+    expect(await m.fresh("acme/api")).toEqual({ ok: true, value: null });
+    const again = await m.get("acme/api");
+    expect(again.ok && again.value.cwd).toBe(state.cwd);
+  });
+
+  it("an unchanged checkout keeps the very same session across a reset (Ruling R10)", async () => {
+    const { resolveCwd } = movable(tmp());
+    const { m } = setup({ resolveCwd });
+    const first = await m.get("acme/api");
+    await m.fresh("acme/api");
+    const again = await m.get("acme/api");
+    expect(first.ok && again.ok && again.value).toBe(first.ok ? first.value : null);
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,10 +9,12 @@ import {
   draftFilesDir,
   draftJsonPath,
   draftsParkedFor,
+  draftLookupError,
   findChatDraft,
   listChatDrafts,
   readChatDraft,
   removeChatDraft,
+  resolveDraftRef,
   writeChatDraft,
   type PendingDraft,
 } from "../src/chat/draftStore.js";
@@ -84,6 +86,32 @@ describe("chat draft store (spec 2026-09-01 §6.2)", () => {
     expect(existsSync(draftFilePath(cfg, "d2", "t.md"))).toBe(false);
   });
 
+  it("archive takes the files dir with it — nothing is left in chat-drafts/ (#450)", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-ds-"));
+    const cfg = cfgAt(root);
+    const drafts = join(root, "data", "chat-drafts");
+    writeChatDraft(cfg, draft("d1"));
+    writeChatDraft(cfg, draft("d2"));
+    expect(archiveChatDraft(cfg, "d1", "submitted")).toBe(true);
+    expect(archiveChatDraft(cfg, "d2", "discarded")).toBe(true);
+    // The record's path stays valid: <sub>/<id>/<name> beside <sub>/<id>.json.
+    expect(readFileSync(join(drafts, "submitted", "d1", "t.md"), "utf8")).toBe(
+      "---\nid: t\n---\n# T\n",
+    );
+    expect(existsSync(join(drafts, "discarded", "d2", "t.md"))).toBe(true);
+    expect(existsSync(draftFilesDir(cfg, "d1"))).toBe(false);
+    expect(existsSync(draftFilesDir(cfg, "d2"))).toBe(false);
+    // Only the two archive dirs remain — no per-draft leftovers.
+    expect(readdirSync(drafts).sort()).toEqual(["discarded", "submitted"]);
+  });
+
+  it("archiving a draft that is already gone is still a no-op, files dir or not (#450)", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-ds-"));
+    const cfg = cfgAt(root);
+    expect(archiveChatDraft(cfg, "ghost", "submitted")).toBe(false);
+    expect(existsSync(join(root, "data", "chat-drafts", "submitted", "ghost"))).toBe(false);
+  });
+
   it("an id or name that slugifies to a directory link throws instead of resolving upward", () => {
     const root = mkdtempSync(join(tmpdir(), "junco-ds-"));
     const cfg = cfgAt(root);
@@ -140,5 +168,60 @@ describe("chat draft store (spec 2026-09-01 §6.2)", () => {
       ok: false,
       reason: "unknown",
     });
+  });
+
+  it("resolveDraftRef is the ONE rule findChatDraft, /submit and the tool share (#480)", () => {
+    const a = draft("acme__api-1", "acme__api", { files: [draftFile("add-readme.md")] });
+    const b = draft("acme__api-2", "acme__api", { files: [draftFile("other.md")] });
+    expect(resolveDraftRef([], undefined)).toEqual({ ok: false, reason: "none", candidates: [] });
+    expect(resolveDraftRef([], "anything")).toMatchObject({ ok: false, reason: "none" });
+    expect(resolveDraftRef([a], undefined)).toEqual({ ok: true, draft: a });
+    expect(resolveDraftRef([a, b], undefined)).toEqual({
+      ok: false,
+      reason: "ambiguous",
+      candidates: [a, b],
+    });
+    // A ref matches a draft id, a file name, or a file stem.
+    for (const ref of ["acme__api-1", "add-readme", "add-readme.md"])
+      expect(resolveDraftRef([a, b], ref)).toEqual({ ok: true, draft: a });
+    expect(resolveDraftRef([a, b], "nope")).toEqual({
+      ok: false,
+      reason: "unknown",
+      candidates: [a, b],
+    });
+    // Ambiguity narrows to the drafts that actually matched.
+    const dup = draft("acme__api-3", "acme__api", { files: [draftFile("add-readme.md")] });
+    expect(resolveDraftRef([a, b, dup], "add-readme")).toEqual({
+      ok: false,
+      reason: "ambiguous",
+      candidates: [a, dup],
+    });
+  });
+
+  it("draftLookupError words each miss once, for the tool's throw and the composer's toast", () => {
+    const a = draft("acme__api-1", "acme__api", { files: [draftFile("add-readme.md")] });
+    const b = draft("acme__api-2", "acme__api", { files: [draftFile("other.md")] });
+    const miss = (ref: string | undefined, ds: PendingDraft[]) => {
+      const got = resolveDraftRef(ds, ref);
+      if (got.ok) throw new Error("expected a miss");
+      return got;
+    };
+    expect(draftLookupError(miss(undefined, []), undefined)).toBe(
+      "nothing is parked for this chat — draft a ticket first",
+    );
+    expect(draftLookupError(miss(undefined, []), undefined, "/draft first")).toBe(
+      "nothing is parked for this chat — /draft first",
+    );
+    expect(draftLookupError(miss("nope", [a, b]), "nope")).toBe(
+      'no parked draft named "nope" — parked: add-readme; other',
+    );
+    expect(draftLookupError(miss(undefined, [a, b]), undefined)).toBe(
+      "several drafts are parked — name one: add-readme; other",
+    );
+    // A draft with no files at all falls back to its draft id.
+    const empty = draft("acme__api-9", "acme__api", { files: [] });
+    expect(draftLookupError(miss("x", [empty]), "x")).toBe(
+      'no parked draft named "x" — parked: acme__api-9',
+    );
   });
 });
