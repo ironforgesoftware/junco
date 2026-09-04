@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -82,6 +82,32 @@ describe("chat draft store (spec 2026-09-01 §6.2)", () => {
     removeChatDraft(cfg, "d2");
     expect(listChatDrafts(cfg)).toEqual([]);
     expect(existsSync(draftFilePath(cfg, "d2", "t.md"))).toBe(false);
+  });
+
+  it("archive takes the files dir with it — nothing is left in chat-drafts/ (#450)", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-ds-"));
+    const cfg = cfgAt(root);
+    const drafts = join(root, "data", "chat-drafts");
+    writeChatDraft(cfg, draft("d1"));
+    writeChatDraft(cfg, draft("d2"));
+    expect(archiveChatDraft(cfg, "d1", "submitted")).toBe(true);
+    expect(archiveChatDraft(cfg, "d2", "discarded")).toBe(true);
+    // The record's path stays valid: <sub>/<id>/<name> beside <sub>/<id>.json.
+    expect(readFileSync(join(drafts, "submitted", "d1", "t.md"), "utf8")).toBe(
+      "---\nid: t\n---\n# T\n",
+    );
+    expect(existsSync(join(drafts, "discarded", "d2", "t.md"))).toBe(true);
+    expect(existsSync(draftFilesDir(cfg, "d1"))).toBe(false);
+    expect(existsSync(draftFilesDir(cfg, "d2"))).toBe(false);
+    // Only the two archive dirs remain — no per-draft leftovers.
+    expect(readdirSync(drafts).sort()).toEqual(["discarded", "submitted"]);
+  });
+
+  it("archiving a draft that is already gone is still a no-op, files dir or not (#450)", () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-ds-"));
+    const cfg = cfgAt(root);
+    expect(archiveChatDraft(cfg, "ghost", "submitted")).toBe(false);
+    expect(existsSync(join(root, "data", "chat-drafts", "submitted", "ghost"))).toBe(false);
   });
 
   it("an id or name that slugifies to a directory link throws instead of resolving upward", () => {

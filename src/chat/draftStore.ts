@@ -11,13 +11,14 @@
  * (the issue #32 class; slug.ts's own docstring is the standing rule that the
  * slugify step never gets skipped at a new call site).
  */
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../types.js";
 import type { DraftKind } from "../agent/transcriptSchema.js";
 import type { LintViolation } from "../planLint.js";
 import type { RouteDecision } from "../submitPreflight.js";
 import { dataTreePaths } from "../dataTree.js";
+import { log } from "../logging.js";
 import { makeReviewStore, type ReviewStoreDeps } from "../reviewStore.js";
 import { slugifyId } from "../slug.js";
 
@@ -126,14 +127,39 @@ export function writeChatDraft(
 }
 
 /** Operator-visible disposal: the JSON moves under submitted/ or discarded/
- * (the files dir stays put — the archive record still names it). */
+ * and the files dir goes WITH it (`<sub>/<id>/<name>` beside `<sub>/<id>.json`,
+ * #450) — leaving it behind grew `<chatDrafts>/` by one directory per draft
+ * forever, with nothing to sweep it. The JSON's move is the verdict: a files
+ * dir that will not follow (no such dir, a racing sweep, a read-only tree) is
+ * logged, never a throw, because the archive it belongs to has ALREADY
+ * happened and `submitExec` would otherwise report a queued submission as
+ * "did not archive". */
 export function archiveChatDraft(
   cfg: Config,
   id: string,
   sub: "submitted" | "discarded",
   deps: ReviewStoreDeps = {},
 ): boolean {
-  return store.remove(chatDraftsDir(cfg), id, sub, deps);
+  const dir = chatDraftsDir(cfg);
+  const archived = store.remove(dir, id, sub, deps);
+  const renameFn = deps.renameFn ?? renameSync;
+  const mkdirFn = deps.mkdirFn ?? ((d: string) => mkdirSync(d, { recursive: true }));
+  const from = draftFilesDir(cfg, id);
+  const to = join(dir, sub, safeComponent(id, "draft id"));
+  try {
+    mkdirFn(join(dir, sub));
+    renameFn(from, to);
+  } catch (e) {
+    // ENOENT is the ordinary case for a draft archived twice, or one written
+    // with no files at all — not worth a line in the log.
+    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT")
+      log.warn("chat draft archived, but its files dir did not move", {
+        from,
+        to,
+        error: e instanceof Error ? e.message : String(e),
+      });
+  }
+  return archived;
 }
 
 /** Spec §6.3: the first failed draft is REMOVED (not archived) when its retry
