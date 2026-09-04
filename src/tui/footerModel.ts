@@ -260,7 +260,11 @@ export function buildFooterRows({
   if (context.kind === "main") {
     const here = rest.filter((m) => !GO_IDS.has(m.id));
     const go = rest.filter((m) => GO_IDS.has(m.id));
-    actions = [...pill, ...here, ...(go.length > 0 ? [SEP, ...go] : [])];
+    // The separator only earns its column when something precedes it: the
+    // logs body has no verbs of its own, so its row is the go-globals alone
+    // and used to open with a dangling `│` (#458).
+    const lead = pill.length + here.length > 0;
+    actions = [...pill, ...here, ...(go.length > 0 ? [...(lead ? [SEP] : []), ...go] : [])];
   } else {
     actions = [...pill, ...rest];
   }

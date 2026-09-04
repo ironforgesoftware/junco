@@ -151,6 +151,20 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
     ]);
     expect(texts(r.navigate.pinned)).toEqual(["mnemonic:help:help", "mnemonic:quit:quit"]);
   });
+  it("logs: no dangling leading │ when nothing precedes the go-globals (#458)", () => {
+    // BODY_VERBS.logs is empty, so the logs body's chip order is the two go
+    // ids alone — the separator has nothing to separate and must not render.
+    for (const pane of [1, 2] as const) {
+      const r = rows(
+        { kind: "main", body: "logs", pane },
+        { target: "logs", chatReachable: false },
+      );
+      expect(texts(r.actions.chips), `pane ${pane}`).toEqual([
+        "mnemonic:review:review",
+        "mnemonic:prs:PRs",
+      ]);
+    }
+  });
   it("repo detail body: pill · browser · refresh · audit │ queue · review · PRs (R11)", () => {
     // The other undelivered §4 row: this body used to render a bare `│ review
     // PRs` with NO pill, while `c` was live on it — pill ⇔ handler, broken.
