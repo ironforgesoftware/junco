@@ -386,15 +386,22 @@ export function footerSegments(chip: FooterChip): Segment[] {
  * `FooterLine`/`ChipRun` lay it out (Ruling R10): `paddingX={1}` (both
  * sides), the label slot (`labelWidth`, `marginRight={2}`), then each run's
  * chips — `footerSegments` text length summed (keycap/pill padding spaces
- * are already part of those strings) plus `marginRight={2}` PER chip,
- * pinned included since it renders as a second `ChipRun`. The `flexGrow`
+ * are already part of those strings) plus the run's `gap={2}` BETWEEN its
+ * chips (#460: no trailing margin on the last one), and the pinned run's own
+ * `marginLeft={2}` when it has any chips. The `flexGrow`
  * spacer between the two runs contributes nothing: with no content of its
  * own it shrinks to 0 whenever the row is tight, which is exactly the case
  * this function exists to detect. A test pins this against a `renderWide`
  * frame's real line length so the estimate cannot drift from the renderer. */
 export function rowWidth(row: FooterRow, labelWidth: number): number {
-  const runWidth = (chips: FooterChip[]): number => chips.reduce((n, c) => n + chipWidth(c) + 2, 0);
-  return 2 + (labelWidth + 2) + runWidth(row.chips) + runWidth(row.pinned);
+  const runWidth = (chips: FooterChip[]): number =>
+    chips.reduce((n, c) => n + chipWidth(c), 0) + 2 * Math.max(0, chips.length - 1);
+  return (
+    2 +
+    (labelWidth + 2) +
+    runWidth(row.chips) +
+    (row.pinned.length > 0 ? 2 + runWidth(row.pinned) : 0)
+  );
 }
 function chipWidth(chip: FooterChip): number {
   return footerSegments(chip).reduce((n, seg2) => n + seg2.text.length, 0);

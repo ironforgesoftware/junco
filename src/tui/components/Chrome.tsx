@@ -240,24 +240,32 @@ function SegmentText({ chip }: { chip: FooterChip }): React.JSX.Element {
   );
 }
 
-/** A run of chips. One with a `chipActions` entry is clickable — pill and
- * mnemonic chips by their mnemonic ID, structural chips by their KEY (which
- * IS their `FooterChip.id`, footerModel.ts); the rest render inert. A
- * separator dispatches nothing at all: it names no key. */
+/** A run of chips, two columns apart. The spacing is `gap` on the RUN, not a
+ * `marginRight` on each chip: a trailing margin on the last chip pushed the
+ * pinned run three columns in from the right edge while the label sat one
+ * column in from the left (#460). `marginLeft` keeps the two runs apart when
+ * the flex spacer between them has shrunk to nothing.
+ *
+ * One chip with a `chipActions` entry is clickable — pill and mnemonic chips
+ * by their mnemonic ID, structural chips by their KEY (which IS their
+ * `FooterChip.id`, footerModel.ts); the rest render inert. A separator
+ * dispatches nothing at all: it names no key. */
 function ChipRun({
   chips,
   chipActions,
+  marginLeft = 0,
 }: {
   chips: FooterChip[];
   chipActions?: Record<string, () => void>;
+  marginLeft?: number;
 }): React.JSX.Element {
   return (
-    <>
+    <Box flexShrink={0} gap={2} marginLeft={chips.length > 0 ? marginLeft : 0}>
       {chips.map((chip, i) => {
         const run = chip.kind === "separator" ? undefined : chipActions?.[chip.id];
         const body = <SegmentText chip={chip} />;
         return (
-          <Box key={`${chip.id}-${i}`} flexShrink={0} marginRight={2}>
+          <Box key={`${chip.id}-${i}`} flexShrink={0}>
             {run ? (
               <ClickableBox onPress={run} hoverBg={theme.hoverBg}>
                 {body}
@@ -268,7 +276,7 @@ function ChipRun({
           </Box>
         );
       })}
-    </>
+    </Box>
   );
 }
 
@@ -293,7 +301,7 @@ function FooterLine({
       </Box>
       <ChipRun chips={row.chips} chipActions={chipActions} />
       <Box flexGrow={1} />
-      <ChipRun chips={row.pinned} chipActions={chipActions} />
+      <ChipRun chips={row.pinned} chipActions={chipActions} marginLeft={2} />
     </Box>
   );
 }
