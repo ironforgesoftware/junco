@@ -280,6 +280,20 @@ describe("buildFooterRows — main view (spec 2026-09-02 §4)", () => {
       "structural:esc:back",
     ]);
   });
+  it("an over-long owner/repo target loses the OWNER half, not the repo name (#472)", () => {
+    const label = (t: string) =>
+      rows({ kind: "main", body: "issues", pane: 1 }, { target: t }).actions.label;
+    // The discriminating half is the repo name — `alxedelweiss/arkanoid_o…`
+    // is the one label nobody can read on a rail full of that owner's repos.
+    expect(label("alxedelweiss/arkanoid_oq4e")).toBe("alxedelwe…/arkanoid_oq4e");
+    expect(label("alxedelweiss/arkanoid_oq4e")).toHaveLength(TARGET_WIDTH);
+    // A repo name that alone overflows the slot leaves no owner budget, so
+    // the plain tail cut takes over.
+    expect(label(`o/${"x".repeat(40)}`)).toBe(`o/${"x".repeat(21)}…`);
+    // Targets with no owner half (issue #46, queue, a ticket id) are unchanged.
+    expect(label("x".repeat(40))).toBe(`${"x".repeat(23)}…`);
+    expect(label("acme/api")).toBe("acme/api");
+  });
   it("the target label is truncated to TARGET_WIDTH", () => {
     const r = rows({ kind: "main", body: "issues", pane: 1 }, { target: "x".repeat(40) });
     expect(r.actions.label).toHaveLength(TARGET_WIDTH);

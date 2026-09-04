@@ -53,7 +53,8 @@ export interface FooterInput {
 /** Row-1 target label slot. 24, not spec §3.1's 16: the chat view's label is
  * the bare session key now (hooks/useFooterTarget.ts dropped the `chat · `
  * prefix the header crumb already carries), and a real `owner/name` has to
- * fit it whole — a truncated repo name is the one label nobody can read. */
+ * fit it whole — a truncated repo name is the one label nobody can read, so
+ * `fitTarget` below spends the overflow on the OWNER half instead (#472). */
 export const TARGET_WIDTH = 24;
 /** Navigate chips dropped, in this order, one at a time, until the row fits
  * `columns` (Ruling R10) — they stay in the keymap + help regardless. Keyed
@@ -193,6 +194,25 @@ function mainBodyNav(body: MainBody, mode: LayoutMode): FooterChip[] {
   }
 }
 
+/** Fits a target into `TARGET_WIDTH`. An `owner/repo` that overflows loses
+ * OWNER characters, never repo ones (#472): on a rail full of one owner's
+ * checkouts the owner is the redundant half and the name is the whole
+ * message, and `alxedelweiss/arkanoid_o…` named nothing. Sizing the slot to
+ * the widest loaded target was the alternative; a fixed slot keeps the fit
+ * rules (`rowWidth`, Ruling R10) reading one constant instead of a value that
+ * moves with every poll. Anything without an owner half — `issue #46`,
+ * `queue`, a ticket id — keeps the plain tail cut. */
+function fitTarget(target: string): string {
+  if (target.length <= TARGET_WIDTH) return target;
+  const slash = target.indexOf("/");
+  if (slash > 0) {
+    const name = target.slice(slash); // "/repo", the half that must survive
+    const owner = TARGET_WIDTH - name.length - 1; // -1 for the ellipsis
+    if (owner >= 1) return `${target.slice(0, owner)}…${name}`;
+  }
+  return `${target.slice(0, TARGET_WIDTH - 1)}…`;
+}
+
 export function buildFooterRows({
   context,
   bindings,
@@ -201,7 +221,7 @@ export function buildFooterRows({
   mode,
   columns,
 }: FooterInput): FooterRows {
-  const label = target.length > TARGET_WIDTH ? `${target.slice(0, TARGET_WIDTH - 1)}…` : target;
+  const label = fitTarget(target);
   const structural = bindings.chips.filter((c) => c.kind === "structural").map(fromChip);
   const mnemonics = bindings.chips.flatMap((c) => (c.kind === "mnemonic" ? [fromChip(c)] : []));
   // bindings.all is [] for structuralOnly contexts, so this is naturally []
