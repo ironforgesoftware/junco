@@ -189,6 +189,22 @@ describe("useChatInput — the cascade (spec §8.3)", () => {
     expect(t.calls).toEqual([]);
   });
 
+  it("focused: esc does NOT abort while a submit card waits — it blurs back to the card", () => {
+    // `junco_submit` blocks inside the turn, so `streaming` is true the whole
+    // time the card is up. Aborting here would settle the very proposal the
+    // footer's `i compose` invited the operator to step away from (final
+    // review #1): the card goes `aborted` and the ask has to be repeated.
+    const p = mount({
+      chat: chatState({
+        composerFocused: true,
+        streaming: true,
+        pending: { commandId: "c1", draftId: "d1", ids: ["add-readme"], route: "inbox" },
+      }),
+    });
+    expect(p.api.handleChatKey("", K({ escape: true }))).toBe(true);
+    expect(p.calls).toEqual(["focus:false"]);
+  });
+
   it("the composer owns the keys whenever it is focused — the pane is not consulted", () => {
     // The chat view is full-screen: ChatView is mounted only while it is the
     // view, and its Composer is live whenever `composerFocused`. The pane the

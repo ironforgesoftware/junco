@@ -313,6 +313,12 @@ export function useChat({
                       lastOffset: null,
                       cursor: 0,
                       streaming: false,
+                      // Defensive: in production the tool's own
+                      // `junco_chat_command{aborted}` record precedes the
+                      // reset, so `pending` is already null — but a reset
+                      // drops the records the card is derived from, and a
+                      // card with no record behind it can never be answered.
+                      pending: null,
                     },
               );
               connectRef.current(key, null);

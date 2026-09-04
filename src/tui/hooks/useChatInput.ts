@@ -7,6 +7,7 @@ import type { View } from "../App.js";
 import type { ChatApi } from "./useChat.js";
 import type { ChatDraftActions } from "./useChatDrafts.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
+import { draftTicketIds } from "../../chat/submitArgv.js";
 import { useFollowLatch } from "../useFollowLatch.js";
 
 export interface ChatInputDeps {
@@ -214,9 +215,7 @@ export function useChatInput({
                     d.id === ref || d.files.some((f) => f.name === ref || f.name === `${ref}.md`),
                 );
           const names = (ds: PendingDraft[]): string =>
-            ds
-              .map((d) => d.files.map((f) => f.name.replace(/\.md$/, "")).join(", ") || d.id)
-              .join("; ");
+            ds.map((d) => draftTicketIds(d).join(", ") || d.id).join("; ");
           if (mine.length === 0) return void showToast("error", "nothing is parked — /draft first");
           if (hit.length === 0)
             return void showToast(
@@ -298,8 +297,14 @@ export function useChatInput({
       // The Composer's own useGuardedInput handles typing/enter/chords/slash.
       // Only esc is App's: streaming → abort, idle → blur (spec §8.3). Every
       // other key is swallowed so no cascade layer below sees typed prose.
+      // A pending junco_submit is the exception: the tool blocks INSIDE the
+      // turn, so `streaming` is true while the card waits, and an operator
+      // who took the footer's `i compose` and then pressed esc to get back to
+      // the card would abort the confirmation they were asked for (final
+      // review #1). While a card waits esc only blurs; `n` declines and
+      // `/abort` aborts.
       if (key.escape) {
-        if (chat.streaming) void abort();
+        if (chat.streaming && chat.pending === null) void abort();
         else focusComposer(false);
       }
       return true;

@@ -190,7 +190,10 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
       />
       <Text dimColor wrap="truncate">
         {state.composerFocused
-          ? "esc blur/abort · ctrl+j newline · / commands · ⇞⇟ scroll"
+          ? // esc does not abort while a submit card waits (useChatInput):
+            // aborting the turn would settle the very card the operator is
+            // being asked about, so there esc only blurs back to it.
+            `esc blur${state.pending === null ? "/abort" : ""} · ctrl+j newline · / commands · ⇞⇟ scroll`
           : state.pending !== null
             ? // The draft verbs are unbound while a junco_submit waits (spec
               // 2026-09-03 §4.3, chatConfirm's empty keymap), so this line
