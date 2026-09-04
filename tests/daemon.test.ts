@@ -73,6 +73,27 @@ function makeFakeHealthHandle(): HealthServerHandle {
   };
 }
 
+/** The chat surface mainLoop actually touches — drain on shutdown, reconcile
+ *  per tick, health/enabled for the health server. Every member is stubbed so
+ *  a missing one is a type error here rather than a silently swallowed
+ *  TypeError inside the loop's own try/catch. */
+function fakeChatManager(over: Partial<ChatManager> = {}): ChatManager {
+  return {
+    drain: vi.fn(async () => {}),
+    reconcile: vi.fn(async () => {}),
+    health: () => ({
+      enabled: true,
+      sessions: [],
+      turns: 0,
+      costUsd: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+    }),
+    enabled: () => true,
+    ...over,
+  } as unknown as ChatManager;
+}
+
 /** Minimal fake gate: same Pick-shape pattern as runOnce.test.ts's fakeGate (a
  * plain object — no need for the real latching state machine), extended with
  * claimBlockReason/status for the daemon's own local checks (gatedReady + the
@@ -1870,18 +1891,7 @@ describe("mainLoop — observability", () => {
     const stop = new StopFlag();
     const handle = makeFakeHealthHandle();
     const drain = vi.fn(async () => {});
-    const chatManager = {
-      drain,
-      health: () => ({
-        enabled: true,
-        sessions: [],
-        turns: 0,
-        costUsd: 0,
-        tokensIn: 0,
-        tokensOut: 0,
-      }),
-      enabled: () => true,
-    } as unknown as ChatManager;
+    const chatManager = fakeChatManager({ drain });
     const { deps } = makeDeps({
       startHealthServerFn: vi.fn(async () => handle),
       chatManager,
@@ -1894,6 +1904,41 @@ describe("mainLoop — observability", () => {
     expect(drain).toHaveBeenCalledTimes(1);
     const closeMock = handle.close as ReturnType<typeof vi.fn>;
     expect(drain.mock.invocationCallOrder[0]!).toBeLessThan(closeMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("reconciles chat sessions against the watchlist on every poll tick (#452)", async () => {
+    const cfg = makeConfig({ healthEnabled: false });
+    const stop = new StopFlag();
+    const reconcile = vi.fn(async () => {});
+    const { deps } = makeDeps({
+      chatManager: fakeChatManager({ reconcile }),
+      runOnceFn: vi.fn(async () => false),
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+    await mainLoop(cfg, stop, {}, deps);
+    // An unwatch must not leave a live ChatSession appending to a removed dir.
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it("a throwing chat reconcile never breaks the poll loop (#452)", async () => {
+    const cfg = makeConfig({ healthEnabled: false });
+    const stop = new StopFlag();
+    const runOnceFn = vi.fn(async () => false);
+    const { deps } = makeDeps({
+      chatManager: fakeChatManager({
+        reconcile: vi.fn(async () => {
+          throw new Error("watchlist unreadable");
+        }),
+      }),
+      runOnceFn,
+      sleep: vi.fn(async () => {
+        stop.requestStop();
+      }),
+    });
+    await mainLoop(cfg, stop, {}, deps);
+    expect(runOnceFn).toHaveBeenCalledTimes(1);
   });
 
   it("mainLoop reads the holder each iteration (live reload reaches next runOnce)", async () => {
