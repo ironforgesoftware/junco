@@ -106,6 +106,12 @@ export interface ChatPromptRecord {
 }
 export interface ChatTurnStartRecord {
   type: "junco_chat_turn_start";
+  /** Per-turn id minted by `ChatSession.admit`; the bus-only streaming records
+   *  (`src/chat/liveBlocks.ts`) carry the same id so the client can discard
+   *  deltas from a turn that is not the current one (spec 2026-09-06 §1.1).
+   *  Optional: transcripts written before it existed have none, and readers
+   *  fall back to `ts`. */
+  turn?: string;
   modelId: string;
   tools: string[];
   timeoutMs: number;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseTranscriptLine } from "../src/agent/transcriptSchema.js";
 import type { ChatRecord, FlowKind } from "../src/agent/transcriptSchema.js";
+import { chatDelta, chatPartial, chatTurnStart } from "./helpers/transcriptFixtures.js";
 
 describe("parseTranscriptLine", () => {
   it("classifies junco_* records", () => {
@@ -67,5 +68,20 @@ describe("chat records (spec 2026-09-01 §1.3)", () => {
   it("chat is a FlowKind", () => {
     const f: FlowKind = "chat";
     expect(f).toBe("chat");
+  });
+});
+
+describe("chat streaming records (spec 2026-09-06 §1.1)", () => {
+  it("junco_chat_turn_start carries an optional turn id; bus-only records parse as junco records", () => {
+    const start = parseTranscriptLine(chatTurnStart({ turn: "t1" }));
+    expect(start.kind).toBe("junco");
+    expect((start as { record: { turn?: string } }).record.turn).toBe("t1");
+    const d = parseTranscriptLine(chatDelta({ turn: "t1", seq: 1, kind: "thinking", delta: "hm" }));
+    expect(d).toMatchObject({
+      kind: "junco",
+      record: { type: "junco_chat_delta", kind: "thinking" },
+    });
+    const p = parseTranscriptLine(chatPartial({ turn: "t1", seq: 3, blocks: [] }));
+    expect(p).toMatchObject({ kind: "junco", record: { type: "junco_chat_partial" } });
   });
 });
