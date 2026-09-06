@@ -2182,11 +2182,6 @@ export function App(props: AppProps): React.JSX.Element {
       if (key.escape || input === "h" || key.leftArrow) return void setPane(1);
       if (input === "]" || key.downArrow) return void scrollBy(1);
       if (input === "[" || key.upArrow) return void scrollBy(-1);
-      if (input === "o") {
-        if (body.repo.nwo !== null) openRepoBrowser(body.repo.nwo);
-        else showToast("info", "no GitHub URL");
-        return;
-      }
       return;
     }
 
