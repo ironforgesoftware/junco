@@ -8,12 +8,8 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { DraftKind } from "../agent/transcriptSchema.js";
 import { PLAN_FENCE } from "../planPrompt.js";
-import {
-  PLAN_SET_FENCE,
-  allFencedBlocks,
-  extractPatchBody,
-  longestBacktickRun,
-} from "../githubInbox.js";
+import { PLAN_SET_FENCE, allFencedBlocks, extractPatchBody } from "../githubInbox.js";
+import { longestBacktickRun } from "../fences.js";
 
 export const FRONTMATTER_ALLOWLIST: ReadonlySet<string> = new Set([
   "id",

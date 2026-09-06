@@ -6,7 +6,6 @@ import {
   fingerprintFinding,
   sanitizeFindingText,
   FINDINGS_FENCE,
-  extractLastFencedBlock,
   parseAgentFindings,
   FINDING_MARKER_PREFIX,
   findingMarker,
@@ -19,6 +18,7 @@ import {
   findingLabels,
   type Finding,
 } from "../src/findings.js";
+import { extractLastFencedBlock } from "../src/fences.js";
 
 // Wraps a JSON payload in a fenced ```junco-findings block, mirroring how the
 // agent's finalText carries the array (see extractPlanBody tests in

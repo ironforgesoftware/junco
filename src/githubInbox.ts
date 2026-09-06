@@ -17,6 +17,7 @@ import { gh, git, describeError, GH_TIMEOUT_MS } from "./git.js";
 import { queuePaths } from "./config.js";
 import { submitTicket } from "./dispatch.js";
 import { log } from "./logging.js";
+import { lastFencedBlockRange, longestBacktickRun } from "./fences.js";
 import { PLAN_FENCE, buildPlannerPrompt } from "./planPrompt.js";
 import { resolveWatchedRepos } from "./watchlist.js";
 import {
@@ -196,52 +197,6 @@ export const PLAN_SET_FENCE = "junco-plan";
 
 // Mirrors ticket.ts FRONTMATTER_RE — used to STRIP a smuggled block, never to parse it.
 const SMUGGLED_FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
-
-/** Longest run of consecutive backticks at the START of any line in `text`.
- * Line-anchored is sufficient because extractPlanBody is itself line-anchored:
- * only fences that begin a line can open/close a block. Exported for the two
- * places that REWRAP a body in a fence of their own — buildPlanComment below
- * and the chat's parked plan.md (fenceExtract.ts). */
-export function longestBacktickRun(text: string): number {
-  let max = 0;
-  for (const line of text.split("\n")) {
-    const m = /^(`+)/.exec(line);
-    if (m && m[1].length > max) max = m[1].length;
-  }
-  return max;
-}
-
-/** Line-range [openFenceIdx, closeFenceIdx] (inclusive, into `lines`) of the
- * LAST complete ```<fenceTag> block, fence-length-aware CommonMark matching:
- * an opening fence of N backticks is closed by the first later line that is a
- * run of >= N backticks with no info text, so a plan that itself contains a
- * ```bash block (the template mandates one) does not truncate at the inner
- * fence. Null = no complete block of that tag. Shared range-finder behind
- * both extractFencedBlock (content) and replaceFencedBlock (splice). */
-function lastFencedBlockRange(
-  lines: string[],
-  fenceTag: string,
-): { open: number; close: number } | null {
-  const openRe = new RegExp("^(`{3,})" + fenceTag + "\\s*$");
-  let last: { open: number; close: number } | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const m = openRe.exec(lines[i]);
-    if (!m) continue;
-    const n = m[1].length;
-    const closeRe = new RegExp("^`{" + n + ",}\\s*$");
-    let close = -1;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (closeRe.test(lines[j])) {
-        close = j;
-        break;
-      }
-    }
-    if (close === -1) continue; // no closer → not a complete block; ignore
-    last = { open: i, close };
-    i = close; // resume scanning after this block's closer
-  }
-  return last;
-}
 
 /** Every COMPLETE ```<fenceTag> block, raw (frontmatter kept — the dashboard
  * chat allowlists it itself, spec 2026-09-01 §6.1), in document order. Same
