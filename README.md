@@ -34,7 +34,7 @@ harness-agnostic on the dispatch side.
 │ ◐ #46 · turn 14  ││                                    ││                        │
 │ 2 waiting        ││                             2/14   ││                        │
 ╰──────────────────╯╰────────────────────────────────────╯╰────────────────────────╯
- ↑/↓ move · ←/→ panes · enter preview · d dispatch · a approve · / filter · ? help
+ ↑/↓ move · ←/→ panes · enter preview · m import · o approve · c chat · / filter · ? help
 ```
 
 ## The loop: label → plan → approve → PR
@@ -251,16 +251,23 @@ escalates to a single agent session that treats the patch as a spec.
 | `junco import <owner/repo#N \| url>`                         | plan and PR any repo's issue — direct branches when the bot can push, fork-PR mode otherwise                                                                                     |
 | `junco status` / `junco list` / `junco logs -f`              | daemon, queue, and log visibility                                                                                                                                                |
 | `junco prs`                                                  | list junco-authored pull requests across watched repos                                                                                                                           |
-| `junco audit <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`audit review`, `audit file`)                                                                    |
-| `junco investigate <owner/repo#N\|url>`                      | investigate an issue (owned or external); draft awaits review (`investigate review`, `investigate post`)                                                                         |
+| `junco audit <path\|owner/repo\|owner/repo#N> [--auto-plan]` | audit a repo, or scope to one issue (owned or external); findings await review (`audit review`, `audit file`, `audit discard`)                                                   |
+| `junco investigate <owner/repo#N\|url>`                      | investigate an issue (owned or external); draft awaits review (`investigate review`, `investigate edit`, `investigate post`)                                                     |
 | `junco retry <name…\|--all>`                                 | move failed tickets back to the inbox                                                                                                                                            |
+| `junco rm <name>`                                            | delete a queued ticket from the inbox                                                                                                                                            |
 | `junco outbox [flush]`                                       | inspect or push the offline GitHub backlog                                                                                                                                       |
+| `junco unwatch <owner/repo> [--plan]`                        | stop watching a repo and delete its junco-owned state (`--plan` previews as JSON)                                                                                                |
+| `junco data [--json]` / `junco data migrate`                 | print the data tree (paths, counts, provenance); `migrate` unifies legacy roots ([configuration guide](docs/configuration.md))                                                   |
+| `junco worktree prune <path>`                                | prune a stale or backup worktree (lock-guarded; refuses a live one)                                                                                                              |
 | `junco doctor`                                               | preflight config, git/gh auth, endpoint, model                                                                                                                                   |
 | `junco transcript <ticket-id> \| --chat <owner/repo>`        | print a ticket's recorded event transcript — runs, tool calls, results, the agent's answer (`--thinking`, `--tools`); `--chat` prints a repo's dashboard chat transcript instead |
+| `junco replay <ticket-id\|path.jsonl>`                       | re-run a recorded transcript through the guards under a chosen policy — a what-if report, not a live rerun                                                                       |
 | `junco auth login`                                           | log the bot account in ([bot account guide](docs/bot-account.md))                                                                                                                |
 | `junco auth grant <owner/repo>`                              | grant the bot push access to a repo — invite as you, accept as the bot ([bot account guide](docs/bot-account.md))                                                                |
-| `junco config` / `junco schema` / `junco service`            | config get/set/init, ticket schema, service install                                                                                                                              |
+| `junco config` / `junco schema` / `junco service`            | config path/list/get/set/init, ticket schema, render a launchd/systemd service file to stdout                                                                                    |
 | `junco update`                                               | install the latest release and drain-restart the supervised daemon                                                                                                               |
+| `junco skill install [--harness <name\|path>]`               | link the `junco-dispatch` skill into agent-harness skills dirs (claude, codex, pi, omp, opencode)                                                                                |
+| `junco run-once` / `junco inbox-path`                        | process one ticket and exit (dev/cron; no lock) / print the inbox path                                                                                                           |
 | `junco --version`                                            | print the running version                                                                                                                                                        |
 
 ## Contributing
@@ -271,11 +278,11 @@ enough to hold in your head.
 ```bash
 git clone https://github.com/ironforgesoftware/junco && cd junco
 npm install
-npm test          # vitest, ~4,600 tests, ~40 s
+npm test          # vitest, ~5,200 tests, ~40 s
 ```
 
 - Run the full gate before a PR:
-  `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test`
+  `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run test:e2e`
 - Development is test-first with a commit per unit of work; the suite is green at
   every commit. Conventional commit messages (`feat:`, `fix:`, …).
 - [ARCHITECTURE.md](ARCHITECTURE.md) is accurate and maintained — read it before

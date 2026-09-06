@@ -27,11 +27,11 @@ Set `JUNCO_CONFIG` to point junco at a specific config file, bypassing the canon
 }
 ```
 
-`tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `sandbox`, `critic`, `planLint`, `observability`, `github`, `botAccount`, `planSets`, `assess`, `skills` — is a sectioned object with sensible defaults; set only the keys you want to override. The queue and every other on-disk directory Junco keeps default to a location under `dataDir` (below) — nothing here needs to be set to get a working queue.
+`tools` sets the coding agent's tool allowlist. `model` describes the inference endpoint (point `model.modelsJson` at a Pi-style `models.json` instead of the inline fields if you'd rather load the provider+model from there). Everything else — `worker`, `supervisor`, `git`, `pr`, `verify`, `sandbox`, `critic`, `planLint`, `observability`, `github`, `botAccount`, `planSets`, `assess`, `skills`, `chat` — is a sectioned object with sensible defaults; set only the keys you want to override. The queue and every other on-disk directory Junco keeps default to a location under `dataDir` (below) — nothing here needs to be set to get a working queue.
 
 ## Unified data root
 
-Every path Junco reads or writes — the ticket queue, parked `assess`/`analyze` review items, the GitHub write-outbox, cloned repos, PR-flow worktrees, transcripts, and a handful of top-level state files — resolves under one root, `dataDir`:
+Every path Junco reads or writes — the ticket queue, parked `audit`/`investigate` review items, the GitHub write-outbox, cloned repos, PR-flow worktrees, transcripts, and a handful of top-level state files — resolves under one root, `dataDir`:
 
 ```json
 { "dataDir": "~/.junco" }
@@ -49,11 +49,16 @@ That's also the default — the very directory `config.json` itself lives in, so
     comments/       (+ posted/ discarded/)              parked analyze drafts, one JSON per ticket
   watchlist.json    migrated.json
   migrate.lock                                          held only while `junco data migrate` is actively running
+  daemon-tree.lock                                      the running daemon's claim on this root (queue/ holds its own daemon-queue.lock)
+  skills -> <package>/skills                            symlink mount for `junco skill install` (never created by mkdir; denied to the agent)
   data/                                                 unrecoverable
     outbox/         (+ dead/)                           GitHub write ops, one JSON per op; created eagerly
     assess-history/                                       per-repo `junco audit` history, one JSON file per repo
     history/                                              per-task finalize ledger, tasks-YYYY-MM.jsonl shards
     transcripts/<ticket-id>.jsonl                         per-run event stream
+    plans/                                                compiled plan sets
+    chats/<owner>__<repo>/                                dashboard chat sessions: meta.json, transcript.jsonl, the SDK session
+    chat-drafts/    (+ submitted/ discarded/)             tickets the chat drafted, one JSON per draft, awaiting the operator
     spend.json       metrics.json
   cache/                                                rm -rf-safe — rebuilds from GitHub/git on demand
     mirror/
@@ -71,7 +76,7 @@ That's also the default — the very directory `config.json` itself lives in, so
     worker.log
 ```
 
-Every directory above except `clones/external/` and `worktrees/` is created eagerly at daemon startup, so nothing is invisible-until-first-use. Those two are the exception because a legacy override (see below) can point them outside `dataDir` entirely, so a mkdir here could fabricate a stray empty directory nobody asked for. Eager creation is also a sandbox guarantee, not only a convenience: the agent sandbox denies `cache/mirror` and `cache/github-cache` _inside_ an otherwise-readable `cache/` tier, and on Linux bubblewrap silently skips a deny whose target doesn't exist — so a directory that appeared only on first use would be readable by the agent for the rest of that run. (`github-cache/` is the legacy TUI issue/PR cache, still owned by `tui/ghClient.ts` and excluded from `junco data`'s report below — it's slated for replacement by `mirror/` in a follow-up release, which is why `mirror/` itself stays empty until then; both are created empty at startup.) The root also gets a self-`.gitignore` (contents `*`, written only when no file is already there), so pointing `dataDir` at a path inside a git checkout — including Junco's own — can never dirty a commit.
+Every directory above except `clones/external/` and `worktrees/` is created eagerly at daemon startup, so nothing is invisible-until-first-use. Those two are the exception because a legacy override (see below) can point them outside `dataDir` entirely, so a mkdir here could fabricate a stray empty directory nobody asked for. Eager creation is also a sandbox guarantee, not only a convenience: the agent sandbox denies the whole data root and allows back only `cache/clones`, `worktrees`, and `clones/external`, and on Linux bubblewrap silently skips a deny whose target doesn't exist — so every denied directory must exist before the first agent run. (`github-cache/` is the legacy TUI issue/PR cache, still owned by `tui/ghClient.ts` and excluded from `junco data`'s report below — it's slated for replacement by `mirror/` in a follow-up release, which is why `mirror/` itself stays empty until then; both are created empty at startup.) The root also gets a self-`.gitignore` (contents `*`, written only when no file is already there), so pointing `dataDir` at a path inside a git checkout — including Junco's own — can never dirty a commit.
 
 `config.json`, the single-instance `worker.lock` next to it, and the bot account's isolated gh config dir (`gh/`, default `~/.junco/gh` — see [bot-account.md](bot-account.md)) all resolve independently of `dataDir`, off `config.json`'s own home — but by default that home is this same `~/.junco` directory, so they sit right alongside the tree above. None of the three are part of it, or of `junco data`'s report. `JUNCO_CONFIG` (above) moves `config.json`'s home, and `worker.lock` follows it there.
 
@@ -140,7 +145,7 @@ files
 
 (`update-check.json`'s label is longer than the fixed-width column every other row pads to, so its size butts up against it with no space — that's the real formatter output, not a typo.)
 
-Every node is listed even when its directory doesn't exist yet (`(absent)` — normal before the first daemon start, or for an override nobody has populated); a legacy-overridden root prints a trailing ` ← legacy override: <key>  [deprecated]`, and any old-name directory still waiting on the automatic migration below prints a trailing `⚠ unmigrated: <from> → <to> (run 'junco data migrate')` line. `junco data --json` emits the same information as `{ root, layout, paths, counts, legacy, pendingMigrations, deprecations }`.
+Every node is listed even when its directory doesn't exist yet (`(absent)` — normal before the first daemon start, or for an override nobody has populated); a legacy-overridden root prints a trailing ` ← legacy override: <key>  [deprecated]`, and any old-name directory still waiting on the automatic migration below prints a trailing `⚠ unmigrated: <from> → <to> (run 'junco data migrate')` line. `junco data --json` emits the same information as `{ root, layout, paths, counts, legacy, pendingMigrations, pendingConfigRelocation, deprecations }`.
 
 ### Automatic migration (in place, at every daemon startup)
 
@@ -202,6 +207,9 @@ data root: /Users/you/.local/state/junco -> /Users/you/.junco
   /Users/you/.local/state/junco/assess-history -> /Users/you/.junco/data/assess-history
   /Users/you/.local/state/junco/history -> /Users/you/.junco/data/history
   /Users/you/.local/state/junco/transcripts -> /Users/you/.junco/data/transcripts
+  /Users/you/.local/state/junco/plans -> /Users/you/.junco/data/plans (nothing to move)
+  /Users/you/.local/state/junco/chats -> /Users/you/.junco/data/chats (nothing to move)
+  /Users/you/.local/state/junco/chat-drafts -> /Users/you/.junco/data/chat-drafts (nothing to move)
   /Users/you/.local/state/junco/spend.json -> /Users/you/.junco/data/spend.json (nothing to move)
   /Users/you/.local/state/junco/metrics.json -> /Users/you/.junco/data/metrics.json (nothing to move)
   /Users/you/.local/state/junco/clones -> /Users/you/.junco/cache/clones
@@ -228,14 +236,17 @@ A real (non-dry-run) run prints a matching receipt in place of the plan — what
 
 ## Model resolution
 
-| Field                     | Default            | Description                                                                                                                                                                                                                                                                                                                                                                |
-| ------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model.id`                | `"local/my-model"` | Provider-prefixed model id, e.g. `anthropic/claude-sonnet-4-5`. The text before the first `/` is the provider; a bare id with no `/` is provider `local`.                                                                                                                                                                                                                  |
-| `model.source`            | `"auto"`           | `"auto"`: a non-`local` provider prefix with no explicit `model.baseUrl` resolves from the embedded SDK's builtin hosted-provider catalog (real endpoint, cost, and context-window metadata); otherwise the inline fields below apply. `"catalog"` / `"inline"` pin the behavior explicitly.                                                                               |
-| `model.baseUrl`           | unset              | OpenAI-compatible `/v1` endpoint for inline resolution. Unset defaults to the local endpoint (`http://127.0.0.1:1234/v1`); setting it explicitly forces inline resolution even for a provider-prefixed id — an explicit endpoint means a deliberate proxy/override.                                                                                                        |
-| `model.apiKey`            | unset              | A literal key, an `"$ENV_VAR"` reference (read from the daemon's own environment), or unset. Unset on a catalog-resolved model defers to the provider's environment variable at request time (e.g. `ANTHROPIC_API_KEY`); unset on an inline model falls back to a placeholder. `"!command"` values are rejected — junco does not shell out for secrets from `config.json`. |
-| `model.retry.maxRetries`  | unset              | SDK auto-retry attempts on transient provider errors; unset uses the SDK default (3).                                                                                                                                                                                                                                                                                      |
-| `model.retry.baseDelayMs` | unset              | Base delay (ms) for the SDK's auto-retry backoff; unset uses the SDK default (2000).                                                                                                                                                                                                                                                                                       |
+| Field                     | Default                | Description                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.id`                | `"local/my-model"`     | Provider-prefixed model id, e.g. `anthropic/claude-sonnet-4-5`. The text before the first `/` is the provider; a bare id with no `/` is provider `local`.                                                                                                                                                                                                                  |
+| `model.source`            | `"auto"`               | `"auto"`: a non-`local` provider prefix with no explicit `model.baseUrl` resolves from the embedded SDK's builtin hosted-provider catalog (real endpoint, cost, and context-window metadata); otherwise the inline fields below apply. `"catalog"` / `"inline"` pin the behavior explicitly.                                                                               |
+| `model.baseUrl`           | unset                  | OpenAI-compatible `/v1` endpoint for inline resolution. Unset defaults to the local endpoint (`http://127.0.0.1:1234/v1`); setting it explicitly forces inline resolution even for a provider-prefixed id — an explicit endpoint means a deliberate proxy/override.                                                                                                        |
+| `model.apiKey`            | unset                  | A literal key, an `"$ENV_VAR"` reference (read from the daemon's own environment), or unset. Unset on a catalog-resolved model defers to the provider's environment variable at request time (e.g. `ANTHROPIC_API_KEY`); unset on an inline model falls back to a placeholder. `"!command"` values are rejected — junco does not shell out for secrets from `config.json`. |
+| `model.api`               | `"openai-completions"` | The SDK API flavor used for inline resolution.                                                                                                                                                                                                                                                                                                                             |
+| `model.thinkingLevel`     | `"medium"`             | Reasoning effort requested from the model (chat sessions may override it with `chat.thinkingLevel`).                                                                                                                                                                                                                                                                       |
+| `model.modelsJson`        | unset                  | Path to a Pi-style `models.json`; when set, provider + model load from there and the inline fields above are ignored.                                                                                                                                                                                                                                                      |
+| `model.retry.maxRetries`  | unset                  | SDK auto-retry attempts on transient provider errors; unset uses the SDK default (3).                                                                                                                                                                                                                                                                                      |
+| `model.retry.baseDelayMs` | unset                  | Base delay (ms) for the SDK's auto-retry backoff; unset uses the SDK default (2000).                                                                                                                                                                                                                                                                                       |
 
 Endpoint probing — the daemon's startup readiness wait, `/health` and dashboard reachability checks, and `junco doctor`'s endpoint check — is skipped for a catalog-resolved model (no local server to wait for, and probing a metered API on every poll/dashboard tick is billed traffic). A configured `model.modelsJson` still probes, since the provider `baseUrl` it declares may be local.
 
@@ -355,8 +366,9 @@ Q&A ticket gets, plus exactly one action tool, `junco_submit`, which only submit
 chat already parked and only after you confirm on the dashboard card (`chat.submitTool`); the
 hard rule against widening that default still applies to everything else.
 
-`/chat/*` is **loopback-only regardless of `healthHost`** and rejects any request carrying an
-`Origin` header — there is no additional auth to configure. See [Operations § Health &
+`/chat/*` is **loopback-only regardless of `healthHost`**, rejects any request carrying an
+`Origin` header, and accepts only loopback `Host` values plus the configured `healthHost` — there
+is no additional auth to configure. See [Operations § Health &
 observability](operations.md#health--observability) for the route table. Note the flip side of
 that rule: if `healthHost` is a LAN address rather than a loopback one, even the dashboard on the
 same machine reaches the daemon over that address, so its remote address is not loopback and

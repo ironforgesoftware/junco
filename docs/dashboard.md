@@ -18,7 +18,7 @@ Everything lives in **one view**. The left rail is the navigation spine: every r
 
 With `github.enabled = false` in `config.json` there is simply no GitHub side: watched repos render the repo detail panel too, and no GitHub polling happens — the same single view, minus the issue/PR surfaces.
 
-The header's left side is a breadcrumb trail, dim `▸` joining each step: the active repo alone in the main view (`acme/reef`), `acme/reef ▸ #124` in the issue detail, `acme/reef ▸ PR #86` in the PR detail, `system ▸ queue` (or `outbox`/`worktrees`/`daemon`/`logs`) for a system row's body, `command ▸ <name>` while a palette command's output is open (e.g. `command ▸ junco retry`), `transcript ▸ <ticket-id>` while a ticket's transcript is open, and a full-screen view's own name elsewhere (`pull requests`, `review`).
+The header's left side is a breadcrumb trail, dim `▸` joining each step: the active repo alone in the main view (`acme/reef`), `acme/reef ▸ #124` in the issue detail, `acme/reef ▸ PR #86` in the PR detail, `system ▸ queue` (or `outbox`/`worktrees`/`daemon`/`logs`) for a system row's body, `chat ▸ <session key>` in the chat view, `command ▸ <name>` while a palette command's output is open (e.g. `command ▸ junco retry`), `transcript ▸ <ticket-id>` while a ticket's transcript is open, and a full-screen view's own name elsewhere (`pull requests`, `review`).
 
 The right side is a live pulse — chips grouped by a dim `│` into warnings, the 24h/last-task record, what's running right now, and daemon/queue/outbox, in that order. Any chip is hidden individually when it has nothing to say (zero count, no data yet), and an empty group drops its separator too:
 
@@ -76,8 +76,8 @@ the list as far as you hold it.
 
 The derived keys, per context. Every key below works wherever its context is
 active; the footer shows the pane-relevant subset (chip order lives in
-`src/tui/viewActions.ts`), so a key can be live without a chip — `v` review is
-keymap-only, and `p` PRs renders as a chip on the issues body alone. Press `?`
+`src/tui/viewActions.ts`), so a key can be live without a chip — the per-issue verbs
+stay bound while their chips vanish from an empty issue list. Press `?`
 for the full per-view list.
 
 | Context                                    | Keys                                                                                                                                                                                                                     |
@@ -119,13 +119,13 @@ Inside the chat view the keys read as a chat, not as a list: `↑`/`↓` (also `
 
 Mouse works throughout: clicking a row focuses its pane and selects that row; clicking the already-selected row opens it — the repo detail panel for rail repo rows, the issue detail for issues, the fullscreen PR overlay for PRs, the log overlay for the logs row, exactly like `enter`. Clicking blank pane space (no row under the cursor) just focuses the pane, leaving the selection where it was. The wheel moves the selection or scrolls, always acting on whatever pane is under the cursor. On a scrolling surface with more content than fits — the chat and ticket transcripts — the right-edge scrollbar is live: press a row of its track to jump the window there, or hold and drag to keep scrolling (the drag keeps the bar even once the pointer slides off its column). The issue detail, the PR overlay, and the PRs-view preview card all carry an `↗ owner/repo#n` line — click it (or cmd+click in terminals that support OSC 8 hyperlinks, or press `b`) to open the issue or PR on GitHub. To select terminal text instead of clicking through the dashboard, hold shift while you drag, same as any other full-screen terminal app.
 
-A guarded action (`Delete`, `Prune`, `Restart`, `Discard`) opens a confirm modal with two clickable buttons — `[ esc cancel ]` and a solid `y confirm` pill, danger-toned (red) for destructive actions and accent-toned otherwise. Click either, or use the keys; both are equivalent, and no other input reaches the dashboard while the modal is open.
+A guarded action (`Unwatch`, `Delete`, `Prune`, `Restart`, `Discard`) opens a confirm modal with two clickable buttons — `[ esc cancel ]` and a solid `y confirm` pill, danger-toned (red) for destructive actions and accent-toned otherwise. Click either, or use the keys; both are equivalent, and no other input reaches the dashboard while the modal is open.
 
 Every action is an ordinary label mutation made through your own `gh` auth — the same trust model as labeling an issue by hand on GitHub. Dispatch/approve/re-plan don't run anything themselves; they just move labels that the daemon's sweep acts on.
 
-**The command palette** (`:`) runs the junco CLI from inside the dashboard: type to filter, `enter` to run (commands that take arguments — `list`, `retry`, `outbox`, `submit`, `logs`, `service`, `transcript` — get an args field first), and the command's real output appears in a scrollable pane (a scrollbar tracks the offset once it overflows) with its exit code (`r` re-runs, `esc` returns). Under the hood each run spawns the actual `junco` CLI against the dashboard's own config — no reimplementation, no drift, and no shell in the middle. `logs` runs bounded (`-n 200`); `init`, `start`, and `dashboard` are shown greyed-out with the reason they can't run here (use `restart` for the daemon).
+**The command palette** (`:`) runs the junco CLI from inside the dashboard: type to filter, `enter` to run (commands that take arguments — `list`, `retry`, `rm`, `unwatch`, `outbox`, `audit`, `transcript`, `logs`, `worktree`, `service`, `submit` — get an args field first), and the command's real output appears in a scrollable pane (a scrollbar tracks the offset once it overflows) with its exit code (`r` re-runs, `esc` returns). Under the hood each run spawns the actual `junco` CLI against the dashboard's own config — no reimplementation, no drift, and no shell in the middle. `logs` runs bounded (`-n 200`); `start` and `dashboard` are shown greyed-out with the reason they can't run here (use `restart` for the daemon).
 
-Repos added with `w` (and removed with `x`) live in a small JSON watchlist file at `<dataDir>/watchlist.json`, separate from `config.json`. The daemon's bridge sweep re-reads this file every sweep, so watchlist changes take effect without a restart. Where a repo appears in both, the `config.json` `github.repos` entry wins — that's also why config-sourced repos aren't removable from the dashboard.
+Repos added with `a` (and removed with `U`) live in a small JSON watchlist file at `<dataDir>/watchlist.json`, separate from `config.json`. The daemon's bridge sweep re-reads this file every sweep, so watchlist changes take effect without a restart. Where a repo appears in both, the `config.json` `github.repos` entry wins — that's also why config-sourced repos aren't removable from the dashboard.
 
 ## The repo detail panel
 
