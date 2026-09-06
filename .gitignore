@@ -37,7 +37,7 @@ build/
 *.egg-info/
 
 # Node / TypeScript (M1+ rewrite)
-node_modules/
+node_modules
 *.tsbuildinfo
 
 # Personal runtime config (machine-specific). The shipped template is examples/config.json.
