@@ -10,8 +10,8 @@ import { ClickableBox } from "../ClickableBox.js";
 import { TableHeader, type Column } from "./primitives/TableHeader.js";
 import { Badge } from "./primitives/Badge.js";
 
-/** Exported for the header width-calc test (checks column width derives from
- * the widest rendered string across the current dataset). */
+/** Compact check summary; the checks column width derives from the widest
+ * rendered string across the current dataset. */
 export function checksToString(checks: {
   pass: number;
   fail: number;

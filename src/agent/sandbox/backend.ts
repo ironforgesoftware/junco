@@ -4,7 +4,7 @@ import { sep } from "node:path";
 import { type SandboxPolicy, readRules, traversalMetadataPaths } from "./policy.js";
 import { orderRules, type ReadRule } from "./precedence.js";
 
-export interface ProbeResult {
+interface ProbeResult {
   /** Exit status — 127 for a missing binary (mirrors doctor.ts). */
   code: number;
   /** Whatever the child said on stderr. DIAGNOSTIC ONLY: `code` remains the

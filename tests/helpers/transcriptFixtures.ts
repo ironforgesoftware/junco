@@ -47,7 +47,7 @@ export const msgEndBlocks = (content: unknown[], role = "assistant"): string =>
 export const toolStart = (name: string, args: unknown): string =>
   j({ type: "tool_execution_start", toolCallId: "c", toolName: name, args });
 
-export const toolEnd = (name: string, isError = false): string =>
+const toolEnd = (name: string, isError = false): string =>
   j({ type: "tool_execution_end", toolCallId: "c", toolName: name, result: {}, isError });
 
 export const turnEnd = (output = 10): string =>

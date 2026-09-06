@@ -15,10 +15,10 @@ export type GuardKind =
   | "thinking_rep"
   | "output_budget";
 
-export type ActionKind = "continue" | "nudge" | "kill";
+type ActionKind = "continue" | "nudge" | "kill";
 
 /** The tripped guard exposes these for the nudge builder. */
-export interface TrippedGuardInfo {
+interface TrippedGuardInfo {
   lastName: string | null;
   lastCount: number;
 }

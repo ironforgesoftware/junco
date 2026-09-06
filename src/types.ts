@@ -12,7 +12,7 @@ export type Result<T, F = unknown> = { ok: true; value: T } | ({ ok: false; erro
 /** OpenAI-completions-style compat flags (open record — any future Pi compat
  * key passes through). The named fields are the ones junco has tuned defaults
  * for; `[k: string]` keeps the schema forward-compatible. */
-export interface ModelCompat {
+interface ModelCompat {
   supportsDeveloperRole?: boolean;
   supportsReasoningEffort?: boolean;
   maxTokensField?: string;
@@ -27,7 +27,7 @@ export interface ModelCost {
   cacheWrite: number;
 }
 /** SDK auto-retry knobs passed to SettingsManager.inMemory; null = SDK default. */
-export interface ModelRetryConfig {
+interface ModelRetryConfig {
   maxRetries: number | null;
   baseDelayMs: number | null;
 }
@@ -62,7 +62,7 @@ export interface GithubRepoMapping {
   path: string; // local clone path (expanded)
 }
 /** `[github]` — the issues→inbox bridge. Disabled by default (zero gh calls). */
-export interface GithubConfig {
+interface GithubConfig {
   enabled: boolean;
   triggerLabel: string; // approval label; lifecycle labels derive from it
   askLabel: string; // routes an issue to the read-only Q&A path
@@ -73,7 +73,7 @@ export interface GithubConfig {
   externalReposRoot: string; // managed clones of unowned repos (fork-PR flow)
 }
 /** [assess] — knobs for `junco audit` runs (vulnerability audit → GitHub issues). */
-export interface AssessConfig {
+interface AssessConfig {
   maxIssuesPerRun: number; // cap on issues filed per assessment run
   minSeverity: "critical" | "high" | "medium" | "low"; // findings below this are dropped
   npmBin: string; // binary for the dependency scan (`npm audit --json`)
@@ -82,11 +82,11 @@ export interface AssessConfig {
 /** Skill-link distribution (spec 2026-08-19): harness skills dirs that get a
  * junco-dispatch symlink via <dataDir>/skills. Presence in this list is the
  * operator's standing consent — junco never writes to a dir not listed. */
-export interface SkillsConfig {
+interface SkillsConfig {
   harnessDirs: string[];
 }
 /** [botAccount] — dedicated machine-account identity for daemon GitHub traffic. */
-export interface BotAccountConfig {
+interface BotAccountConfig {
   enabled: boolean; // false = today's ambient-gh-auth behavior
   configDir: string; // isolated GH_CONFIG_DIR holding the bot login (expanded)
 }
@@ -97,7 +97,7 @@ export interface BotAccountConfig {
  * dependency machinery (depends_on claim gating, merge sweep, cascade) is
  * always on and activates lazily per edge, independent of this flag.
  * `maxTasks` is the compiler's per-plan task cap. */
-export interface PlanSetsConfig {
+interface PlanSetsConfig {
   enabled: boolean;
   mergePollSeconds: number;
   maxTasks: number;
@@ -105,7 +105,7 @@ export interface PlanSetsConfig {
 /** [chat] — the dashboard chat (spec 2026-09-01 §10). `null` = inherit:
  * modelId → github.plannerModelId ?? model.id; thinkingLevel →
  * model.thinkingLevel; turnTimeoutMinutes → worker.defaultTimeoutMinutes. */
-export interface ChatConfig {
+interface ChatConfig {
   enabled: boolean;
   modelId: string | null;
   thinkingLevel: string | null;

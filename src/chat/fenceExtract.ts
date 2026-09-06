@@ -31,7 +31,7 @@ export const FRONTMATTER_ALLOWLIST: ReadonlySet<string> = new Set([
   "analyze",
 ]);
 
-export interface ExtractedFile {
+interface ExtractedFile {
   name: string;
   /** Allowlisted frontmatter + repo: + body — byte-identical to what lint sees. */
   content: string;

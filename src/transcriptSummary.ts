@@ -34,7 +34,7 @@ export interface ToolResultSummary {
   isError: boolean;
 }
 
-export interface ToolCallSummary {
+interface ToolCallSummary {
   /** toolCallId — the cursor/expand identity. */
   id: string;
   name: string;
@@ -43,7 +43,7 @@ export interface ToolCallSummary {
   result: ToolResultSummary | null;
 }
 
-export interface TurnSummary {
+interface TurnSummary {
   /** 0-based; the guard records' `turnIndex` space. */
   index: number;
   /** Built from tool_execution_* after the last turn_end (no text/usage yet). */
@@ -54,7 +54,7 @@ export interface TurnSummary {
   usage: { input: number; output: number } | null;
 }
 
-export interface RunEnd {
+interface RunEnd {
   stopReason: string | null;
   errorMessage: string | null;
   timedOut: boolean;
@@ -66,7 +66,7 @@ export interface RunEnd {
 }
 
 /** Chat-only side records (spec 2026-09-01 §1.3), rendered one row each. */
-export type ChatNote =
+type ChatNote =
   | { kind: "rejected"; reason: string; until: string | null; ts: string }
   | {
       kind: "draft";

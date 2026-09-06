@@ -68,7 +68,7 @@ export function ticketState(paths: Paths, id: string): TicketState {
   return "absent";
 }
 
-export type PrState = "merged" | "open" | "closed" | "unknown";
+type PrState = "merged" | "open" | "closed" | "unknown";
 
 export interface DepSweepDeps {
   /** PR-state probe (default: `gh pr view <url> --json state` via cfg.ghBin). */

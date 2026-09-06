@@ -3,7 +3,7 @@
 import type { LogEntry } from "../logReader.js";
 
 export type Level = "debug" | "info" | "warn" | "error";
-export const LEVEL_ORDER: Level[] = ["debug", "info", "warn", "error"];
+const LEVEL_ORDER: Level[] = ["debug", "info", "warn", "error"];
 
 /** Rank for the level threshold; a null (unstructured) line ranks as info so it
  * survives info but hides at warn+. */

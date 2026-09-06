@@ -18,7 +18,7 @@ import type { BindingContext, Chip, ContextBindings, MainBody } from "./viewActi
 import type { DerivedMnemonic } from "./mnemonics.js";
 import type { LayoutMode } from "./layout.js";
 
-export type FooterChipKind = "pill" | "mnemonic" | "structural" | "separator";
+type FooterChipKind = "pill" | "mnemonic" | "structural" | "separator";
 export interface FooterChip {
   kind: FooterChipKind;
   /** Dispatch key: mnemonic/pill → derived letter; structural → the Chip.key STRING. */
@@ -59,10 +59,10 @@ export const TARGET_WIDTH = 24;
 /** Navigate chips dropped, in this order, one at a time, until the row fits
  * `columns` (Ruling R10) — they stay in the keymap + help regardless. Keyed
  * on dispatch key, not id: every chip here is structural. */
-export const NAV_DROP_ORDER: readonly string[] = [",", ":", "g/G", "[/]"];
+const NAV_DROP_ORDER: readonly string[] = [",", ":", "g/G", "[/]"];
 /** The fit step that gives up the two rows' shared label slot — not a key, so
  * it can never collide with a chip's. */
-export const NAV_DROP_LABEL = "label slot";
+const NAV_DROP_LABEL = "label slot";
 /** The full fit order (#464). After the four keys above, a main row could
  * still need ~72 columns (~88 behind a full-width target) and what got
  * clipped between MIN_COLS and there was the pinned `? help  quit` — the one
@@ -70,7 +70,7 @@ export const NAV_DROP_LABEL = "label slot";
  * slot (the header crumb already names the target), then `/ filter`. The
  * issue's third candidate, shortening `first/last`, is unreachable — `g/G`
  * leaves at step 3. */
-export const NAV_FIT_ORDER: readonly string[] = [...NAV_DROP_ORDER, NAV_DROP_LABEL, "/"];
+const NAV_FIT_ORDER: readonly string[] = [...NAV_DROP_ORDER, NAV_DROP_LABEL, "/"];
 const SEP: FooterChip = {
   kind: "separator",
   id: "|",

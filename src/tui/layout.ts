@@ -6,8 +6,8 @@
 export const MIN_COLS = 60;
 export const MIN_ROWS = 14;
 export const WIDE_COLS = 110;
-export const RAIL_WIDTH = 26;
-export const PREVIEW_CAP = 60;
+const RAIL_WIDTH = 26;
+const PREVIEW_CAP = 60;
 export const CHROME_ROWS = 3;
 
 export type LayoutMode = "wide" | "medium" | "tooSmall";

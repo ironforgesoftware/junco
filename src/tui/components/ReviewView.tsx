@@ -8,19 +8,19 @@ import type { PendingDraft } from "../../chat/draftStore.js";
 import { clampScroll, maxScroll } from "../window.js";
 import { fmtAge } from "../queueFmt.js";
 
-export interface ReviewOpen {
+interface ReviewOpen {
   kind: "batch";
   batchIdx: number;
   findingCursor: number;
   checked: Set<string>;
 }
-export interface DraftOpen {
+interface DraftOpen {
   kind: "draft";
   draftIdx: number;
 }
 /** A parked chat draft's preview (spec 2026-09-01 §8.6) — `idx` indexes
  * `chatDrafts`, not the combined list. */
-export interface ChatDraftOpen {
+interface ChatDraftOpen {
   kind: "chatDraft";
   idx: number;
 }

@@ -1,8 +1,8 @@
 /**
  * The single source of truth for the unified data tree's shape (spec
- * 2026-07-16 §4). Subdir constants are imported by the stores
- * (assessReview/commentReview/assessHistory/githubOutbox/watchlist/dashboard)
- * so the tree and its writers can never drift; ensureDataTree materializes everything
+ * 2026-07-16 §4). The review-subdir and watchlist constants are imported by
+ * their stores (assessReview/commentReview/watchlist) so the tree and its
+ * writers can never drift; ensureDataTree materializes everything
  * eagerly at daemon startup so no directory is invisible-until-first-use.
  */
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
@@ -17,14 +17,13 @@ import {
 
 export const REVIEW_ASSESS_SUBDIR = "review/assess";
 export const REVIEW_COMMENTS_SUBDIR = "review/comments";
-export const OUTBOX_SUBDIR = "outbox";
-export const MIRROR_SUBDIR = "mirror";
-export const CLONES_WATCHED_SUBDIR = "clones/watched";
-export const CLONES_EXTERNAL_SUBDIR = "clones/external";
-export const ASSESS_HISTORY_SUBDIR = "assess-history";
-export const HISTORY_SUBDIR = "history";
+const OUTBOX_SUBDIR = "outbox";
+const MIRROR_SUBDIR = "mirror";
+const CLONES_WATCHED_SUBDIR = "clones/watched";
+const ASSESS_HISTORY_SUBDIR = "assess-history";
+const HISTORY_SUBDIR = "history";
 export const WATCHLIST_FILENAME = "watchlist.json";
-export const UPDATE_CHECK_FILENAME = "update-check.json";
+const UPDATE_CHECK_FILENAME = "update-check.json";
 
 /**
  * Poison roots for `queue`/`clonesExternal` when cfg.queueRoot/cfg.github are

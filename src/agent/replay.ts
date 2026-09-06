@@ -34,7 +34,7 @@ import {
   type RunStartRecord,
 } from "./transcriptSchema.js";
 
-export interface ReplayedDecision {
+interface ReplayedDecision {
   decision: GuardDecision;
   /** Index into the `lines` array of the event that produced the decision. */
   lineIndex: number;

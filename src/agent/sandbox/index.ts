@@ -20,17 +20,11 @@ export class SandboxUnavailableError extends Error {
   }
 }
 
-/** The other fail-closed sandbox-setup refusal: an unenforceable POLICY (#311).
- *  Re-exported here alongside `SandboxUnavailableError` so callers that must
- *  tell a sandbox-setup refusal apart from a ticket failure — `doctor`'s
- *  preflight is the one that matters — have a single import site for both. */
-export { SandboxPolicyError } from "./policy.js";
-
 /** The seven built-in Pi tool names we know how to sandbox. */
 const KNOWN_TOOLS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 /** A per-tool `create<X>ToolDefinition(cwd, options)` factory from the SDK. */
-export type ToolDefFactory = (cwd: string, options: unknown) => unknown;
+type ToolDefFactory = (cwd: string, options: unknown) => unknown;
 
 /**
  * SDK factories the sandbox wiring needs. These are the exact symbols the Pi

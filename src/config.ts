@@ -8,9 +8,6 @@
 // Only the two helpers below, which belong to none of the three, still live
 // here.
 export {
-  type DataRootResolution,
-  type KnownQueueRoot,
-  type ResolveConfigDeps,
   configPathOverride,
   dataRootHasTree,
   defaultUserConfigPath,

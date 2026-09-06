@@ -96,7 +96,7 @@ function fmtK(n: number): string {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
 }
 
-export function fmtDuration(ms: number): string {
+function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);

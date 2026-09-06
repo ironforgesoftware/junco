@@ -20,13 +20,13 @@
  */
 
 /** Mirrors pi-ai's `ApiKeyCredential` (`dist/auth/types.d.ts:15-19`). */
-export interface ApiKeyCredentialLike {
+interface ApiKeyCredentialLike {
   type: "api_key";
   key?: string;
 }
 
 /** Mirrors pi-ai's `CredentialInfo` (`dist/auth/types.d.ts:34-37`). */
-export interface CredentialInfoLike {
+interface CredentialInfoLike {
   providerId: string;
   type: "api_key";
 }

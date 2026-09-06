@@ -52,7 +52,7 @@ import { SAML_MARKER } from "./botAccess.js";
 import { checkForUpdate, getSelfPackage, type UpdateInfo } from "./updateCheck.js";
 import { detectSplitQueue } from "./splitQueue.js";
 
-export type DoctorExecFn = (
+type DoctorExecFn = (
   cmd: string,
   args: string[],
   opts?: { env?: Record<string, string> },

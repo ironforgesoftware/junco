@@ -323,7 +323,7 @@ export async function enumerateWorktrees(
  * exclusively). Drops `since` and `until` (neither is rendered) and loses the
  * branded GateStateKind (the dashboard only switches on a handful of known
  * strings, see sections.tsx's gate-color sets). */
-export interface DaemonGateInfo {
+interface DaemonGateInfo {
   state: string;
   reason: string | null;
 }
@@ -331,7 +331,7 @@ export interface DaemonGateInfo {
 /** Trimmed projection of SpendStatus for the dashboard — currently identical
  * to the source shape (both fields are rendered), kept as its own type so
  * DaemonDetail doesn't couple directly to the healthServer transport type. */
-export interface DaemonSpendInfo {
+interface DaemonSpendInfo {
   todayUsd: number;
   dailyBudgetUsd: number;
 }

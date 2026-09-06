@@ -35,11 +35,7 @@ export interface SecretFinding {
 }
 
 /** Returns the unified diff of `sinceRef..HEAD` in `wtPath`. */
-export type DiffProvider = (
-  cfg: { gitBin: string },
-  wtPath: string,
-  sinceRef: string,
-) => Promise<string>;
+type DiffProvider = (cfg: { gitBin: string }, wtPath: string, sinceRef: string) => Promise<string>;
 
 /** Injectable seams for scanPendingPush (tests inject the diff provider). */
 export interface SecretScanDeps {
@@ -78,7 +74,7 @@ const RULES: readonly SecretRule[] = [
 ] as const;
 
 /** Findings named individually in a failure note; the rest are counted. */
-export const MAX_REPORTED_FINDINGS = 10;
+const MAX_REPORTED_FINDINGS = 10;
 
 // ---------------------------------------------------------------------------
 // Diff scanning
