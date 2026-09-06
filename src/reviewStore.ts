@@ -21,6 +21,19 @@ import { join } from "node:path";
 import { log } from "./logging.js";
 import { slugifyId } from "./slug.js";
 
+/** Sorted `*.json` entry names directly in `dir`; [] when the dir was never
+ * created. The listing half of every "one JSON file per record" store
+ * (this one and githubOutbox's op store). */
+export function listJsonNames(dir: string, readdirFn: (d: string) => string[]): string[] {
+  let names: string[];
+  try {
+    names = readdirFn(dir);
+  } catch {
+    return [];
+  }
+  return names.filter((n) => n.endsWith(".json")).sort();
+}
+
 export interface ReviewStoreDeps {
   readFileFn?: (p: string) => string;
   writeFileFn?: (p: string, s: string) => void;
@@ -84,37 +97,28 @@ export function makeReviewStore<T extends { id: string }>(
   function list(dir: string, deps: ReviewStoreDeps = {}): T[] {
     const readdirFn = deps.readdirFn ?? readdirSync;
     const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
-    let names: string[];
-    try {
-      names = readdirFn(dir);
-    } catch {
-      return [];
-    }
-    return names
-      .filter((n) => n.endsWith(".json"))
-      .sort()
-      .flatMap((n) => {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(readFileFn(join(dir, n)));
-        } catch (e) {
-          log.warn("skipping unparseable review-store entry", {
-            dir,
-            name: n,
-            error: String(e),
-          });
-          return [];
-        }
-        if (!hasRequiredFields(parsed, requiredFields)) {
-          log.warn("skipping malformed review-store entry (missing required fields)", {
-            dir,
-            name: n,
-            requiredFields,
-          });
-          return [];
-        }
-        return [parsed as T];
-      });
+    return listJsonNames(dir, readdirFn).flatMap((n) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileFn(join(dir, n)));
+      } catch (e) {
+        log.warn("skipping unparseable review-store entry", {
+          dir,
+          name: n,
+          error: String(e),
+        });
+        return [];
+      }
+      if (!hasRequiredFields(parsed, requiredFields)) {
+        log.warn("skipping malformed review-store entry (missing required fields)", {
+          dir,
+          name: n,
+          requiredFields,
+        });
+        return [];
+      }
+      return [parsed as T];
+    });
   }
 
   function read(

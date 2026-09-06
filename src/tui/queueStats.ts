@@ -6,10 +6,10 @@
  */
 
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
 import type { Config } from "../types.js";
 import { TERMINAL_DONE_STATUSES } from "../types.js";
 import { queuePaths } from "../config.js";
+import { mdMtimes } from "../queue.js";
 import type { HealthBody } from "./healthBody.js";
 import type { TaskRecord } from "../taskHistory.js";
 
@@ -47,27 +47,6 @@ export interface QueueStatsDeps {
 }
 
 const DAY_MS = 86_400_000;
-
-/** mtimes (ms) of the .md files in a queue dir; unreadable dir/file → skipped. */
-function mdMtimes(
-  dir: string,
-  readdirFn: (d: string) => string[],
-  statFn: (p: string) => { mtimeMs: number },
-): number[] {
-  try {
-    return readdirFn(dir)
-      .filter((n) => n.endsWith(".md"))
-      .flatMap((n) => {
-        try {
-          return [statFn(join(dir, n)).mtimeMs];
-        } catch {
-          return [];
-        }
-      });
-  } catch {
-    return [];
-  }
-}
 
 /** LOCAL calendar-day key (spendLedger precedent: the operator's wall-clock
  * day, not UTC). */

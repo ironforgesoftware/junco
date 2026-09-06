@@ -23,12 +23,12 @@
  * install (no `.git` beside `dist/`) is untouched.
  */
 
-import { execFile } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { readLockHolder, workerLockPath } from "./lock.js";
 import { PACKAGE_ROOT } from "./packageRoot.js";
+import { defaultExec as execProbe } from "./execProbe.js";
 
 export interface ServiceRef {
   platform: "launchd" | "systemd";
@@ -116,17 +116,8 @@ function checkoutDifferences(state: CheckoutState): string[] {
   return lines;
 }
 
-function defaultExec(
-  cmd: string,
-  args: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((res) => {
-    execFile(cmd, args, { timeout: 15_000 }, (err, stdout, stderr) => {
-      const code = err ? ((err as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1) : 0;
-      res({ code, stdout: String(stdout), stderr: String(stderr) });
-    });
-  });
-}
+/** execProbe's capture with the longer timeout git/plutil/npm probes need. */
+const defaultExec = (cmd: string, args: string[]) => execProbe(cmd, args, { timeoutMs: 15_000 });
 
 function defaultReaddir(dir: string): string[] {
   try {

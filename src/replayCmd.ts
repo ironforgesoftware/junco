@@ -20,8 +20,7 @@ import type { Config } from "./types.js";
 import { replayTranscript, type ReplayReport, type ReplayRun } from "./agent/replay.js";
 import { guardOptionsFromConfig } from "./agent/runEnvelope.js";
 import { parseTranscriptLine, type RunStartRecord } from "./agent/transcriptSchema.js";
-import { transcriptPathFor } from "./slug.js";
-import { dataTreePaths } from "./dataTree.js";
+import { transcriptPathForTarget, readTranscriptOrExplain } from "./transcriptTarget.js";
 
 export interface ReplayCmdDeps {
   /** May throw (no config on disk) — tolerated for a direct .jsonl target. */
@@ -204,10 +203,6 @@ function renderCaveatLines(report: ReplayReport): string[] {
   return lines;
 }
 
-function isPathLike(target: string): boolean {
-  return target.endsWith(".jsonl") || target.includes("/");
-}
-
 /** The first `junco_run_start.guard` in the file, if any (precedence layer 2). */
 function firstRunStartGuard(lines: string[]): RunStartRecord["guard"] | undefined {
   for (const line of lines) {
@@ -286,29 +281,16 @@ export async function runReplayCmd(argv: string[], deps: ReplayCmdDeps): Promise
     cfg = undefined; // tolerated for a direct .jsonl target — see below
   }
 
-  const pathLike = isPathLike(target);
-  let transcriptPath: string;
-  if (pathLike) {
-    transcriptPath = target;
-  } else {
-    if (!cfg) {
-      deps.stdout(
-        `junco replay: no config found — cannot resolve ticket id '${target}' to a transcript ` +
-          "path; pass a direct .jsonl path instead",
-      );
-      return 1;
-    }
-    transcriptPath = transcriptPathFor(dataTreePaths(cfg).transcripts, target);
-  }
-
-  let content: string;
-  try {
-    content = deps.readFile(transcriptPath);
-  } catch {
-    const hint = cfg ? ` (transcripts dir: ${dataTreePaths(cfg).transcripts})` : "";
-    deps.stdout(`junco replay: no transcript at ${transcriptPath}${hint}`);
-    return 1;
-  }
+  const transcriptPath = transcriptPathForTarget("replay", target, cfg, deps.stdout);
+  if (transcriptPath === null) return 1;
+  const content = readTranscriptOrExplain(
+    "replay",
+    transcriptPath,
+    cfg,
+    deps.readFile,
+    deps.stdout,
+  );
+  if (content === null) return 1;
 
   const lines = content.split("\n");
   const recordedGuard = firstRunStartGuard(lines);

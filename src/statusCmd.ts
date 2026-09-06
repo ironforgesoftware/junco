@@ -4,10 +4,10 @@
  */
 
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
 import type { Config } from "./types.js";
 import { TERMINAL_DONE_STATUSES } from "./types.js";
 import { queuePaths } from "./config.js";
+import { mdMtimes } from "./queue.js";
 import { readLockHolder } from "./lock.js";
 import { outboxDepth, deadCount } from "./githubOutbox.js";
 import { pendingCount } from "./assessReview.js";
@@ -51,25 +51,6 @@ function countMd(dir: string): number {
     return readdirSync(dir).filter((n) => n.endsWith(".md")).length;
   } catch {
     return 0;
-  }
-}
-
-/** mtimes (ms) of the .md files in a dir; unreadable dir/file → skipped.
- * Mirrors src/tui/queueStats.ts's mdMtimes — duplicated rather than imported:
- * statusCmd is CLI-side and must not import from src/tui/. */
-function mdMtimes(dir: string, statFn: (p: string) => { mtimeMs: number }): number[] {
-  try {
-    return readdirSync(dir)
-      .filter((n) => n.endsWith(".md"))
-      .flatMap((n) => {
-        try {
-          return [statFn(join(dir, n)).mtimeMs];
-        } catch {
-          return [];
-        }
-      });
-  } catch {
-    return [];
   }
 }
 
@@ -189,14 +170,14 @@ export async function runStatusCommand(cfg: Config, deps: StatusDeps = {}): Prom
       failedN = recs.length - doneN;
       avgSeconds = Math.round(recs.reduce((a, r) => a + r.durationSeconds, 0) / recs.length);
     } else {
-      doneN = mdMtimes(paths.done, statFn).filter((t) => t >= since24Ms).length;
-      failedN = mdMtimes(paths.failed, statFn).filter((t) => t >= since24Ms).length;
+      doneN = mdMtimes(paths.done, readdirSync, statFn).filter((t) => t >= since24Ms).length;
+      failedN = mdMtimes(paths.failed, readdirSync, statFn).filter((t) => t >= since24Ms).length;
       avgSeconds = null;
     }
     // Deliberately includes deferred tickets — this is a stat-only mtime scan
     // of every .md in inbox/, no frontmatter parse — unlike the TUI's
     // eligible-only oldestQueuedAt (queueFmt.ts), which skips deferred rows.
-    const inboxMtimes = mdMtimes(paths.inbox, statFn);
+    const inboxMtimes = mdMtimes(paths.inbox, readdirSync, statFn);
     const oldestWaitSeconds =
       inboxMtimes.length > 0 ? (now.getTime() - Math.min(...inboxMtimes)) / 1000 : null;
 
