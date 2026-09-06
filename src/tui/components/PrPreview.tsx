@@ -5,6 +5,7 @@ import { theme } from "../theme.js";
 import { derivePrState, prStateMeta, ticketSlugFromBranch, type DashPr } from "../prState.js";
 import { hyperlink } from "../links.js";
 import { relTime } from "./IssueList.js";
+import { checksToString } from "./PrList.js";
 import { ClickableBox } from "../ClickableBox.js";
 
 export interface PrPreviewProps {
@@ -28,18 +29,14 @@ function reviewDecisionToString(reviewDecision: string | null): string {
   return reviewDecision.toLowerCase();
 }
 
-function checksToString(checks: {
+/** PrList's compact check string, qualified with the total for the preview. */
+function checksSummary(checks: {
   pass: number;
   fail: number;
   pending: number;
   total: number;
 }): string {
-  if (checks.total === 0) return "none";
-  const parts: string[] = [];
-  if (checks.fail > 0) parts.push(`✗${checks.fail}`);
-  if (checks.pass > 0) parts.push(`✓${checks.pass}`);
-  if (checks.pending > 0) parts.push(`◍${checks.pending}`);
-  return `${parts.join(" ")} of ${checks.total}`;
+  return checks.total === 0 ? "none" : `${checksToString(checks)} of ${checks.total}`;
 }
 
 /** Maps review decision and checks states to ink color for display. */
@@ -89,7 +86,7 @@ export const PrPreview = React.memo(function PrPreview({
         </Transform>
       </ClickableBox>,
       <Text key="checks" wrap="truncate-end" color={checksColor(pr.checks)}>
-        checks: {checksToString(pr.checks)}
+        checks: {checksSummary(pr.checks)}
       </Text>,
       <Text key="review" wrap="truncate-end">
         review: {reviewDecisionToString(pr.reviewDecision)}

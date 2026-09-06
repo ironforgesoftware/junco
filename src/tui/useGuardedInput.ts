@@ -27,7 +27,7 @@ export interface GuardedInputOptions {
 
 /** True for "kkk"-shaped input: two or more copies of one printable byte with
  * no modifier — a held key that auto-repeat coalesced into a single chunk. */
-export function isHeldKeyRun(input: string, key: Key): boolean {
+function isHeldKeyRun(input: string, key: Key): boolean {
   if (input.length < 2 || key.ctrl || key.meta) return false;
   const code = input.charCodeAt(0);
   if (code < 0x20 || code === 0x7f) return false;

@@ -133,7 +133,7 @@ export function sandboxBaseDir(
 }
 
 /** argv prefix for the CLI under test: `JUNCO_E2E_BIN` (packaging layer) or the built dist. */
-export function binaryUnderTest(): string[] {
+function binaryUnderTest(): string[] {
   const override = process.env.JUNCO_E2E_BIN;
   if (override) return [override];
   return [process.execPath, resolve(process.cwd(), "dist/cli.js")];
@@ -199,7 +199,7 @@ export interface Sandbox {
 }
 
 /** The gh subcommands the PR flow needs on its happy path. Each body is prefixed with the gh.log line by `createSandbox`. */
-export function defaultGhCases(nwo: string): Record<string, string> {
+function defaultGhCases(nwo: string): Record<string, string> {
   return {
     '"pr list "*': 'echo "[]"',
     '"pr create "*': `echo "https://github.com/${nwo}/pull/1"`,
@@ -438,7 +438,7 @@ export interface DaemonHandle {
 }
 
 /** Spawn the binary under test with `args`, collecting stdout/stderr until it closes. */
-export function spawnCli(sb: Sandbox, args: string[]): DaemonHandle {
+function spawnCli(sb: Sandbox, args: string[]): DaemonHandle {
   const [cmd, ...pre] = sb.bin;
   const child = spawn(cmd, [...pre, ...args], {
     cwd: sb.home,
@@ -470,7 +470,7 @@ export function spawnCli(sb: Sandbox, args: string[]): DaemonHandle {
 }
 
 /** Run to completion; SIGTERM then SIGKILL on timeout so a hang fails the test instead of wedging CI. */
-export async function runCli(
+async function runCli(
   sb: Sandbox,
   args: string[],
   opts: { timeoutMs?: number } = {},

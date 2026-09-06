@@ -441,7 +441,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
  * NO tools (`tools: []`) and a different thinking level. When omitted the
  * defaults (`cfg.tools`, `cfg.model.thinkingLevel`) are preserved unchanged.
  */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface SessionOverrides {
   tools?: string[];

@@ -40,7 +40,7 @@ export interface ChatRoutesDeps {
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
-export function isLoopbackRequest(req: IncomingMessage): boolean {
+function isLoopbackRequest(req: IncomingMessage): boolean {
   return LOOPBACK.has(req.socket.remoteAddress ?? "");
 }
 

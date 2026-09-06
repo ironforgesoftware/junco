@@ -18,7 +18,7 @@ const DEFAULT_MODELS_JSON = "~/.pi/agent/models.json";
  * by the single-root flip. */
 const DEFAULT_DATA_DIR = "~/.junco";
 
-export interface WatchedRepoAnswer {
+interface WatchedRepoAnswer {
   nwo: string;
   path: string;
 }

@@ -23,7 +23,7 @@ export type MainBody =
   | "worktrees"
   | "daemon"
   | "logs";
-export type OverlayView =
+type OverlayView =
   | "detail"
   | "repoDetail"
   | "prs"
@@ -34,7 +34,7 @@ export type OverlayView =
   | "chat";
 
 /** Text-owning contexts: no mnemonic derives, so their chips ARE the keymap. */
-export type StructuralOnlyView =
+type StructuralOnlyView =
   | "palette"
   | "addRepo"
   | "config"

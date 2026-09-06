@@ -36,7 +36,7 @@ const DOWN_TEXT: Record<string, string> = {
   unknown_key: "repo not watched",
 };
 
-export function downText(reason: string | null): string {
+function downText(reason: string | null): string {
   return (reason !== null ? DOWN_TEXT[reason] : undefined) ?? "daemon down";
 }
 

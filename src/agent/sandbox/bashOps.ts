@@ -12,7 +12,7 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
 const REAP_SETTLE_GRACE_MS = 100;
 
 /** Structural mirror of the SDK's BashOperations.exec options (no SDK import). */
-export interface BashExecOptions {
+interface BashExecOptions {
   onData: (data: Buffer) => void;
   signal?: AbortSignal;
   /** SECONDS — the model's raw `timeout` argument. Pi's own local backend

@@ -8,7 +8,7 @@
 export const MOUSE_ENABLE = "\u001b[?1000;1003;1006h";
 export const MOUSE_DISABLE = "\u001b[?1000;1003;1006l";
 
-export type MouseEventKind = "press" | "release" | "wheelUp" | "wheelDown" | "move" | "drag";
+type MouseEventKind = "press" | "release" | "wheelUp" | "wheelDown" | "move" | "drag";
 
 export interface MouseEvent {
   kind: MouseEventKind;

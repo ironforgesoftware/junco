@@ -28,7 +28,7 @@ export interface Rect {
   height: number;
 }
 
-export interface RegionHandlers {
+interface RegionHandlers {
   onPress?: () => void;
   onWheel?: (dir: 1 | -1) => void;
   /** A press, with the cell's position INSIDE the region (clamped to it) —
@@ -40,7 +40,7 @@ export interface RegionHandlers {
   onDrag?: (localX: number, localY: number) => void;
 }
 
-export interface ResolvedRegion {
+interface ResolvedRegion {
   id: number;
   handlers: RegionHandlers;
   /** Absolute rect at resolve time — the frame of reference for the local

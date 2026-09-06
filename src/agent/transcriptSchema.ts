@@ -89,11 +89,11 @@ export const DRAFT_KINDS = [
 export type DraftKind = (typeof DRAFT_KINDS)[number];
 
 export const DRAFT_STATUSES = ["parked", "lint_failed", "submitted", "discarded"] as const;
-export type DraftStatus = (typeof DRAFT_STATUSES)[number];
+type DraftStatus = (typeof DRAFT_STATUSES)[number];
 
 /** null until submitted; "command" for audit/investigate. */
 export const DRAFT_DESTINATIONS = ["inbox", "issue", "command"] as const;
-export type DraftDestination = (typeof DRAFT_DESTINATIONS)[number];
+type DraftDestination = (typeof DRAFT_DESTINATIONS)[number];
 
 export interface ChatPromptRecord {
   type: "junco_chat_prompt";
@@ -176,7 +176,7 @@ export interface ChatSessionResetRecord {
   reason: "corrupt" | "missing" | "operator_new" | "cwd_changed";
   ts: string;
 }
-export interface ChatTranscriptDegradedRecord {
+interface ChatTranscriptDegradedRecord {
   type: "junco_chat_transcript_degraded";
   ts: string;
 }

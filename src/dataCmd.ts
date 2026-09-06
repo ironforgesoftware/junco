@@ -19,7 +19,7 @@ import { draftCount, commentReviewPaths } from "./commentReview.js";
 import { outboxDepth, deadCount } from "./githubOutbox.js";
 import { makeSpendLedger } from "./spendLedger.js";
 
-export interface StatLike {
+interface StatLike {
   isDirectory(): boolean;
   size: number;
 }

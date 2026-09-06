@@ -162,7 +162,7 @@ export function issueToTicket(
 /** Materialize the PLANNING ticket for a raw PR issue: Q&A rails (workdir,
  * read-only), kind "plan", body = the full planner prompt (transparent — the
  * inbox file shows exactly what the planner was asked). */
-export function buildPlanningTicket(
+function buildPlanningTicket(
   issue: GhIssue,
   repo: GithubRepoMapping,
   cfg: Config,
@@ -885,7 +885,7 @@ type IssueDeps = Required<Pick<BridgeDeps, "ghFn" | "submitFn">>;
  * caller's per-issue catch; the only catch here is the pre-existing
  * approval-scan one, which contains the plan-ready door on its own.
  */
-export async function processIssue(
+async function processIssue(
   cfg: Config,
   repo: GithubRepoMapping,
   issue: GhIssue,

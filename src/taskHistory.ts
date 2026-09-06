@@ -45,7 +45,7 @@ export interface TaskHistoryDeps {
   nowFn?: () => Date;
 }
 
-export function historyDir(cfg: Config): string {
+function historyDir(cfg: Config): string {
   return dataTreePaths(cfg).history;
 }
 

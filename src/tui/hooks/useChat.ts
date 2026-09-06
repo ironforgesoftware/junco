@@ -12,12 +12,12 @@ import {
 import { parseTranscriptLine } from "../../agent/transcriptSchema.js";
 
 export const CHAT_RING = 2000;
-export const CHAT_FLUSH_MS = 50;
+const CHAT_FLUSH_MS = 50;
 /** Ruling R21: delay before the hook resubscribes after a terminal `end` —
  * long enough that a flapping connection doesn't spin-subscribe, short
  * enough that an operator staring at "reconnecting"/"session reset" text
  * (rendered by a later task's header) sees the pane come back quickly. */
-export const CHAT_RESUBSCRIBE_MS = 1000;
+const CHAT_RESUBSCRIBE_MS = 1000;
 
 export interface ChatState {
   key: string;

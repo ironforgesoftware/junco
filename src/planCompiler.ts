@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 
-export interface PlanTask {
+interface PlanTask {
   id: string;
   title: string;
   dependsOn: string[];

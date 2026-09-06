@@ -13,10 +13,6 @@ import { run } from "./gitHarness.js";
 
 export const FORK_NWO = "me/stream";
 
-// `run` is re-exported so the four suites that import it from here keep working;
-// the implementation lives in gitHarness.ts (this was the 6th copy of it).
-export { run };
-
 export function setupForkHarness(tmpRoot: string): {
   upstream: string; // bare, what `origin` points at
   forkRemote: string; // bare, what `fork` resolves to via insteadOf

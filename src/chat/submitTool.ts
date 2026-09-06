@@ -70,7 +70,7 @@ const PARAMETERS = {
 
 /** The route a submission takes when the model names none — the draft's
  * override, else the route decided at park time, else the inbox. */
-export function effectiveRoute(d: PendingDraft, requested: SubmitRoute | undefined): SubmitRoute {
+function effectiveRoute(d: PendingDraft, requested: SubmitRoute | undefined): SubmitRoute {
   if (requested !== undefined) return requested;
   if (d.routeOverride !== "auto") return d.routeOverride;
   return d.files[0]?.route?.destination === "issue" ? "issue" : "inbox";

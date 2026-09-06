@@ -135,7 +135,7 @@ export function materializePlanSet(cfg: Config, record: PlanSetRecord, fenceBody
 }
 
 export const PLAN_STATUS_MARKER = "<!-- junco:plan-status -->";
-export type TaskRunState =
+type TaskRunState =
   | "queued"
   | "waiting"
   | "processing"
@@ -143,7 +143,7 @@ export type TaskRunState =
   | "failed"
   | "superseded"
   | "absent";
-export interface TaskStatus {
+interface TaskStatus {
   id: string;
   ticketId: string;
   state: TaskRunState;

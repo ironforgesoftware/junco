@@ -12,14 +12,14 @@ import type { View } from "../App.js";
 
 /** What a loader actually delivered — the unified cycle aggregates these to
  * stamp refreshedAt (oldest cache staleAt wins; nothing delivered → no stamp). */
-export type Delivery = { delivered: boolean; staleAt: string | null };
+type Delivery = { delivered: boolean; staleAt: string | null };
 
 /** Read-only nav-spine inputs this hook needs (owned by App — never moved
  * here): the selected repo's nwo (undefined off a repo row), the active
  * view (drives the poll's main/monitor scope), and the selected row's body
  * kind (gates loadIssues' error toast so a background poll never flashes red
  * over a section/RepoDetail body). */
-export interface GithubDataNav {
+interface GithubDataNav {
   currentNwo: string | undefined;
   view: View;
   bodyKind: "issues" | "repoDetail" | "section" | null;

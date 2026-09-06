@@ -131,7 +131,7 @@ export async function resolveAmendTarget(
  * exists on the push remote but carries NO open PR of ours — the state is a
  * crashed/interrupted run, not a collision, so the flow may RESUME: push
  * `--force-with-lease` against this sha and idempotently (re)create the PR. */
-export interface ValidateSignals {
+interface ValidateSignals {
   resumeRemoteSha: string | null;
 }
 

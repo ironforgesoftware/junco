@@ -18,7 +18,6 @@ import type { QueueSnapshot } from "../../src/tui/queueSnapshot.js";
 
 export const okv = <T,>(v: T): Result<T> => ({ ok: true, value: v });
 export const ESC = String.fromCharCode(27);
-export const ENTER = "\r";
 /** Wide layout (three-pane breakpoint). */
 export const WIDE_COLS_TEST = 120;
 /** Key sequence that parks the rail cursor on a system row from the top of
@@ -28,7 +27,6 @@ export const TO_QUEUE_ROW = "jj"; // acme/api → beta/two → queue
 export const TO_OUTBOX_ROW = "jjj";
 export const TO_WORKTREES_ROW = "jjjj";
 export const TO_DAEMON_ROW = "jjjjj";
-export const TO_LOGS_ROW = "jjjjjj";
 
 /** Write each key as its own stdin chunk with a tick between — ink delivers a
  * multi-char chunk as a single `input` string, which matches no key branch. */

@@ -24,14 +24,14 @@ import type { SpendLedger } from "./spendLedger.js";
 import { log } from "./logging.js";
 
 /** HOW a ticket executed (Stage 4a) — mirrors `PrOutcome.mode`. */
-export type PrMode = "agent" | "apply" | "apply_fallback";
+type PrMode = "agent" | "apply" | "apply_fallback";
 
 /** The escalation ladder's record of which rung fired — mirrors
  * `PrOutcome.applyFallback`; `kind` names the rung ("apply" = Phase 4). */
-export type ApplyFallback = { kind: "apply" | "verification"; reason: string };
+type ApplyFallback = { kind: "apply" | "verification"; reason: string };
 
 /** The `PrFlowDeps` subset this phase needs; `runPrFlow` passes its own deps. */
-export interface ReviewDeps {
+interface ReviewDeps {
   /** Inject the critic session factory (tests control the PASS/MISSING verdict). */
   criticSessionFactory?: () => Promise<AgentSessionLike>;
   /** Operator force-stop signal, threaded into the fallback/corrective turns
