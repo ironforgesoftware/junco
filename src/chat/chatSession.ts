@@ -31,7 +31,7 @@ import {
   type MetaRecord,
 } from "../agent/transcriptSchema.js";
 import type { ProviderFailureClass } from "../providerFailure.js";
-import { READ_ONLY_TOOLS } from "../runOnce.js";
+import { READ_ONLY_TOOLS } from "../readOnlyTools.js";
 import { log } from "../logging.js";
 import { chatSlug } from "./chatKey.js";
 import { TurnDeadline, runChatTurn, type ChatTurnResult } from "./chatTurn.js";

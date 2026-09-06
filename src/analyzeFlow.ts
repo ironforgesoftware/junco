@@ -16,29 +16,21 @@
  * transient rerun simply overwrites the draft and converges.
  */
 
-import { statSync } from "node:fs";
-import { resolve, sep } from "node:path";
-
 import type { Config, Ticket, RunResult } from "./types.js";
-import type { SpendLedger } from "./spendLedger.js";
-import { queuePaths, expandHome } from "./config.js";
-import { git, describeError } from "./git.js";
-import {
-  runAgent,
-  makePiSessionFactory,
-  type AgentSessionLike,
-  type SessionOverrides,
-} from "./agent/session.js";
-import { runEnveloped } from "./agent/runEnvelope.js";
+import { queuePaths } from "./config.js";
+import { git } from "./git.js";
 import { emptyRunResult } from "./agent/runResult.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
-import { READ_ONLY_TOOLS } from "./runOnce.js";
-import { nwoFromRemoteUrl } from "./githubInbox.js";
+import {
+  resolveRepoTarget,
+  syncIfExternal,
+  runReadOnlyRepoAgent,
+  type RepoAgentDeps,
+} from "./repoTarget.js";
 import { sanitizeFindingText } from "./findings.js";
 import { extractLastFencedBlock } from "./fences.js";
 import { writeDraft, type PendingComment } from "./commentReview.js";
-import { syncExternalClone } from "./externalRepo.js";
 import { log } from "./logging.js";
 
 // The fenced block the agent emits its investigation comment in. Distinct from
@@ -48,23 +40,9 @@ const COMMENT_FENCE = "junco-comment";
 const MAX_DRAFT = 60_000;
 const MAX_ISSUE_TITLE = 300; // display-only; mirrors assess's title cap
 
-export interface AnalyzeDeps {
+export interface AnalyzeDeps extends RepoAgentDeps {
   gitFn?: typeof git;
-  sessionFactoryFor?: (
-    cfg: Config,
-    cwd: string,
-    overrides?: SessionOverrides,
-  ) => () => Promise<AgentSessionLike>;
-  abortSignal?: AbortSignal;
-  onProgress?: Parameters<typeof runAgent>[0]["onProgress"] extends infer T ? T : never;
-  /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
-  onGuardDecision?: Parameters<typeof runAgent>[0]["onGuardDecision"];
   nowFn?: () => Date;
-  /** Per-day spend ledger (Phase-3 Task 4), peer of prFlow/runOnce's
-   * RunDeps.spend: the analyze agent run's resolved `usage.costUsd` is
-   * recorded here immediately after it completes, mirroring the Q&A/PR-flow
-   * pattern. Optional: absent (CLI one-shot, tests) is a no-op. */
-  spend?: Pick<SpendLedger, "recordUsd">;
 }
 
 export interface AnalyzeFlowResult {
@@ -119,102 +97,19 @@ export async function runAnalyzeFlow(
     return { dst: fin.dst, status: fin.status, requeued: false, result, parked };
   };
 
-  // --- Phase 1: Target resolution + containment. Mirror assessFlow Phase 1
-  // (and resolveQaCwd's containment semantics) EXACTLY — including the empty
-  // allowedRepoRoots ⇒ anywhere rule — but a violation is a phase error here. ---
-  const repoRaw = ticket.frontmatter.repo;
-  if (typeof repoRaw !== "string") {
-    return finalizeAnalyze(null, "analyze: ticket has no repo path");
-  }
-  const repoPath = resolve(expandHome(repoRaw));
-  let isDir = false;
-  try {
-    isDir = statSync(repoPath).isDirectory();
-  } catch {
-    isDir = false;
-  }
-  if (!isDir) {
-    return finalizeAnalyze(null, `analyze: repo path is not a directory: ${repoPath}`);
-  }
-  if (cfg.allowedRepoRoots.length > 0) {
-    const ok = cfg.allowedRepoRoots.some((root) => {
-      const r = resolve(expandHome(root));
-      return repoPath === r || repoPath.startsWith(r + sep);
-    });
-    if (!ok) {
-      return finalizeAnalyze(null, `analyze: repo path not permitted: ${repoPath}`);
-    }
-  }
-
-  // --- Phase 2: analyze block + nwo. runOnce routes on ticket.analyze, but
-  // defense-in-depth: without it there is no issue to draft against. Without a
-  // parseable GitHub origin the draft has no target repo, so both are fatal. ---
+  // --- Phase 1–2: Target resolution + containment + nwo (repoTarget.ts,
+  // shared with assessFlow). runOnce routes on ticket.analyze, but
+  // defense-in-depth: without it there is no issue to draft against. ---
   if (!ticket.analyze) {
     return finalizeAnalyze(null, "analyze: ticket has no analyze block");
   }
-  let nwo: string;
-  try {
-    const remote = await gitFn(cfg, ["remote", "get-url", "origin"], { cwd: repoPath });
-    const parsed = nwoFromRemoteUrl(remote.stdout.trim());
-    if (!parsed) {
-      return finalizeAnalyze(null, "analyze: origin remote is not a parseable GitHub repo");
-    }
-    nwo = parsed;
-  } catch (e) {
-    return finalizeAnalyze(null, `analyze: could not read origin remote — ${describeError(e)}`);
-  }
+  const resolved = await resolveRepoTarget(cfg, ticket.frontmatter.repo, "analyze", gitFn);
+  if (!resolved.ok) return finalizeAnalyze(null, resolved.error);
+  const { repoPath, nwo, external } = resolved.target;
+  await syncIfExternal(cfg, resolved.target, gitFn, warnings);
 
-  // --- Phase 2b: External detection (path-based). A managed clone lives under
-  // cfg.github.externalReposRoot; the operator's OWNED checkouts never do. This
-  // gates both the freshness sync below and the parked draft's `external` flag. ---
-  const externalRoot = resolve(expandHome(cfg.github.externalReposRoot));
-  const external = repoPath === externalRoot || repoPath.startsWith(externalRoot + sep);
-
-  // --- Phase 2c: Freshness sync — EXTERNAL clones ONLY. Junco owns these
-  // clones, so a fetch + hard-reset to upstream's default branch is safe and
-  // makes the analysis reflect live upstream, not the provisioned snapshot.
-  // NEVER run this on an owned checkout (it would blow away the operator's
-  // tree). A failure is a recorded warning, not fatal. ---
-  if (external) {
-    try {
-      await syncExternalClone(cfg, repoPath, { gitFn });
-    } catch (e) {
-      warnings.push(`could not sync external clone to upstream default: ${describeError(e)}`);
-    }
-  }
-
-  // --- Phase 3: Agent run. Mirror assessFlow's agent block: read-only tool
-  // default, cwd = repoPath, supervisor gated the same way, same transcript
-  // convention, timeout from the ticket, abortSignal/onProgress threaded.
-  // `readOnly` (#346): repoPath is the operator's live checkout, so the sandbox
-  // keeps scratch as the only writable root whatever `tools:` the ticket names. ---
-  const analyzeTools = ticket.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
-  const analyzeCfg: Config = { ...cfg, tools: analyzeTools };
-  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(analyzeCfg, repoPath, {
-    readOnly: true,
-  });
-  // Spend is recorded immediately by the envelope, BEFORE any requeue/finalize
-  // branching below — mirrors runOnce.ts's Q&A wire, prFlow's main-session
-  // record, and assessFlow's Phase-3 Task 4 wire: the dollars were spent
-  // regardless of what the ticket does next. No-op when deps.spend is absent
-  // or costUsd is 0/non-finite.
-  const agentResult = await runEnveloped(
-    analyzeCfg,
-    {
-      ticketId: ticket.id,
-      flow: "analyze",
-      body: ticket.body,
-      cwd: repoPath,
-      timeoutMs: ticket.timeoutSeconds * 1000,
-    },
-    {
-      createSession: factory,
-      abortSignal: deps.abortSignal,
-      onProgress: deps.onProgress,
-      onGuardDecision: deps.onGuardDecision,
-      spend: deps.spend,
-    },
-  );
+  // --- Phase 3: Agent run (repoTarget.ts, shared with assessFlow). ---
+  const agentResult = await runReadOnlyRepoAgent(cfg, ticket, "analyze", repoPath, deps);
 
   // --- Phase 4: Transient failure → requeue with backoff (mirror
   // `runAssessFlow`'s transient-requeue phase in assessFlow.ts). Safe because
