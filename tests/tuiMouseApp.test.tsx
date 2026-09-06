@@ -515,7 +515,7 @@ describe("footer chips: mouse", () => {
     expect(r.lastFrame() ?? "").not.toContain("preview · #");
   });
 
-  it("pane 1 (mount default): the 'o browser' chip opens the REPO, never the selected issue", async () => {
+  it("pane 1 (mount default): the 'b browser' chip opens the REPO, never the selected issue", async () => {
     let repoOpens = 0;
     let issueOpens = 0;
     const client = {
