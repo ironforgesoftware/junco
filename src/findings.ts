@@ -7,6 +7,7 @@
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { extractLastFencedBlock, longestBacktickRun } from "./fences.js";
 
 export type Severity = "critical" | "high" | "medium" | "low";
 
@@ -132,36 +133,6 @@ export function sanitizeFindingText(s: string, max: number): string {
 }
 
 export const FINDINGS_FENCE = "junco-findings";
-
-// CommonMark fence-length-aware extraction of the LAST COMPLETE fenced block
-// tagged `fence`: opening line /^(`{3,})\s*<fence>\s*$/, closed by a line of
-// at least as many backticks (whitespace-trimmed). Returns the inner text, or
-// null when no complete block exists. Mirrors `extractFencedBlock` in
-// src/githubInbox.ts (the helper behind its `extractPlanBody`) — implemented
-// locally because that module owns the junco-ticket plan fence, this one owns
-// junco-findings.
-export function extractLastFencedBlock(text: string, fence: string): string | null {
-  const lines = text.split("\n");
-  const openRe = new RegExp("^(`{3,})\\s*" + fence + "\\s*$");
-  let last: string | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const m = openRe.exec(lines[i]);
-    if (!m) continue;
-    const n = m[1].length;
-    const closeRe = new RegExp("^`{" + n + ",}\\s*$");
-    let close = -1;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (closeRe.test(lines[j])) {
-        close = j;
-        break;
-      }
-    }
-    if (close === -1) continue; // no closer → not a complete block; ignore
-    last = lines.slice(i + 1, close).join("\n");
-    i = close; // resume scanning after this block's closer
-  }
-  return last;
-}
 
 const MAX_TITLE = 300;
 const MAX_DESCRIPTION = 10_000;
@@ -429,20 +400,6 @@ export function buildIssueTitle(f: Finding): string {
 // number).
 const ISSUE_BODY_LIMIT = 60_000;
 const TRUNCATED_DESCRIPTION_CAP = 2_000;
-
-// Longest run of consecutive backticks at the START of any line in `text`.
-// Local copy of the identically-named helper in src/githubInbox.ts
-// (buildPlanComment's dynamic-fence precedent) — mirrored rather than
-// imported to keep this module import-cycle-free and I/O-free, same
-// rationale as extractLastFencedBlock above.
-function longestBacktickRun(text: string): number {
-  let max = 0;
-  for (const line of text.split("\n")) {
-    const m = /^(`+)/.exec(line);
-    if (m && m[1].length > max) max = m[1].length;
-  }
-  return max;
-}
 
 function renderIssueBody(
   f: Finding,
