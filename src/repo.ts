@@ -4,11 +4,12 @@
  */
 
 import { existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { git, gh, GitOpError } from "./git.js";
 import { isAmend } from "./repoContext.js";
 import { log } from "./logging.js";
 import { nwoFromRemoteUrl } from "./githubInbox.js";
+import { isUnderAnyRoot } from "./repoTarget.js";
 import type { RepoContext } from "./repoContext.js";
 import type { Config } from "./types.js";
 
@@ -247,15 +248,10 @@ export async function validateRepoContext(
   // only target repos under one of those roots. The inbox is a code-execution
   // boundary — this caps where a hostile or fat-fingered ticket can point it.
   if (cfg.allowedRepoRoots.length > 0) {
-    const real = resolve(ctx.repo);
     // externalReposRoot is implicitly allowed: dispatch-managed clones must not
     // silently break under a locked-down allowed_repo_roots.
     const allowed = [...cfg.allowedRepoRoots, cfg.github.externalReposRoot];
-    const ok = allowed.some((root) => {
-      const r = resolve(root);
-      return real === r || real.startsWith(r + sep);
-    });
-    if (!ok) {
+    if (!isUnderAnyRoot(resolve(ctx.repo), allowed)) {
       throw new GitOpError(
         `repo ${ctx.repo} is outside [git].allowed_repo_roots — refusing to run this ticket`,
       );

@@ -16,25 +16,21 @@
  * overwrites the batch and converges (filing dedups author-scoped at file time).
  */
 
-import { statSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 import type { Config, Ticket, RunResult } from "./types.js";
-import type { SpendLedger } from "./spendLedger.js";
-import { queuePaths, expandHome } from "./config.js";
+import { queuePaths } from "./config.js";
 import { gh, git, runCmd, GitOpError, isNetworkError, describeError } from "./git.js";
-import {
-  runAgent,
-  makePiSessionFactory,
-  type AgentSessionLike,
-  type SessionOverrides,
-} from "./agent/session.js";
-import { runEnveloped } from "./agent/runEnvelope.js";
 import { emptyRunResult } from "./agent/runResult.js";
 import { finalize, type TerminalDirs } from "./finalize.js";
 import { isTransientFailure, requeueTicket } from "./requeue.js";
-import { READ_ONLY_TOOLS } from "./runOnce.js";
-import { nwoFromRemoteUrl } from "./githubInbox.js";
+import {
+  resolveRepoTarget,
+  syncIfExternal,
+  runReadOnlyRepoAgent,
+  type RepoAgentDeps,
+} from "./repoTarget.js";
 import { fetchFindingMarkers } from "./githubOutbox.js";
 import {
   parseAgentFindings,
@@ -44,30 +40,15 @@ import {
 } from "./findings.js";
 import { writePending, readPending, type PendingAssess, type FiledRecord } from "./assessReview.js";
 import { recordRun } from "./assessHistory.js";
-import { syncExternalClone } from "./externalRepo.js";
 import { log } from "./logging.js";
 
 const NPM_AUDIT_TIMEOUT = 180_000; // npm audit can be slow on a cold registry cache
 
-export interface AssessDeps {
+export interface AssessDeps extends RepoAgentDeps {
   ghFn?: typeof gh;
   gitFn?: typeof git;
   runCmdFn?: typeof runCmd;
-  sessionFactoryFor?: (
-    cfg: Config,
-    cwd: string,
-    overrides?: SessionOverrides,
-  ) => () => Promise<AgentSessionLike>;
-  abortSignal?: AbortSignal;
-  onProgress?: Parameters<typeof runAgent>[0]["onProgress"] extends infer T ? T : never;
-  /** Guard-decision hook (nudge/kill) for the /health guard counters (#37). */
-  onGuardDecision?: Parameters<typeof runAgent>[0]["onGuardDecision"];
   nowFn?: () => Date;
-  /** Per-day spend ledger (Phase-3 Task 4), peer of prFlow/runOnce's
-   * RunDeps.spend: the assess agent run's resolved `usage.costUsd` is
-   * recorded here immediately after it completes, mirroring the Q&A/PR-flow
-   * pattern. Optional: absent (CLI one-shot, tests) is a no-op. */
-  spend?: Pick<SpendLedger, "recordUsd">;
 }
 
 export interface AssessFlowResult {
@@ -174,68 +155,13 @@ export async function runAssessFlow(
     };
   };
 
-  // --- Phase 1: Target resolution + containment. Mirror resolveQaCwd's
-  // containment semantics (runOnce.ts) EXACTLY — including the
-  // "empty allowedRepoRoots ⇒ anywhere" rule — but a violation is a phase
-  // error here rather than a fall-back to the default cwd. ---
-  const repoRaw = ticket.frontmatter.repo;
-  if (typeof repoRaw !== "string") {
-    return finalizeAssess(null, "assess: ticket has no repo path");
-  }
-  const repoPath = resolve(expandHome(repoRaw));
-  let isDir = false;
-  try {
-    isDir = statSync(repoPath).isDirectory();
-  } catch {
-    isDir = false;
-  }
-  if (!isDir) {
-    return finalizeAssess(null, `assess: repo path is not a directory: ${repoPath}`);
-  }
-  if (cfg.allowedRepoRoots.length > 0) {
-    const ok = cfg.allowedRepoRoots.some((root) => {
-      const r = resolve(expandHome(root));
-      return repoPath === r || repoPath.startsWith(r + sep);
-    });
-    if (!ok) {
-      return finalizeAssess(null, `assess: repo path not permitted: ${repoPath}`);
-    }
-  }
-
-  // --- Phase 2: nwo. Without a parseable GitHub origin the run cannot file
-  // issues anywhere, so this is fatal. ---
-  let nwo: string;
-  try {
-    const remote = await gitFn(cfg, ["remote", "get-url", "origin"], { cwd: repoPath });
-    const parsed = nwoFromRemoteUrl(remote.stdout.trim());
-    if (!parsed) {
-      return finalizeAssess(null, "assess: origin remote is not a parseable GitHub repo");
-    }
-    nwo = parsed;
-    recordNwo = parsed;
-  } catch (e) {
-    return finalizeAssess(null, `assess: could not read origin remote — ${describeError(e)}`);
-  }
-
-  // --- Phase 2b: External detection (path-based). A managed clone lives under
-  // cfg.github.externalReposRoot; the operator's OWNED checkouts never do. This
-  // single boolean gates both the freshness sync below and the parked batch's
-  // `external`/`autoPlan` flags. ---
-  const externalRoot = resolve(expandHome(cfg.github.externalReposRoot));
-  const external = repoPath === externalRoot || repoPath.startsWith(externalRoot + sep);
-
-  // --- Phase 2c: Freshness sync — EXTERNAL clones ONLY. Junco owns these
-  // clones, so a fetch + hard-reset to upstream's default branch is safe and
-  // makes the audit reflect live upstream, not the provisioned snapshot. NEVER
-  // run this on an owned checkout (it would blow away the operator's tree). A
-  // failure is a recorded warning, not fatal — we audit the current tree. ---
-  if (external) {
-    try {
-      await syncExternalClone(cfg, repoPath, { gitFn });
-    } catch (e) {
-      warnings.push(`could not sync external clone to upstream default: ${describeError(e)}`);
-    }
-  }
+  // --- Phase 1–2: Target resolution + containment + nwo (repoTarget.ts,
+  // shared with analyzeFlow). ---
+  const resolved = await resolveRepoTarget(cfg, ticket.frontmatter.repo, "assess", gitFn);
+  if (!resolved.ok) return finalizeAssess(null, resolved.error);
+  const { repoPath, nwo, external } = resolved.target;
+  recordNwo = nwo;
+  await syncIfExternal(cfg, resolved.target, gitFn, warnings);
 
   // --- Phase 3: Dependency scan (never fatal). npm audit exits NONZERO when
   // vulns exist, hence check:false; parse stdout regardless of exit code. A
@@ -254,39 +180,8 @@ export async function runAssessFlow(
     warnings.push(`npm audit did not run: ${describeError(e)}`);
   }
 
-  // --- Phase 4: Agent audit. Mirror the Q&A agent block in runOnce.ts's
-  // `executeClaimed`:
-  // read-only tool default, cwd = repoPath, supervisor gated the same way,
-  // same transcript convention, timeout from the ticket, abortSignal threaded.
-  // `readOnly` (#346): repoPath is the operator's live checkout, so the sandbox
-  // keeps scratch as the only writable root whatever `tools:` the ticket names. ---
-  const assessTools = ticket.tools ?? cfg.tools.filter((t) => READ_ONLY_TOOLS.has(t));
-  const assessCfg: Config = { ...cfg, tools: assessTools };
-  const factory = (deps.sessionFactoryFor ?? makePiSessionFactory)(assessCfg, repoPath, {
-    readOnly: true,
-  });
-  // Spend is recorded immediately by the envelope, BEFORE any requeue/finalize
-  // branching below — mirrors runOnce.ts's Q&A wire and prFlow's main-session
-  // record: the dollars were spent regardless of what the ticket does next
-  // (Phase-3 Task 3). No-op when deps.spend is absent or costUsd is
-  // 0/non-finite.
-  const agentResult = await runEnveloped(
-    assessCfg,
-    {
-      ticketId: ticket.id,
-      flow: "assess",
-      body: ticket.body,
-      cwd: repoPath,
-      timeoutMs: ticket.timeoutSeconds * 1000,
-    },
-    {
-      createSession: factory,
-      abortSignal: deps.abortSignal,
-      onProgress: deps.onProgress,
-      onGuardDecision: deps.onGuardDecision,
-      spend: deps.spend,
-    },
-  );
+  // --- Phase 4: Agent audit (repoTarget.ts, shared with analyzeFlow). ---
+  const agentResult = await runReadOnlyRepoAgent(cfg, ticket, "assess", repoPath, deps);
 
   // Transient failure → requeue with backoff (mirror `executeClaimed`'s
   // transient-failure requeue in runOnce.ts). Safe because nothing has been

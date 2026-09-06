@@ -1,5 +1,5 @@
-import { readFileSync, statSync, realpathSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Config, RunResult, Ticket, Usage } from "./types.js";
 import { PRIORITY_RANK } from "./types.js";
 import { queuePaths, expandHome } from "./config.js";
@@ -17,16 +17,10 @@ import { deriveRepoContext } from "./repoContext.js";
 import { runPrFlow } from "./prFlow.js";
 import { appendTaskRecord, type TaskRecord } from "./taskHistory.js";
 import { fulfillIssueRequest } from "./githubIssueRequest.js";
-// NOTE: assessFlow.ts imports READ_ONLY_TOOLS from this module, so this
-// import creates a module cycle. Runtime-safe: both bindings are only
-// dereferenced inside function bodies (executeClaimed / runAssessFlow),
-// never during module evaluation — see assess-task-7-report.md for the
-// full evaluation-order rationale.
 import { runAssessFlow } from "./assessFlow.js";
-// analyzeFlow.ts imports READ_ONLY_TOOLS from this module — same runtime-safe
-// cycle as assessFlow above (both bindings are only dereferenced inside
-// function bodies, never during module evaluation).
 import { runAnalyzeFlow } from "./analyzeFlow.js";
+import { READ_ONLY_TOOLS } from "./readOnlyTools.js";
+import { isDirectory, isUnderAnyRoot } from "./repoTarget.js";
 import { isTransientFailure, requeueTicket, requeueTicketKeepBudget } from "./requeue.js";
 import { classifyProviderFailure, GATE_CLASSES, isRoutableFailure } from "./providerFailure.js";
 import type { ProviderGate } from "./providerGate.js";
@@ -39,12 +33,6 @@ import {
 } from "./reporter.js";
 import { log, withTicket } from "./logging.js";
 import { metrics } from "./metrics.js";
-
-// A Q&A ticket has no worktree and shouldn't mutate the filesystem; give its
-// session a read-only tool subset so a stray write/bash/edit can't corrupt the
-// claimed ticket sitting in processing/ (PR-flow tickets in a worktree get the
-// full set in a later milestone).
-export const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
 /**
  * Canonicalize a lexically-resolved repo path into a stable per-repo
@@ -239,28 +227,16 @@ export async function claimNextTask(
 function resolveQaCwd(t: Ticket, cfg: Config, fallback: string): string {
   if (!t.workdir) return fallback;
   const wd = resolve(expandHome(t.workdir));
-  let isDir = false;
-  try {
-    isDir = statSync(wd).isDirectory();
-  } catch {
-    isDir = false;
-  }
-  if (!isDir) {
+  if (!isDirectory(wd)) {
     log.warn("workdir missing or not a directory; using default cwd", { id: t.id, workdir: wd });
     return fallback;
   }
-  if (cfg.allowedRepoRoots.length > 0) {
-    const ok = cfg.allowedRepoRoots.some((root) => {
-      const r = resolve(expandHome(root));
-      return wd === r || wd.startsWith(r + sep);
+  if (cfg.allowedRepoRoots.length > 0 && !isUnderAnyRoot(wd, cfg.allowedRepoRoots)) {
+    log.warn("workdir outside allowed_repo_roots; using default cwd", {
+      id: t.id,
+      workdir: wd,
     });
-    if (!ok) {
-      log.warn("workdir outside allowed_repo_roots; using default cwd", {
-        id: t.id,
-        workdir: wd,
-      });
-      return fallback;
-    }
+    return fallback;
   }
   return wd;
 }
