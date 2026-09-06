@@ -114,6 +114,11 @@ interface ChatConfig {
   submitTool: boolean;
   /** How long a proposed submit waits for the operator's y/n before expiring. */
   confirmTimeoutMinutes: number;
+  /** Split inline `<think>…</think>` spans into thinking deltas (spec 2026-09-06 §2.1).
+   *  `auto`: unless the turn already streamed native thinking_delta. */
+  thinkTags: "auto" | "on" | "off";
+  /** Ink frame cap for the dashboard while chat streams (spec 2026-09-06 D8). */
+  maxFps: number;
 }
 /** Runtime-resolved bot auth context (src/ghAuth.ts) — attached to Config by
  * entrypoints, never parsed from config.json. Carried by cfg into git()/gh()

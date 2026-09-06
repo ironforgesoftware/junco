@@ -1256,6 +1256,8 @@ describe("chat section (spec 2026-09-01 §10)", () => {
       turnTimeoutMinutes: null,
       submitTool: true,
       confirmTimeoutMinutes: 10,
+      thinkTags: "auto",
+      maxFps: 60,
     });
   });
   it("explicit values parse through", () => {
@@ -1268,6 +1270,8 @@ describe("chat section (spec 2026-09-01 §10)", () => {
           turnTimeoutMinutes: 5,
           submitTool: false,
           confirmTimeoutMinutes: 3,
+          thinkTags: "off",
+          maxFps: 30,
         },
       }),
     );
@@ -1278,6 +1282,21 @@ describe("chat section (spec 2026-09-01 §10)", () => {
       turnTimeoutMinutes: 5,
       submitTool: false,
       confirmTimeoutMinutes: 3,
+      thinkTags: "off",
+      maxFps: 30,
     });
+  });
+  it("streaming knobs: thinkTags defaults auto, maxFps defaults 60 and is bounded (spec 2026-09-06 §5)", () => {
+    const cfg = loadConfig(writeJson({}));
+    expect(cfg.chat.thinkTags).toBe("auto");
+    expect(cfg.chat.maxFps).toBe(60);
+    expect(loadConfig(writeJson({ chat: { thinkTags: "off", maxFps: 30 } })).chat).toMatchObject({
+      thinkTags: "off",
+      maxFps: 30,
+    });
+    expect(() => loadConfig(writeJson({ chat: { maxFps: 5 } }))).toThrow();
+    expect(() => loadConfig(writeJson({ chat: { maxFps: 121 } }))).toThrow();
+    expect(() => loadConfig(writeJson({ chat: { maxFps: 30.5 } }))).toThrow();
+    expect(() => loadConfig(writeJson({ chat: { thinkTags: "maybe" } }))).toThrow();
   });
 });
