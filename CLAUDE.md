@@ -11,7 +11,7 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 | Action    | Command                                                                                                                            |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Build     | `npm run build` (tsc → `dist/`; compiles `src/` only — `tests/` are excluded)                                                      |
-| All tests | `npm test` (vitest, ~4,600 tests, ~40s)                                                                                            |
+| All tests | `npm test` (vitest, ~5,200 tests, ~40s)                                                                                            |
 | One file  | `npx vitest run tests/<name>.test.ts`                                                                                              |
 | E2E       | `npm run test:e2e` (needs `dist/`; spawns the built CLI in a sandboxed HOME against a scripted model stub; not part of `npm test`) |
 | Coverage  | `npx vitest run --coverage` (global + per-glob floors in `vitest.config.ts`; CI job `coverage`)                                    |
@@ -20,13 +20,13 @@ Junco is a TypeScript (Node ≥ 22.19, ESM/NodeNext, strict) task-queue worker t
 | Format    | `npm run format` / `npm run format:check` (prettier, 100 cols)                                                                     |
 | Full gate | `npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run test:e2e`                       |
 
-Run the full gate before claiming work done; CI (`.github/workflows/quality-gate.yml`) runs it on PRs and pushes to main across ubuntu/macos × node 22.19/24, plus a packaged-CLI smoke test; the aggregate `quality-gate` check is required to merge.
+Run the full gate before claiming work done; CI (`.github/workflows/quality-gate.yml`) runs it on PRs and pushes to main across ubuntu/macos × node 22.19/24, plus a packaged-CLI smoke test and an advisory node 26 canary outside the aggregate; the aggregate `quality-gate` check is required to merge.
 
 **Exit-code trap:** piping vitest into `grep`/`tail` makes the pipeline exit with the _filter's_ status — a failing suite reads as green. Capture it explicitly: `npx vitest run > /tmp/out 2>&1; echo "exit: $?"`.
 
 ## Architecture in one breath
 
-Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic rename into `processing/`, executed (PR flow in a git worktree, or read-only Q&A), then finalized into `done/`/`failed/` — or **requeued** to `inbox/` with `retry_count`/`not_before` backoff on transient failures and crash recovery. `prFlow.ts` is the 14-phase PR orchestrator; `daemon.ts` owns the serial poll loop plus `runScheduler` (`max_concurrent > 1`, same-repo tickets always serialize); `agent/` wires the Pi SDK, the four loop guards, and the supervisor (nudge → escalate → kill; guard kills and timeouts are SOFT aborts whose commits get salvaged into a PR). Module map: `ARCHITECTURE.md`.
+Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic rename into `processing/`, executed (PR flow in a git worktree, or read-only Q&A), then finalized into `done/`/`failed/` — or **requeued** to `inbox/` with `retry_count`/`not_before` backoff on transient failures and crash recovery. `prFlow.ts` is the 14-phase PR orchestrator; `daemon.ts` owns the serial poll loop plus `runScheduler` (`worker.maxConcurrent > 1`, same-repo tickets always serialize); `agent/` wires the Pi SDK, the four loop guards, and the supervisor (nudge → escalate → kill; guard kills and timeouts are SOFT aborts whose commits get salvaged into a PR). Module map: `ARCHITECTURE.md`.
 
 ## Hard rules
 
@@ -35,11 +35,11 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 - **Every side effect goes behind an injectable `deps` seam** (see any module's `*Deps` interface). Tests never touch the network or a real model: fake `gh` is an inline-generated shell script, fake sessions implement `AgentSessionLike`.
 - Dependencies are **exact-pinned** (no `^`): add with `npm install --save-exact <pkg>`.
 - Many comments cite `worker.py` line numbers (Python-port provenance) or SDK `.d.ts` locations — they are verification evidence, not noise. Keep them true or delete them with the code they describe; never let them drift.
-- `/chat/*` on the health server is loopback-only by construction (`chatRoutes.ts` checks the socket address and rejects any `Origin` header) — `healthHost` never widens it. The chat session's tools are the Q&A read-only subset plus exactly one action tool, `junco_submit` (spec `docs/superpowers/specs/2026-09-03-chat-submit-tool-design.md`), which submits an already-parked draft only after the operator answers `y` on the dashboard card — never widen beyond that; drafts pass a frontmatter allowlist (`fenceExtract.ts`) — never let model output set `repo:`/`tools:`/`network:`/`workdir:`.
+- `/chat/*` on the health server is loopback-only by construction (`chatRoutes.ts` checks the socket address, rejects any `Origin` header, and allows only loopback `Host` values plus the configured `healthHost`) — `healthHost` never widens it. The chat session's tools are the Q&A read-only subset plus exactly one action tool, `junco_submit` (spec `docs/superpowers/specs/2026-09-03-chat-submit-tool-design.md`), which submits an already-parked draft only after the operator answers `y` on the dashboard card — never widen beyond that; drafts pass a frontmatter allowlist (`fenceExtract.ts`) — never let model output set `repo:`/`tools:`/`network:`/`workdir:`.
 
 ## Testing gotchas (each of these has burned a session)
 
-- **Adding a `Config` field? Add it to `tests/helpers/config.ts` and nowhere else** — it is the only full `Config` literal in the suite (it replaced 19). `makeConfig` returns `Config` unasserted, so a new field is a type error _there_, not a silent drift across fixtures. Its `ConfigSeams` are the ten keys whose value changes what a test exercises (`dataDir`, `queueRoot`, `worktreeRoot`, `tools`, and the six feature toggles); put the field there instead if callers must state it. `ghBin` defaults to `/nonexistent/gh` on purpose — a test needing `gh` passes its own fake. Shared fixtures: `tests/helpers/{config,gitHarness,fakeSession,until,forkHarness,localFixtures}`.
+- **Adding a `Config` field? Add it to `tests/helpers/config.ts` and nowhere else** — it is the only full `Config` literal in the suite (it replaced 19). `makeConfig` returns `Config` unasserted, so a new field is a type error _there_, not a silent drift across fixtures. Its `ConfigSeams` are the ten keys whose value changes what a test exercises (`dataDir`, `queueRoot`, `worktreeRoot`, `tools`, and the six feature toggles); put the field there instead if callers must state it. `ghBin` defaults to `/nonexistent/gh` on purpose — a test needing `gh` passes its own fake. Shared fixtures live in `tests/helpers/` (`config`, `gitHarness`, `forkHarness`, `fakeSession`, `fakeSpawn`, `ghScript`, `until`, `localFixtures`, `dashFixtures`, `inkFrames`, `renderWide`, `transcriptFixtures`, `unwatchTree`).
 - Scheduler/daemon tests: an instant-resolve fake `sleep` starves the macrotask queue (the loop spins on microtasks; `setTimeout`-based fake tasks never settle → OOM). Yield a real tick: `await new Promise((r) => setTimeout(r, 1))`.
 - Repo/PR/worktree tests run a real git harness (bare remote + clone in tmp); they need `git config user.*` (CI sets it globally).
 - Prettier may reformat files between your read and your edit; re-read before editing and run `npx prettier --write` on touched files before committing.
@@ -51,7 +51,7 @@ Tickets (Markdown + YAML frontmatter) land in `inbox/`, are claimed by atomic re
 
 ## The repo doubles as the maintainer's live runtime — do not disturb
 
-`config.json` (repo root), `tickets/`, `worktrees/`, `launchd.out/err` are **live, gitignored runtime state**, and a launchd daemon may be running from this checkout. Never delete, modify, or `git clean` them; never run `junco start` here; never submit test tickets to the real inbox. Config resolution is HOME-anchored (`~/.junco/config.json`, legacy XDG fallback) — cwd never matters, but running the CLI with your real `HOME` still picks up the **live** config, so sandbox every smoke test:
+`config.json` (repo root), `tickets/`, `launchd.out/err` (and `worktrees/` under a legacy `git.worktreeRoot` override) are **live, gitignored runtime state**, and a launchd daemon may be running from this checkout. Never delete, modify, or `git clean` them; never run `junco start` here; never submit test tickets to the real inbox. Config resolution is HOME-anchored (`~/.junco/config.json`, legacy XDG fallback) — cwd never matters, but running the CLI with your real `HOME` still picks up the **live** config, so sandbox every smoke test:
 
 ```bash
 SB=$(mktemp -d) && cd "$SB" && HOME="$SB" XDG_CONFIG_HOME="$SB/.config" \
@@ -63,8 +63,8 @@ dashboard's `/chat/*`) talk to whatever is listening on the default `healthPort`
 daemon, unless the sandbox config sets another one.
 
 Parallel dev sessions: `claude -w <topic>` from the repo root, or a manual worktree under the
-gitignored `worktrees-manual/` — **never under `worktrees/`** (daemon-owned; junco force-removes
-paths there). The main checkout is the daemon's build home — park it on `main`, do feature work in
+gitignored `worktrees-manual/` — **never under the daemon's worktree root** (`<dataDir>/cache/worktrees`
+by default, or a legacy `worktrees/`; junco prunes and force-removes paths there). The main checkout is the daemon's build home — park it on `main`, do feature work in
 worktrees. Survey open PRs/branches before designing, and merge `origin/main` into multi-task
 branches between tasks — a collision found mid-plan is a course correction; found at PR time it is
 a semantic merge. Details: `docs/parallel-sessions.md`.
@@ -78,7 +78,7 @@ a semantic merge. Details: `docs/parallel-sessions.md`.
 ## Git & release
 
 - Branch `feat/<topic>` off `main`; conventional commits (`feat:`, `fix:`, `refactor:`, `chore:`, optional scope); suite green at every commit.
-- **No AI attribution, ever:** no `Co-Authored-By: Claude` trailers, no "Generated with Claude Code" lines. Subagent-driven commits auto-append the trailer — amend it away before finishing.
+- **No AI attribution, ever:** no `Co-Authored-By: Claude` trailers, no "Generated with Claude Code" lines. `.claude/settings.json` enforces it (`attribution.commit`/`pr` empty, `sessionUrl: false`); if a trailer still appears, the setting was bypassed — amend it away before finishing.
 - **Release HOLD (absolute):** never push, tag, `gh release create`, or publish without the maintainer's explicit, per-release approval — generic approval of the work does not cover release actions. Once approved, the flow is: bump `package.json` + `CHANGELOG.md` (Keep a Changelog) via PR → quality gate green → merge → annotated tag `vX.Y.Z` → `gh release create vX.Y.Z` (this triggers `.github/workflows/publish.yml` → npm publish via OIDC trusted publishing with provenance (no NPM_TOKEN)) → verify with `npm view @ironforgesoftware/junco version`. `publish.yml` checks out the TAG — a gate-blocking fix after tagging means delete release+tag, fix, re-tag, re-release (harmless while nothing reached npm).
 - **Pre-tag doc checklist** (each item is a drift the 2026-09 sweep found already shipped): diff `USAGE` in `src/cli.ts` against the README command table and the `docs/operations.md` CLI table; confirm every new `ConfigSchema` top-level key has a `docs/configuration.md` heading; add the new version to the link-reference block at the bottom of `CHANGELOG.md` and repoint `[Unreleased]` at it (`tests/docsChangelog.test.ts` pins the block to the headings and `package.json`; `tests/docsOperationsCli.test.ts` pins the operations table).
 - The npm package ships only the `files` allowlist (`dist`, `templates`, `skills`, `examples`, README/CHANGELOG/LICENSE). Everything that ships is **stack-agnostic**: no personal-setup strings in wizard text, templates, README, or the `junco-dispatch` skill; user-visible runtime text says "inference endpoint", never a specific server.

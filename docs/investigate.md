@@ -79,7 +79,7 @@ The command only resolves the target and submits the ticket. The actual investig
 
 ### `junco investigate review [<id>]` — list / preview drafts
 
-The same review can also be done without leaving the dashboard: press `v` there to open the in-dashboard review view, which lists comment drafts alongside pending audit batches; `enter` previews a draft, `f`/`enter` posts it, `x` discards it.
+The same review can also be done without leaving the dashboard: press `v` there to open the in-dashboard review view, which lists comment drafts alongside pending audit batches; `enter` previews a draft, `f`/`enter` posts it, `D` discards it (shift-guarded, with a confirm).
 
 ```bash
 junco investigate review              # list every pending draft

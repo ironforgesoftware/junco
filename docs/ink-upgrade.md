@@ -7,11 +7,11 @@ internals. Before merging any ink version bump, walk this list.
 
 Hit-region rects for mouse targets are computed by walking `yogaNode` on ink's
 DOM elements — the only module touching that internal
-(`src/tui/mouseRegions.ts`). `tests/tuiMouseRegions.test.tsx` fails loudly if
+(`src/tui/mouseRegions.ts`). `tests/tuiMouseRegions.test.ts` fails loudly if
 the shape changes.
 
 **On a bump:** run the mouse suites
-(`npx vitest run tests/tuiMouseRegions.test.tsx tests/tuiMouseApp.test.tsx`),
+(`npx vitest run tests/tuiMouseRegions.test.ts tests/tuiMouse.test.ts tests/tuiMouseApp.test.tsx`),
 then verify click/hover/wheel in a real terminal (`junco dashboard`): rail
 clicks, footer chips, LOCAL body rows, wheel in lists and the daemon panel.
 

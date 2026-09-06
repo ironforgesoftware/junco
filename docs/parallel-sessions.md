@@ -17,7 +17,7 @@ test runs in one session can't touch the daemon's build or another session's fil
 From the main checkout, let the harness manage the worktree:
 
 ```bash
-cd ~/junco && claude -w <topic>        # add --tmux for an iTerm2 tmux session
+cd <repo root> && claude -w <topic>    # add --tmux for an iTerm2 tmux session
 ```
 
 Launching from `~/junco` keeps the session's project identity (auto-memory, project settings) on
@@ -29,7 +29,7 @@ does the same thing.
 `worktrees-manual/` is gitignored for exactly this purpose:
 
 ```bash
-cd ~/junco
+cd <repo root>
 git worktree add worktrees-manual/<topic> -b feat/<topic>
 cd worktrees-manual/<topic> && npm ci
 claude
@@ -40,10 +40,12 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
 
 ## Rules
 
-- **Never place dev worktrees under `worktrees/`.** That directory is the daemon's
-  `git.worktreeRoot`; junco creates and force-removes per-ticket worktrees there
-  (`src/worktree.ts`). Anywhere else is safe — junco's cleanup is strictly path-scoped to
-  `<worktreeRoot>/<ticket-slug>`.
+- **Never place dev worktrees under the daemon's worktree root.** That is
+  `<dataDir>/cache/worktrees` by default (a legacy `git.worktreeRoot` override, e.g. the repo's
+  `worktrees/`, moves it); junco creates per-ticket worktrees at
+  `<worktreeRoot>/<repo>-<hash>/<ticket-slug>` and `pruneStaleWorktrees` force-deletes any
+  `*.old-<timestamp>` directory one or two levels below the root (`src/worktree.ts`). Anywhere
+  else is safe.
 - **One branch per worktree**, `feat/<topic>` off `main` (git refuses to check out the same
   branch twice anyway).
 - **`npm ci` per worktree.** Dependencies are exact-pinned; `node_modules/` and `dist/` are
@@ -61,7 +63,7 @@ identity — junco project auto-memory won't load. Prefer Pattern A when that ma
   config — never run `junco start` or submit test tickets from a worktree. Always sandbox with an
   isolated HOME / XDG_CONFIG_HOME as CLAUDE.md shows.
 - **Full gate per branch** before PR: `npm run lint && npm run format:check && npm run typecheck
-&& npm run build && npm test`.
+&& npm run build && npm test && npm run test:e2e`.
 - **Keep sessions off each other's subsystems.** Two sessions editing the same module trade the
   serialization you removed for rebase conflicts. Split work by module boundaries
   (see ARCHITECTURE.md's module map).

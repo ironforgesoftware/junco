@@ -9,7 +9,7 @@
 ```bash
 npm install          # install dependencies
 npm run build        # tsc -p tsconfig.json → dist/
-npm test             # run the full vitest suite (~4,600 tests, ~40 s)
+npm test             # run the full vitest suite (~5,200 tests, ~40 s)
 npm run test:e2e     # end-to-end: the built CLI in a sandboxed HOME against a scripted model stub (needs dist/)
 npm run test:watch   # re-run on file changes
 ```
@@ -89,7 +89,7 @@ The frontmatter schema in `ticketSchema.ts` is the **stable public contract** �
 
 ## Testing expectations
 
-- Test files live under `tests/` and mirror the `src/` layout (e.g. `src/queue.ts` → `tests/queue.test.ts`).
+- Test files live flat under `tests/`, named after the module (`src/queue.ts` → `tests/queue.test.ts`, `src/agent/guards.ts` → `tests/guards.test.ts`); only `e2e/`, `fixtures/`, and `helpers/` are subdirectories.
 - Use **vitest**. Run the full [quality gate](#quality-gate) before submitting a PR; the suite must be green.
 - Unit tests: inject fakes for all I/O. No real model calls, no real HTTP, no real timers.
 - Integration tests (PR flow): use the real git harness pattern already in the suite; do not introduce real network calls.

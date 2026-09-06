@@ -85,9 +85,10 @@ The config surface is additive and off by default:
   inside the worktree — the agent's own commits and Junco's `commitLeftovers` sweep alike —
   authors as the bot, while your host git identity is never touched.
 - **The `git.ts` auth seam.** `runCmd` accepts an `env` option merged over `process.env`; `gh()`
-  injects `GH_CONFIG_DIR` whenever the resolved config carries a bot identity (and clears
+  injects `GH_CONFIG_DIR` whenever the resolved config carries a bot identity (clears
   `GH_TOKEN`/`GITHUB_TOKEN`, which gh would otherwise prefer over the `GH_CONFIG_DIR`-stored
-  login), and `git()` does the same plus pins a credential helper for remote operations
+  login, and sets `GIT_TERMINAL_PROMPT=0` so a broken bot credential fails fast instead of
+  hanging on a prompt), and `git()` does the same plus pins a credential helper for remote operations
   (`-c credential.helper=` to clear any inherited helper, then
   `-c credential.helper=!<gh> auth git-credential`) so pushes and fetches authenticate as the bot
   regardless of your own global gitconfig. This is applied uniformly and is harmless on local-only
@@ -170,7 +171,7 @@ unwatched repo the same way, classifying the bot's access before touching anythi
 | Private, no push access                                           | **blocked** | Fails loud before cloning anything. With the bot account enabled, the error names the fix — `junco auth grant <owner/repo>` (or the SSO guidance above, if that's the cause); with it disabled, you get a plain access-denied message, since there's no bot to grant. Nothing is added to the watchlist.                                                                                                                                               |
 
 If an auto-onboarded repo isn't one you meant junco to watch permanently, unwatch it from
-the dashboard (`x` on the repo) or remove its entry from `<dataDir>/watchlist.json`
+the dashboard (`U` on the repo — shift-guarded, with a confirm) or remove its entry from `<dataDir>/watchlist.json`
 by hand.
 
 ## Doctor

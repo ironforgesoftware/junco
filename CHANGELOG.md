@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The dashboard's repo-detail overlay no longer answers a raw `o` with the browser: the derived keymap's `b` already ran ahead of it, so `o` was an undocumented alias that contradicted the key table; `docs/dashboard.md`'s three remaining `o`-opens-the-browser paragraphs now say `b` (#492, #501).
+- Documentation accuracy sweep against 0.13.0's code: README's dashboard key legend and CLI table (eight subcommands were missing), the sandbox's `auto` backend degrading rather than failing closed, the per-repo worktree path, the `/health` body, the `/chat/*` Host check, the audit fingerprint's 20-line bucket, dashboard keys in the audit/investigate/github-mode/bot-account guides (`a` add repo, `U` unwatch, `D` discard), the apply-ticket `patch_no_amend` rule, and the ARCHITECTURE prose that still described pre-#498–#500 module shapes.
+
+### Internal
+
+- Behaviour-preserving consolidation: dead exports and stale re-exports removed (#497); the fenced-block parsers share one `fences.ts` (#498); the assess/analyze repo-target preamble lives in `repoTarget.ts` and the read-only tool set in `readOnlyTools.ts`, which also removes the `runOnce` ↔ flow import cycle (#499); the GitHub issue-comment and transcript-target helpers share `githubComment.ts`/`transcriptTarget.ts`, with six smaller two-copy helpers folded likewise (#500). `.claude/settings.json` now disables Claude Code commit and PR attribution.
+- The `node_modules` symlink #497 committed by accident is untracked again and `.gitignore` ignores a symlink at that path too (#502).
+
 ## [0.13.0] - 2026-09-04
 
 ### Added
