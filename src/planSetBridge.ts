@@ -38,7 +38,9 @@ import {
 } from "./planSets.js";
 import { log } from "./logging.js";
 import { gh, GitOpError, describeError, GH_TIMEOUT_MS } from "./git.js";
-import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
+import { guardOrQueue, postIssueComment, type OutboxScope } from "./githubComment.js";
+
+const PLAN_SET_SCOPE: OutboxScope = { source: "bridge", prefix: "plan-set maintenance" };
 
 /** How long after close a plan-set record keeps being probed for plan-comment
  * edits. Past this, the sweep skips it entirely — the supersede path is for
@@ -156,54 +158,6 @@ export interface MaintainPlanSetsDeps {
   /** Used by trySupersede's fan-out loop in place of the hard `submitTicket`
    * import. Defaults to the real `submitTicket`. */
   submitFn?: typeof submitTicket;
-}
-
-/** Outbox-aware guard: on a network-shaped failure, `fn`'s side effect is
- * parked in the durable outbox (`op`) instead of being lost; any other
- * failure keeps the old best-effort contract — warn and swallow, since the
- * next sweep re-derives and retries state from GitHub reality. Local copy of
- * githubReport.ts's/githubInbox.ts's guardOrQueue idiom (never import their
- * internals — this module has no standing context to hang it off of). */
-async function guardOrQueue(
-  cfg: Config,
-  label: string,
-  id: string,
-  op: OutboxOp,
-  fn: () => Promise<void>,
-): Promise<void> {
-  try {
-    await tryOrEnqueue(cfg, "bridge", op, fn);
-  } catch (e) {
-    log.warn(`plan-set maintenance: ${label} failed (issue state on GitHub may be stale)`, {
-      id,
-      error: describeError(e),
-    });
-  }
-}
-
-/** Post a single issue comment via `gh issue comment --body-file`, embedding
- * the outbox idempotency marker so a lost-ack replay is deduped on the next
- * flush (#132) — same tempfile + withCommentMarker shape as
- * githubInbox.ts's postIssueComment / githubReport.ts's postComment, kept as
- * its own small local copy per the no-cross-import convention above. */
-async function postSetComment(
-  cfg: Config,
-  nwo: string,
-  issueNumber: number,
-  body: string,
-  ghFn: typeof gh,
-): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "junco-ghc-"));
-  const file = join(dir, "comment.md");
-  writeFileSync(file, withCommentMarker(nwo, issueNumber, body), "utf8");
-  try {
-    await ghFn(cfg, ["issue", "comment", String(issueNumber), "--repo", nwo, "--body-file", file], {
-      timeoutMs: GH_TIMEOUT_MS,
-      retryNetwork: true,
-    });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 /**
@@ -378,6 +332,7 @@ async function removeApprovedLabel(
 ): Promise<void> {
   await guardOrQueue(
     cfg,
+    PLAN_SET_SCOPE,
     label,
     `${g.nwo}#${g.issue}`,
     { kind: "labels", nwo: g.nwo, issue: g.issue, add: [], remove: [ll.approved] },
@@ -604,10 +559,11 @@ async function trySupersede(
     const failId = `${g.nwo}#${g.issue}`;
     await guardOrQueue(
       cfg,
+      PLAN_SET_SCOPE,
       "supersede compile-failure comment",
       failId,
       { kind: "comment", nwo: g.nwo, issue: g.issue, body: failureBody },
-      () => postSetComment(cfg, g.nwo, g.issue, failureBody, ghFn),
+      () => postIssueComment(cfg, g.nwo, g.issue, failureBody, ghFn),
     );
     // Bound re-entry: without removing `approved` (in requireApproval mode)
     // and stamping lastFailedHash (in BOTH modes), this exact candidate would
@@ -805,10 +761,11 @@ export async function maintainPlanSets(
       const degradedBody = buildDegradedComment(record, state);
       await guardOrQueue(
         cfg,
+        PLAN_SET_SCOPE,
         "degraded comment",
         failId,
         { kind: "comment", nwo: g.nwo, issue: g.issue, body: degradedBody },
-        () => postSetComment(cfg, g.nwo, g.issue, degradedBody, ghFn),
+        () => postIssueComment(cfg, g.nwo, g.issue, degradedBody, ghFn),
       );
       record.degradedPosted = true;
       changed = true;
@@ -820,6 +777,7 @@ export async function maintainPlanSets(
       const labelId = `${g.nwo}#${g.issue}`;
       await guardOrQueue(
         cfg,
+        PLAN_SET_SCOPE,
         "label swap",
         labelId,
         { kind: "labels", nwo: g.nwo, issue: g.issue, add: [desiredLabel], remove: [removeLabel] },

@@ -7,9 +7,7 @@
  * local done//failed/ and the PR itself are the source of truth.
  */
 
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { TERMINAL_DONE_STATUSES, type Config, type Ticket, type TicketGithub } from "./types.js";
 import type { TicketReporter, TicketOutcome } from "./reporter.js";
 import {
@@ -20,10 +18,16 @@ import {
   COMMENT_LIMIT,
   PLAN_SET_FENCE,
 } from "./githubInbox.js";
-import { gh, describeError, GH_TIMEOUT_MS } from "./git.js";
+import { gh, GH_TIMEOUT_MS } from "./git.js";
 import { sanitizeFindingText } from "./findings.js";
-import { log } from "./logging.js";
-import { tryOrEnqueue, withCommentMarker, type OutboxOp } from "./githubOutbox.js";
+import type { OutboxOp } from "./githubOutbox.js";
+import {
+  guardOrQueue as guardOutboxOp,
+  postIssueComment,
+  type OutboxScope,
+} from "./githubComment.js";
+
+const REPORTER_SCOPE: OutboxScope = { source: "reporter", prefix: "github reporter" };
 import { dataTreePaths } from "./dataTree.js";
 import { transcriptPathFor } from "./slug.js";
 
@@ -134,41 +138,10 @@ export function makeGithubReporter(cfg: Config, deps: GithubReporterDeps = {}): 
       { timeoutMs: GH_TIMEOUT_MS, retryNetwork: true },
     );
   };
-  // Outbox-aware guard: on a network-shaped failure, fn's side effect is
-  // parked in the durable outbox (op) instead of being lost; any other
-  // failure keeps the old best-effort contract — warn and swallow, since a
-  // stale label/lost comment is cosmetic.
-  const guardOrQueue = async (
-    label: string,
-    id: string,
-    op: OutboxOp,
-    fn: () => Promise<void>,
-  ): Promise<void> => {
-    try {
-      await tryOrEnqueue(cfg, "reporter", op, fn);
-    } catch (e) {
-      log.warn(`github reporter: ${label} failed (issue state on GitHub may be stale)`, {
-        id,
-        error: describeError(e),
-      });
-    }
-  };
-  const postComment = async (g: TicketGithub, body: string): Promise<void> => {
-    const dir = mkdtempSync(join(tmpdir(), "junco-ghc-"));
-    const file = join(dir, "comment.md");
-    // Embed the outbox idempotency marker (withCommentMarker) so a lost-ack
-    // replay of the queued comment op is deduped by the next flush and never
-    // double-posts this comment (#132).
-    writeFileSync(file, withCommentMarker(g.nwo, g.issue, body), "utf8");
-    try {
-      await ghFn(cfg, ["issue", "comment", String(g.issue), "--repo", g.nwo, "--body-file", file], {
-        timeoutMs: GH_TIMEOUT_MS,
-        retryNetwork: true,
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  };
+  const guardOrQueue = (label: string, id: string, op: OutboxOp, fn: () => Promise<void>) =>
+    guardOutboxOp(cfg, REPORTER_SCOPE, label, id, op, fn);
+  const postComment = (g: TicketGithub, body: string) =>
+    postIssueComment(cfg, g.nwo, g.issue, body, ghFn);
 
   return {
     async onStart(t: Ticket): Promise<void> {

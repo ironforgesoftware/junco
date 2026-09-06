@@ -15,8 +15,8 @@
 import { parseArgs } from "node:util";
 import { join } from "node:path";
 import type { Config } from "./types.js";
-import { transcriptPathFor } from "./slug.js";
 import { dataTreePaths } from "./dataTree.js";
+import { transcriptPathForTarget, readTranscriptOrExplain } from "./transcriptTarget.js";
 import { chatSlug } from "./chat/chatKey.js";
 import { summarizeTranscript, toolCallIds } from "./transcriptSummary.js";
 import { renderTranscriptRows, MIN_WIDTH } from "./transcriptRender.js";
@@ -34,10 +34,6 @@ export interface TranscriptCmdDeps {
 const USAGE =
   "Usage: junco transcript <ticket-id | path.jsonl> | --chat <owner/repo | path> " +
   "[--thinking] [--tools] [--width N] [--json]";
-
-function isPathLike(target: string): boolean {
-  return target.endsWith(".jsonl") || target.includes("/");
-}
 
 export async function runTranscriptCmd(argv: string[], deps: TranscriptCmdDeps): Promise<number> {
   let parsed: ReturnType<typeof parseArgs>;
@@ -99,27 +95,20 @@ export async function runTranscriptCmd(argv: string[], deps: TranscriptCmdDeps):
   } else if (target === undefined) {
     deps.stdout(USAGE);
     return 2;
-  } else if (isPathLike(target)) {
-    transcriptPath = target;
   } else {
-    if (!cfg) {
-      deps.stdout(
-        `junco transcript: no config found — cannot resolve ticket id '${target}' to a transcript ` +
-          "path; pass a direct .jsonl path instead",
-      );
-      return 1;
-    }
-    transcriptPath = transcriptPathFor(dataTreePaths(cfg).transcripts, target);
+    const p = transcriptPathForTarget("transcript", target, cfg, deps.stdout);
+    if (p === null) return 1;
+    transcriptPath = p;
   }
 
-  let content: string;
-  try {
-    content = deps.readFile(transcriptPath);
-  } catch {
-    const hint = cfg ? ` (transcripts dir: ${dataTreePaths(cfg).transcripts})` : "";
-    deps.stdout(`junco transcript: no transcript at ${transcriptPath}${hint}`);
-    return 1;
-  }
+  const content = readTranscriptOrExplain(
+    "transcript",
+    transcriptPath,
+    cfg,
+    deps.readFile,
+    deps.stdout,
+  );
+  if (content === null) return 1;
 
   const summary = summarizeTranscript(content.split("\n"));
   if (values.json) {

@@ -37,6 +37,7 @@ import { acquirePidfileLock } from "./pidfileLock.js";
 import { lifecycleLabels } from "./githubInbox.js";
 import { FINDING_LABEL_SPECS, extractFindingMarkers } from "./findings.js";
 import { upgradeQueuedFiledRecord } from "./assessReview.js";
+import { listJsonNames } from "./reviewStore.js";
 import { dataTreePaths } from "./dataTree.js";
 import { queuePaths } from "./config.js";
 import { findTicketFile } from "./ticketDeps.js";
@@ -156,25 +157,16 @@ export function enqueueOp(
 export function listOpsFrom(dir: string, deps: OutboxDeps = {}): StoredOp[] {
   const readdirFn = deps.readdirFn ?? readdirSync;
   const readFileFn = deps.readFileFn ?? ((p: string) => readFileSync(p, "utf8"));
-  let names: string[];
-  try {
-    names = readdirFn(dir);
-  } catch {
-    return []; // dir never created yet
-  }
-  return names
-    .filter((n) => n.endsWith(".json"))
-    .sort()
-    .flatMap((n) => {
-      const path = join(dir, n);
-      try {
-        const parsed = JSON.parse(readFileFn(path)) as Omit<StoredOp, "path">;
-        return [{ ...parsed, id: basename(n, ".json"), path }];
-      } catch (e) {
-        log.warn("skipping unparseable outbox op", { path, error: String(e) });
-        return [];
-      }
-    });
+  return listJsonNames(dir, readdirFn).flatMap((n) => {
+    const path = join(dir, n);
+    try {
+      const parsed = JSON.parse(readFileFn(path)) as Omit<StoredOp, "path">;
+      return [{ ...parsed, id: basename(n, ".json"), path }];
+    } catch (e) {
+      log.warn("skipping unparseable outbox op", { path, error: String(e) });
+      return [];
+    }
+  });
 }
 
 export function listOps(cfg: Config, deps: OutboxDeps = {}): StoredOp[] {

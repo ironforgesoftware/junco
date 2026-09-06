@@ -7,12 +7,13 @@
  * the relaunch on new code.
  */
 import { existsSync } from "node:fs";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { Config } from "./types.js";
 import { loadConfig } from "./config.js";
 import { readLockHolder, workerLockPath } from "./lock.js";
 import { runRestartCommand, discoverService } from "./restartCmd.js";
+import { defaultExec as execProbe } from "./execProbe.js";
 import {
   checkForUpdate,
   getSelfPackage,
@@ -58,17 +59,8 @@ function defaultRun(cmd: string, args: string[]): Promise<number> {
   });
 }
 
-function defaultCapture(
-  cmd: string,
-  args: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((res) => {
-    execFile(cmd, args, { timeout: 15_000 }, (err, stdout, stderr) => {
-      const code = err ? ((err as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1) : 0;
-      res({ code, stdout: String(stdout), stderr: String(stderr) });
-    });
-  });
-}
+/** execProbe's capture with the longer timeout git/plutil/npm probes need. */
+const defaultCapture = (cmd: string, args: string[]) => execProbe(cmd, args, { timeoutMs: 15_000 });
 
 export async function runUpdateCommand(
   configPath: string,

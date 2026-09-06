@@ -56,3 +56,27 @@ export function claim(src: string, processingDir: string, deps: ClaimDeps = {}):
     throw e;
   }
 }
+
+/** mtimes (ms) of the `.md` files directly in `dir`; an unreadable dir or
+ * file is skipped. Shared by `junco status` and the dashboard's queue stats
+ * (both CLI-side and TUI-side callers, so it lives here rather than in
+ * either). */
+export function mdMtimes(
+  dir: string,
+  readdirFn: (d: string) => string[],
+  statFn: (p: string) => { mtimeMs: number },
+): number[] {
+  try {
+    return readdirFn(dir)
+      .filter((n) => n.endsWith(".md"))
+      .flatMap((n) => {
+        try {
+          return [statFn(join(dir, n)).mtimeMs];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    return [];
+  }
+}

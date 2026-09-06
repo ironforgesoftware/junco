@@ -462,6 +462,20 @@ export async function runPrFlow(
   // the crashed run's stale tip.
   let resumeRemoteSha: string | null = null;
 
+  /** A GitOpError in a pre-run phase (validate, worktree setup): finalize the
+   * ticket to failed/ with the phase message — no agent ran, so the RunResult
+   * is the zeroed one. */
+  const preCheckFailure = (msg: string): PrFlowResult => {
+    log.error(`pr-flow pre-check failed for ${claimedPath}: ${msg}`);
+    const r = emptyRunResult(msg);
+    return flowResult(
+      finalizePr(claimedPath, r, prOutcome, { dirs, phaseError: msg }),
+      prOutcome,
+      r,
+      msg,
+    );
+  };
+
   // --- Phase 1: Validate (no worktree yet — lint can reject before setup). ---
   let nwo: string;
   try {
@@ -484,15 +498,7 @@ export async function runPrFlow(
     }
   } catch (e) {
     if (!(e instanceof GitOpError)) throw e;
-    const msg = e.message;
-    log.error(`pr-flow pre-check failed for ${claimedPath}: ${msg}`);
-    const r = emptyRunResult(msg);
-    return flowResult(
-      finalizePr(claimedPath, r, prOutcome, { dirs, phaseError: msg }),
-      prOutcome,
-      r,
-      msg,
-    );
+    return preCheckFailure(e.message);
   }
 
   // --- Phase 2: Plan-lint gate. ---
@@ -538,15 +544,7 @@ export async function runPrFlow(
     preRunHead = await currentHeadSha(cfg, wtPath);
   } catch (e) {
     if (!(e instanceof GitOpError)) throw e;
-    const msg = e.message;
-    log.error(`pr-flow pre-check failed for ${claimedPath}: ${msg}`);
-    const r = emptyRunResult(msg);
-    return flowResult(
-      finalizePr(claimedPath, r, prOutcome, { dirs, phaseError: msg }),
-      prOutcome,
-      r,
-      msg,
-    );
+    return preCheckFailure(e.message);
   }
 
   // --- Phase 4: Apply a patch series, or run the agent in the worktree. ---

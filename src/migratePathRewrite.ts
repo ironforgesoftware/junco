@@ -387,20 +387,32 @@ function hasStringRepoPath(v: unknown): v is RecordWithRepoPath {
  * unrecognized/malformed shape) is quietly skipped rather than warned:
  * every real record in these dirs has one, so this only guards against
  * something this phase has no business touching. */
+/** Entries of `dir`: null when the dir is absent (silently skipped — never
+ * created is a normal state) or unreadable on an EXISTING dir (permissions,
+ * etc. — warned as `<label> <dir>: <error>`). */
+function listDirOrWarn(
+  dir: string,
+  label: string,
+  deps: RewriteDeps,
+  report: RewriteReport,
+): string[] | null {
+  if (!deps.existsFn(dir)) return null;
+  try {
+    return deps.readdirFn(dir);
+  } catch (e) {
+    report.warnings.push(`${label} ${dir}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
 function rewriteJsonRepoPathRecords(
   dir: string,
   map: PathPrefix[],
   deps: RewriteDeps,
   report: RewriteReport,
 ): void {
-  if (!deps.existsFn(dir)) return;
-  let names: string[];
-  try {
-    names = deps.readdirFn(dir);
-  } catch (e) {
-    report.warnings.push(`record dir ${dir}: ${e instanceof Error ? e.message : String(e)}`);
-    return;
-  }
+  const names = listDirOrWarn(dir, "record dir", deps, report);
+  if (names === null) return;
 
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
@@ -468,14 +480,8 @@ function rewriteOutboxOpsInDir(
   deps: RewriteDeps,
   report: RewriteReport,
 ): void {
-  if (!deps.existsFn(dir)) return;
-  let names: string[];
-  try {
-    names = deps.readdirFn(dir);
-  } catch (e) {
-    report.warnings.push(`outbox dir ${dir}: ${e instanceof Error ? e.message : String(e)}`);
-    return;
-  }
+  const names = listDirOrWarn(dir, "outbox dir", deps, report);
+  if (names === null) return;
 
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
@@ -531,14 +537,8 @@ function rewriteTicketsInDir(
   deps: RewriteDeps,
   report: RewriteReport,
 ): void {
-  if (!deps.existsFn(dir)) return;
-  let names: string[];
-  try {
-    names = deps.readdirFn(dir);
-  } catch (e) {
-    report.warnings.push(`queue dir ${dir}: ${e instanceof Error ? e.message : String(e)}`);
-    return;
-  }
+  const names = listDirOrWarn(dir, "queue dir", deps, report);
+  if (names === null) return;
 
   for (const name of names) {
     if (!name.endsWith(".md")) continue;

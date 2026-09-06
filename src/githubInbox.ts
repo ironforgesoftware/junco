@@ -8,10 +8,8 @@
  * plus the PR are the source of truth.
  */
 
-import { readdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Config, GithubRepoMapping } from "./types.js";
 import { gh, git, describeError, GH_TIMEOUT_MS } from "./git.js";
 import { queuePaths } from "./config.js";
@@ -20,19 +18,15 @@ import { log } from "./logging.js";
 import { lastFencedBlockRange, longestBacktickRun } from "./fences.js";
 import { PLAN_FENCE, buildPlannerPrompt } from "./planPrompt.js";
 import { resolveWatchedRepos } from "./watchlist.js";
-import {
-  flushOutbox,
-  tryOrEnqueue,
-  withCommentMarker,
-  type FlushResult,
-  type OutboxOp,
-} from "./githubOutbox.js";
+import { flushOutbox, type FlushResult } from "./githubOutbox.js";
 // NOTE: planSetBridge.ts imports githubTicketId/lifecycleLabels from this
 // module, so this import creates a module cycle. Runtime-safe: both bindings
 // are only dereferenced inside function bodies (pollGithubInbox /
-// dispatchPlanSet / maintainPlanSets), never during module evaluation — same
-// pattern as runOnce.ts's assessFlow/analyzeFlow cycles.
+// dispatchPlanSet / maintainPlanSets), never during module evaluation.
 import { dispatchPlanSet, maintainPlanSets } from "./planSetBridge.js";
+import { guardOrQueue, postIssueComment, type OutboxScope } from "./githubComment.js";
+
+const BRIDGE_SCOPE: OutboxScope = { source: "bridge", prefix: "github bridge" };
 
 /** GitHub's hard cap is 65,536 chars; leave headroom for the truncation note.
  * Lives here (not githubReport.ts) so buildPlanComment can share it without an
@@ -798,60 +792,6 @@ export function buildExecutionTicket(
   return { id, content: fm.join("\n") + "\n\n" + planBody + "\n" };
 }
 
-/** Post a single issue comment via `gh issue comment --body-file` (avoids
- * shell-escaping the body). Mirrors githubReport.ts's postComment tempfile
- * pattern — including embedding the outbox idempotency marker
- * (withCommentMarker) in the posted body, so a lost-ack replay of a queued
- * comment op is deduped by the next flush and never double-posts (#132) —
- * a standalone door-side helper since githubInbox.ts has no reporter-style
- * closure to hang a comment poster off of. Used by the plan-set dispatch
- * door to post a compile-failure summary. `body` is the RAW (unmarked) text:
- * callers pass the same raw body to the paired outbox `{ kind: "comment" }`
- * op, so tryOrEnqueue/flush compute the identical content-derived marker on
- * both the live path and a queued replay. */
-async function postIssueComment(
-  cfg: Config,
-  nwo: string,
-  issueNumber: number,
-  body: string,
-  ghFn: typeof gh,
-): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "junco-ghc-"));
-  const file = join(dir, "comment.md");
-  writeFileSync(file, withCommentMarker(nwo, issueNumber, body), "utf8");
-  try {
-    await ghFn(cfg, ["issue", "comment", String(issueNumber), "--repo", nwo, "--body-file", file], {
-      timeoutMs: GH_TIMEOUT_MS,
-      retryNetwork: true,
-    });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/** Outbox-aware guard: on a network-shaped failure, `fn`'s side effect is
- * parked in the durable outbox (`op`) instead of being lost; any other
- * failure keeps the old best-effort contract — warn and swallow, since the
- * next sweep re-derives and retries state from GitHub reality. Local copy of
- * githubReport.ts's guardOrQueue idiom (never import reporter internals —
- * this module has no standing reporter-callback context to hang it off of). */
-async function guardOrQueue(
-  cfg: Config,
-  label: string,
-  id: string,
-  op: OutboxOp,
-  fn: () => Promise<void>,
-): Promise<void> {
-  try {
-    await tryOrEnqueue(cfg, "bridge", op, fn);
-  } catch (e) {
-    log.warn(`github bridge: ${label} failed (issue state on GitHub may be stale)`, {
-      id,
-      error: describeError(e),
-    });
-  }
-}
-
 /** argv for one `gh issue edit` label swap. Owns the approval-cleanup
  * invariant (#357): a swap that takes an issue OUT of `plan-ready` also
  * strips `approved` in requireApproval mode — a lingering approval label is
@@ -993,6 +933,7 @@ async function processIssue(
           // cheap to lose to an outbox queue/warn-and-swallow.
           await guardOrQueue(
             cfg,
+            BRIDGE_SCOPE,
             "plan set failure labels",
             failId,
             {
@@ -1015,6 +956,7 @@ async function processIssue(
           );
           await guardOrQueue(
             cfg,
+            BRIDGE_SCOPE,
             "plan set failure comment",
             failId,
             { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },
@@ -1161,6 +1103,7 @@ async function processIssue(
       const failId = `${repo.nwo}#${issue.number}`;
       await guardOrQueue(
         cfg,
+        BRIDGE_SCOPE,
         "issue plan set failure labels",
         failId,
         {
@@ -1180,6 +1123,7 @@ async function processIssue(
       );
       await guardOrQueue(
         cfg,
+        BRIDGE_SCOPE,
         "issue plan set failure comment",
         failId,
         { kind: "comment", nwo: repo.nwo, issue: issue.number, body: failureComment },

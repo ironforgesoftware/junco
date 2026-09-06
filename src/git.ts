@@ -258,7 +258,6 @@ export async function git(
   args: string[],
   opts?: GitCallOpts,
 ): Promise<CmdResult> {
-  const { retryNetwork, retryBaseDelayMs, ...runOpts } = opts ?? {};
   // Bot mode: pin gh's credential helper (clearing any inherited helpers) so
   // remote ops authenticate as the bot regardless of the user's global
   // gitconfig. Harmless on local-only ops. `-c` flags are global — they must
@@ -266,12 +265,21 @@ export async function git(
   const authArgs = cfg.ghAuth
     ? ["-c", "credential.helper=", "-c", `credential.helper=${cfg.ghAuth.credentialHelper}`]
     : [];
-  const argv = [cfg.gitBin, ...authArgs, ...args];
-  const label = `git ${args[0] ?? ""}`;
-  const finalOpts = cfg.ghAuth
-    ? { ...runOpts, env: { ...ghAuthEnv(cfg.ghAuth), ...runOpts.env } }
-    : runOpts;
+  return runAuthed(`git ${args[0] ?? ""}`, [cfg.gitBin, ...authArgs, ...args], cfg.ghAuth, opts);
+}
 
+/** The shared tail of `git`/`gh`: layer the bot-auth env (when any) under the
+ * caller's, then run once or under `runWithRetry` per `retryNetwork`. */
+function runAuthed(
+  label: string,
+  argv: string[],
+  ghAuth: GhAuthContext | undefined,
+  opts: GitCallOpts | undefined,
+): Promise<CmdResult> {
+  const { retryNetwork, retryBaseDelayMs, ...runOpts } = opts ?? {};
+  const finalOpts = ghAuth
+    ? { ...runOpts, env: { ...ghAuthEnv(ghAuth), ...runOpts.env } }
+    : runOpts;
   if (retryNetwork) {
     return runWithRetry(label, () => runCmd(argv, finalOpts), { baseDelayMs: retryBaseDelayMs });
   }
@@ -287,15 +295,5 @@ export async function gh(
   args: string[],
   opts?: GitCallOpts,
 ): Promise<CmdResult> {
-  const { retryNetwork, retryBaseDelayMs, ...runOpts } = opts ?? {};
-  const argv = [cfg.ghBin, ...args];
-  const label = `gh ${args.slice(0, 2).join(" ")}`;
-  const finalOpts = cfg.ghAuth
-    ? { ...runOpts, env: { ...ghAuthEnv(cfg.ghAuth), ...runOpts.env } }
-    : runOpts;
-
-  if (retryNetwork) {
-    return runWithRetry(label, () => runCmd(argv, finalOpts), { baseDelayMs: retryBaseDelayMs });
-  }
-  return runCmd(argv, finalOpts);
+  return runAuthed(`gh ${args.slice(0, 2).join(" ")}`, [cfg.ghBin, ...args], cfg.ghAuth, opts);
 }
