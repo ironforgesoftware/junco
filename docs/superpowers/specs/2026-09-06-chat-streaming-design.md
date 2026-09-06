@@ -1,7 +1,7 @@
 # Dashboard Chat Streaming — Design
 
 Date: 2026-09-06
-Status: draft (for refinement); plan: `docs/superpowers/plans/2026-09-06-chat-streaming.md` (to follow)
+Status: draft (for refinement); plan: `docs/superpowers/plans/2026-09-06-chat-streaming.md`
 Builds on: `2026-09-01-dashboard-chat-design.md` (transport, records, session ownership),
 `2026-09-03-chat-submit-tool-design.md` (the `junco_submit` card), `2026-09-01-ink-render-perf-design.md`
 (Ink render tiers).
