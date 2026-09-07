@@ -11,22 +11,108 @@
 import type { ChatCommandRecord, GuardDecisionRecord } from "./agent/transcriptSchema.js";
 import { commandAnchor, draftAnchor } from "./transcriptSummary.js";
 import type { RunSummary, ToolResultSummary, TranscriptSummary } from "./transcriptSummary.js";
+import { splitThinkingText } from "./chat/thinkSplitter.js";
+import { parseBlocks } from "./tui/markdown/blocks.js";
+import { renderMarkdown, type HighlightFn, type MdCache } from "./tui/markdown/render.js";
 
-export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success";
+/** `thinking`: the model's reasoning body (spec 2026-09-06 §4.3 — dim italic). */
+export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success" | "thinking";
 
 export interface TranscriptRow {
   text: string;
   tone?: RowTone;
-  /** Set on a tool-call row: the toolCallId the cursor/expand key targets. */
+  /** Set on a tool-call row: the toolCallId the cursor/expand key targets.
+   * A thinking header carries `thinkingAnchor(run, turn)` — not part of the
+   * cursor's index space (transcriptSummary.ts's anchorIds/toolCallIds), it
+   * only names the row. */
   anchor?: string;
 }
 
 export interface RenderOpts {
   /** Wrap/truncate column; values below MIN_WIDTH are raised to it. */
   width: number;
-  showThinking: boolean;
+  /** Spec 2026-09-06 §4.3: every finished turn's thinking block is a collapsed
+   * `▸ thinking` header unless pinned (`t`), which opens them all. */
+  pinned: boolean;
   /** toolCallIds whose result body renders inline under the tool row. */
   expanded: ReadonlySet<string>;
+  /** Spec 2026-09-06 §4.2: typeset a chat answer (`flow: "chat"` runs ONLY —
+   * ticket transcripts stay plain, spec Non-goals) as markdown via
+   * `chatAnswerRows`. Off by default so `junco transcript` prints the prose
+   * as recorded; the dashboard's chat view (FinishedTurns.tsx) turns it on. */
+  markdown?: boolean;
+  /** Code-fence highlighter for `markdown`; null/absent shows raw fences. */
+  highlight?: HighlightFn | null;
+  /** Per-turn `MdCache`s keyed by `mdCacheKey(runIdx, turnIdx)`, owned by
+   * the caller across renders so an unchanged finished turn is not re-typeset
+   * on every call. Entries are dropped/revalidated by renderMarkdown itself
+   * (width/highlighter/source mismatch); a stale key is simply never read. */
+  mdCache?: Map<string, MdCache>;
+}
+
+/** The chat answer's label — the other side of the prompt's `you:`. */
+export const CHAT_LABEL = "junco: ";
+
+/** Key of a finished turn's markdown cache in `RenderOpts.mdCache`. */
+export const mdCacheKey = (runIdx: number, turnIdx: number): string => `md:${runIdx}:${turnIdx}`;
+
+/**
+ * A chat answer typeset as markdown (spec 2026-09-06 §4.2), shared by the
+ * finished turns (renderTranscriptRows, `markdown: true`) and the live turn
+ * (tui/components/LiveTurn.tsx) so nothing jumps when the turn ends.
+ *
+ * The label rides on the first row in tone accent, like the prompt's `you:`:
+ * when the answer opens with a paragraph the label is wrapped WITH it (the
+ * label becomes part of the markdown source, so the first row fits the width
+ * like every other — and the cache, keyed on source, stays stable); when it
+ * opens with a heading, list, fence, quote, rule or table the label stands
+ * alone on its row, since those rows carry their own shape. Every following
+ * row is indented two columns under the label. Fence rows arrive from the
+ * highlighter with ANSI and are never truncated here (TranscriptBody clips
+ * them with `wrap="truncate-end"`).
+ *
+ * `[]` for a whitespace-only answer: a tool-only turn carries "" and gets no
+ * bare label row.
+ */
+export function chatAnswerRows(
+  text: string,
+  width: number,
+  md: { highlight: HighlightFn | null; cache?: MdCache },
+): TranscriptRow[] {
+  const body = text.trim();
+  if (body === "") return [];
+  // The first block's kind is decided by its first line (blocks.ts has no
+  // setext headings), so the whole text need not be parsed twice per frame.
+  const head = parseBlocks(body.split("\n", 1)[0] ?? "");
+  const first = head.closed[0] ?? head.open;
+  const labelled = first?.kind === "paragraph";
+  const rows = renderMarkdown(labelled ? `${CHAT_LABEL}${body}` : body, {
+    width: Math.max(MIN_WIDTH, width) - 2,
+    highlight: md.highlight ?? undefined,
+    cache: md.cache,
+  });
+  const out: TranscriptRow[] = [];
+  if (!labelled) out.push({ text: CHAT_LABEL.trimEnd(), tone: "accent" });
+  rows.forEach((r, i) => {
+    if (labelled && i === 0) out.push({ text: r.text, tone: "accent" });
+    else if (r.text === "") out.push(r);
+    else out.push(indented(r));
+  });
+  return out;
+}
+
+/** A markdown row indented under the label — memoized on the row object, so
+ * a row the `MdCache` handed back unchanged maps to the SAME indented row and
+ * a memoized consumer sees the finished turn as unchanged. Weak: a row the
+ * cache dropped takes its indented twin with it. */
+const INDENTED = new WeakMap<TranscriptRow, TranscriptRow>();
+function indented(r: TranscriptRow): TranscriptRow {
+  let hit = INDENTED.get(r);
+  if (hit === undefined) {
+    hit = r.tone === undefined ? { text: `  ${r.text}` } : { text: `  ${r.text}`, tone: r.tone };
+    INDENTED.set(r, hit);
+  }
+  return hit;
 }
 
 export const TOOL_BODY_MAX_LINES = 400;
@@ -85,7 +171,7 @@ export function wrapText(text: string, width: number): string[] {
  * edges; `[]` for a block that is only whitespace. The summary keeps the block
  * raw, so `junco transcript --json` stays lossless.
  */
-function proseLines(block: string, width: number): string[] {
+export function proseLines(block: string, width: number): string[] {
   const prose = block.replace(/\n{3,}/g, "\n\n").trim();
   return prose === "" ? [] : wrapText(prose, width);
 }
@@ -96,12 +182,32 @@ function fmtK(n: number): string {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
 }
 
-function fmtDuration(ms: number): string {
+export function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m${String(s % 60).padStart(2, "0")}s`;
   return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** Anchor of the thinking header of turn `turnIdx` (TurnSummary.index) in the
+ * summary's `runIdx`-th run (0-based position in `runs`). */
+export const thinkingAnchor = (runIdx: number, turnIdx: number): string =>
+  `think:${runIdx}:${turnIdx}`;
+
+/**
+ * The thinking block's header row (spec 2026-09-06 §4.3), shared by the live
+ * turn (LiveTurn.tsx) and the finished turns below so the row does not change
+ * shape when the turn ends: `· thinking · 3s` while it streams, `▸ thinking ·
+ * 3s` folded, `▾ thinking · 3s` pinned open; the duration segment is dropped
+ * when `ms` is null (a finished turn whose duration is not knowable).
+ */
+export function fmtThinkingHeader(
+  state: "streaming" | "collapsed" | "pinned",
+  ms: number | null,
+): string {
+  const glyph = state === "streaming" ? "·" : state === "collapsed" ? "▸" : "▾";
+  return ms === null ? `${glyph} thinking` : `${glyph} thinking · ${fmtDuration(ms)}`;
 }
 
 /** HH:MM:SS (UTC, matching the log's ISO stamps); the raw string if unparsable. */
@@ -143,6 +249,105 @@ export function fmtToolResult(r: ToolResultSummary | null): string {
   if (r.isError) return truncate(`→ ✗ ${firstLine(r.text) || "error"}`, 60);
   if (r.lines === 0) return "→ empty";
   return `→ ${r.lines} line${r.lines === 1 ? "" : "s"}`;
+}
+
+/** Rows of streamed output a running card shows (spec 2026-09-06 §4.4: N = 6). */
+export const TOOL_TAIL_LINES = 6;
+
+/**
+ * A tool card's input: the live turn's tool block (chat/liveBlocks.ts) as is,
+ * or a finished `ToolCallSummary` lifted into the same shape (`output: ""`,
+ * `done` = has a result) — so the two render through ONE function and the
+ * card does not change shape when the turn ends.
+ */
+export interface ToolCardBlock {
+  id: string;
+  name: string;
+  args: unknown;
+  output: string;
+  result: string | null;
+  isError: boolean;
+  truncated: boolean;
+  done: boolean;
+}
+
+export interface ToolCardOpts {
+  width: number;
+  /** The operator's toggle for this id — a toggle AGAINST the card's default,
+   * which is closed for a result and OPEN for an error. */
+  expanded: boolean;
+  /** The running glyph: a spinner frame from the dashboard, null for a static
+   * surface (`junco transcript`, a ticket transcript's provisional turn) which
+   * prints `…`. Ignored once `done`. */
+  spinner: string | null;
+}
+
+/**
+ * One tool card (spec 2026-09-06 §4.4, D6), anchored on the tool-call id:
+ *
+ *     ▸ bash npm test  ⠋          running: header + the last TOOL_TAIL_LINES
+ *         line 4                    of `output`, dim (a `…` row first when
+ *         line 5                    the rolling cap dropped the head)
+ *     ▸ bash npm test  ✓          done, closed: one dim summary row
+ *         → 3 lines
+ *     ▸ bash npm test  ✗          done, open (an error is open by default):
+ *           ENOENT: nope            the result wrapped, capped at
+ *           …                       TOOL_BODY_MAX_LINES, `… (truncated)` when
+ *                                   the daemon cut the result
+ *
+ * The header is in tone `error` for an error; the call's argument summary is
+ * `fmtToolCall`'s, the summary row `fmtToolResult`'s — the same vocabulary the
+ * ticket transcript has always used.
+ */
+export function renderToolCard(b: ToolCardBlock, o: ToolCardOpts): TranscriptRow[] {
+  const width = Math.max(MIN_WIDTH, o.width);
+  const rows: TranscriptRow[] = [];
+  const push = (text: string, tone?: RowTone, anchor?: string): void => {
+    const row: TranscriptRow = { text: truncate(text, width) };
+    if (tone !== undefined) row.tone = tone;
+    if (anchor !== undefined) row.anchor = anchor;
+    rows.push(row);
+  };
+  const args: Record<string, unknown> =
+    typeof b.args === "object" && b.args !== null ? (b.args as Record<string, unknown>) : {};
+  const glyph = !b.done ? (o.spinner ?? "…") : b.isError ? "✗" : "✓";
+  // 2 (indent) + 2 (`▸ `) + call + 2 + 1 (glyph) ≤ width.
+  const call = fmtToolCall(b.name, args, Math.max(8, width - 7));
+  push(`  ▸ ${call}  ${glyph}`, b.isError ? "error" : undefined, b.id);
+  if (!b.done) {
+    // A static surface has no spinner to say "still running": keep the
+    // `→ …` row the ticket transcript has always printed for a call without
+    // a result. The dashboard's spinner says it, and the tail follows.
+    if (b.output === "") {
+      if (o.spinner === null) push(`    ${fmtToolResult(null)}`, "dim");
+      return rows;
+    }
+    const lines = b.output.split("\n");
+    if (lines.at(-1) === "") lines.pop(); // a trailing newline is not a blank line
+    if (b.truncated) push("    …", "dim");
+    for (const l of lines.slice(-TOOL_TAIL_LINES)) push(`    ${l}`, "dim");
+    return rows;
+  }
+  const open = o.expanded !== b.isError;
+  if (!open) {
+    const summary =
+      b.result === null
+        ? null
+        : {
+            text: b.result,
+            lines: b.result === "" ? 0 : b.result.split("\n").length,
+            isError: b.isError,
+          };
+    push(`    ${fmtToolResult(summary)}`, "dim");
+    return rows;
+  }
+  const body = b.result === null || b.result === "" ? ["(empty)"] : b.result.split("\n");
+  for (const raw of body.slice(0, TOOL_BODY_MAX_LINES))
+    for (const l of wrapText(raw, width - 6)) push(`      ${l}`, "dim");
+  if (body.length > TOOL_BODY_MAX_LINES)
+    push(`      … +${body.length - TOOL_BODY_MAX_LINES} more lines`, "dim");
+  if (b.truncated) push("      … (truncated)", "dim");
+  return rows;
 }
 
 /** Display-only rename for a run header's recorded flow id (RunSummary.flow,
@@ -245,40 +450,74 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
       const usage =
         turn.usage === null ? "" : ` · in ${fmtK(turn.usage.input)} out ${fmtK(turn.usage.output)}`;
       push(truncate(`turn ${turn.index + 1}${turn.provisional ? " ◐" : ""}${usage}`, width), "dim");
-      if (o.showThinking && turn.thinking !== null)
-        for (const l of proseLines(turn.thinking, width - 2)) push(l === "" ? "" : `  ${l}`, "dim");
-      if (turn.text !== null) {
+      // Spec 2026-09-06 §4.3 / §2.1 last paragraph: the persisted turn keeps
+      // its `<think>` tags (the splitter runs on the live stream only), so a
+      // tag-carrying text is split here, at render time, and the finished
+      // turn looks exactly like the live one did.
+      const split =
+        turn.thinking === null && turn.text !== null && turn.text.includes("<think>")
+          ? splitThinkingText(turn.text)
+          : null;
+      const thinking = split === null ? turn.thinking : split.thinking;
+      const text = split === null ? turn.text : split.text.trimStart();
+      if (thinking !== null) {
+        // A turn has no duration of its own; the run's is the block's only
+        // when the turn is the run's only turn.
+        const ms = run.turns.length === 1 ? (run.end?.durationMs ?? null) : null;
+        push(
+          `  ${fmtThinkingHeader(o.pinned ? "pinned" : "collapsed", ms)}`,
+          undefined,
+          thinkingAnchor(i, turn.index),
+        );
+        if (o.pinned)
+          for (const l of proseLines(thinking, width - 4))
+            push(l === "" ? "" : `    ${l}`, "thinking");
+      }
+      if (text !== null) {
         // A chat answer carries the other side's label, the way the prompt
         // carries `you:` — inline on the first line in the same tone, the
         // rest indented under it. The label is wrapped WITH the text so the
         // first row fits the width like every other; ticket transcripts have
         // no dialogue to label.
         // A tool-only turn carries "" (not null): no prose, so no label either.
-        const chat = run.flow === "chat" && turn.text.trim() !== "";
-        const lines = proseLines(chat ? `junco: ${turn.text.trim()}` : turn.text, width - 2);
-        lines.forEach((l, li) => {
-          if (chat && li === 0) push(l, "accent");
-          else push(l === "" ? "" : `  ${l}`);
-        });
-      }
-      for (const c of turn.toolCalls) {
-        const suffix = fmtToolResult(c.result);
-        push(
-          `  ▸ ${fmtToolCall(c.name, c.args, Math.max(8, width - 6 - suffix.length))}  ${suffix}`,
-          undefined,
-          c.id,
-        );
-        if (o.expanded.has(c.id) && c.result !== null) {
-          const body = c.result.text === "" ? ["(empty)"] : c.result.text.split("\n");
-          for (const raw of body.slice(0, TOOL_BODY_MAX_LINES))
-            for (const l of wrapText(raw, width - 6)) push(`      ${l}`, "dim");
-          if (body.length > TOOL_BODY_MAX_LINES)
-            push(
-              truncate(`      … +${body.length - TOOL_BODY_MAX_LINES} more lines`, width),
-              "dim",
-            );
+        const chat = run.flow === "chat" && text.trim() !== "";
+        if (chat && o.markdown) {
+          // Spec 2026-09-06 §4.2: the dashboard typesets the answer; the rows
+          // are pushed as built (fence rows carry ANSI — `truncate` counts
+          // escapes as columns and could cut one in half).
+          let cache = o.mdCache?.get(mdCacheKey(i, turn.index));
+          if (o.mdCache && cache === undefined) {
+            cache = { width: 0, highlight: undefined, entries: [] };
+            o.mdCache.set(mdCacheKey(i, turn.index), cache);
+          }
+          rows.push(...chatAnswerRows(text, width, { highlight: o.highlight ?? null, cache }));
+        } else {
+          const lines = proseLines(chat ? `${CHAT_LABEL}${text.trim()}` : text, width - 2);
+          lines.forEach((l, li) => {
+            if (chat && li === 0) push(l, "accent");
+            else push(l === "" ? "" : `  ${l}`);
+          });
         }
       }
+      // Spec 2026-09-06 §4.4: the same card the live turn showed, so nothing
+      // changes shape at turn end; a call without a result (a ticket
+      // transcript's provisional turn) is a static `…` card.
+      for (const c of turn.toolCalls)
+        rows.push(
+          ...renderToolCard(
+            {
+              id: c.id,
+              name: c.name,
+              args: c.args,
+              output: "",
+              result: c.result?.text ?? null,
+              isError: c.result?.isError ?? false,
+              truncated: false,
+              done: c.result !== null,
+            },
+            { width, expanded: o.expanded.has(c.id), spinner: null },
+          ),
+        );
       for (const g of run.guardDecisions) if (g.turnIndex === turn.index) guardRow(g);
     }
     for (const g of run.guardDecisions) if (g.turnIndex >= run.turns.length) guardRow(g);

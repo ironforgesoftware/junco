@@ -19,10 +19,15 @@ export function toneProps(tone: RowTone | undefined): {
   color?: string;
   dimColor?: boolean;
   bold?: boolean;
+  italic?: boolean;
 } {
   switch (tone) {
     case "dim":
       return { dimColor: true };
+    // Spec 2026-09-06 §4.3: reasoning is set apart from the answer, not
+    // merely dimmed like a tool body.
+    case "thinking":
+      return { dimColor: true, italic: true };
     case "accent":
       return { color: theme.accent };
     case "error":
@@ -38,8 +43,65 @@ export function toneProps(tone: RowTone | undefined): {
   }
 }
 
+/**
+ * The row list as a lazy accessor (spec 2026-09-06 §4.1). ChatView's rows are
+ * the finished turns (memoized on the summary alone) followed by the live
+ * turn's rows (rebuilt every flush); handing the body a row-count plus
+ * `at(i)` instead of a materialized array means a flush never copies the
+ * thousand finished rows to append a few live ones. `anchorRow(id)` replaces
+ * the old `rows.findIndex(r => r.anchor === id)` so the cursor's reveal need
+ * not scan the array either.
+ */
+export interface RowSource {
+  readonly length: number;
+  at(i: number): TranscriptRow;
+  /** Index of the FIRST row carrying `anchor === id`, or -1. */
+  anchorRow(id: string): number;
+}
+
+/**
+ * Anchor → first row index, memoized by the finished array's identity: the
+ * array is a `useMemo` product upstream, so the same object means the same
+ * rows, and the map is rebuilt exactly when the memo re-runs. A WeakMap so a
+ * discarded row list takes its index with it.
+ */
+const anchorIndexes = new WeakMap<TranscriptRow[], Map<string, number>>();
+
+function anchorIndex(rows: TranscriptRow[]): Map<string, number> {
+  let m = anchorIndexes.get(rows);
+  if (m === undefined) {
+    m = new Map();
+    rows.forEach((r, i) => {
+      if (r.anchor !== undefined && !m!.has(r.anchor)) m!.set(r.anchor, i);
+    });
+    anchorIndexes.set(rows, m);
+  }
+  return m;
+}
+
+/**
+ * `a` followed by `b`, copying nothing. Anchor lookup consults `a`'s memoized
+ * index, then scans `b` (the live turn — a handful of rows, rebuilt per
+ * frame, so indexing it would cost more than the scan).
+ */
+export function concatRows(a: TranscriptRow[], b: TranscriptRow[]): RowSource {
+  return {
+    length: a.length + b.length,
+    at: (i) => (i < a.length ? a[i] : b[i - a.length]) as TranscriptRow,
+    anchorRow: (id) => {
+      const hit = anchorIndex(a).get(id);
+      if (hit !== undefined) return hit;
+      const j = b.findIndex((r) => r.anchor === id);
+      return j < 0 ? -1 : a.length + j;
+    },
+  };
+}
+
+/** A single array as a `RowSource` — the adapter for callers with no live half. */
+export const arrayRows = (rows: TranscriptRow[]): RowSource => concatRows(rows, []);
+
 export interface TranscriptBodyProps {
-  rows: TranscriptRow[];
+  rows: RowSource;
   /** The cursor's index space (toolCallIds or anchorIds). */
   anchors: string[];
   cursor: number;
@@ -81,7 +143,7 @@ export function bodyWindow(
   >,
 ): { start: number; end: number; anchorId: string | undefined } {
   const anchorId = p.anchors[p.cursor];
-  const anchorRow = anchorId === undefined ? -1 : p.rows.findIndex((r) => r.anchor === anchorId);
+  const anchorRow = anchorId === undefined ? -1 : p.rows.anchorRow(anchorId);
   let start = p.follow
     ? maxScroll(p.rows.length, p.visible)
     : clampScroll(p.scroll, p.rows.length, p.visible);
@@ -110,16 +172,20 @@ export const TranscriptBody = React.memo(function TranscriptBody(
   return (
     <Box flexGrow={1}>
       <Box flexDirection="column" flexGrow={1} minWidth={0}>
-        {p.rows.slice(start, end).map((row, i) => {
+        {Array.from({ length: Math.max(0, end - start) }, (_, i) => {
+          const row = p.rows.at(start + i);
           const isAnchor = row.anchor !== undefined && row.anchor === anchorId;
           const idx = row.anchor === undefined ? -1 : p.anchors.indexOf(row.anchor);
+          // Only a row in the cursor's index space is pressable: a thinking
+          // header (transcriptRender.ts's thinkingAnchor) names its row but is
+          // not a cursor stop, and pressing it with idx -1 would move the
+          // cursor to the first anchor instead.
+          const pressable = idx >= 0;
           return (
             <ClickableBox
               key={start + i}
-              hoverBg={row.anchor !== undefined ? theme.hoverBg : undefined}
-              onPress={
-                row.anchor !== undefined && p.onRowPress ? () => p.onRowPress!(idx) : undefined
-              }
+              hoverBg={pressable ? theme.hoverBg : undefined}
+              onPress={pressable && p.onRowPress ? () => p.onRowPress!(idx) : undefined}
             >
               <Text
                 wrap="truncate-end"

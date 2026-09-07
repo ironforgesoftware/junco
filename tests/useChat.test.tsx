@@ -5,13 +5,16 @@ import { Text } from "ink";
 import { useChat, CHAT_RING } from "../src/tui/hooks/useChat.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
-import { anchorIds, commandAnchor } from "../src/transcriptSummary.js";
+import { anchorIds, commandAnchor, summarizeTranscript } from "../src/transcriptSummary.js";
 import { okv, stubClient } from "./helpers/localFixtures.js";
 import { until, wait } from "./helpers/until.js";
 import {
   chatCommand,
+  chatDelta,
   chatDraft,
+  chatPartial,
   chatPrompt,
+  chatTool,
   chatTurnAborted,
   chatTurnEnd,
   chatTurnStart,
@@ -121,12 +124,16 @@ function Probe({
   resubscribeMs?: number;
 }) {
   const aliveRef = React.useRef(true);
-  const api = useChat({ client, aliveRef, flushMs: 5, ringSize, resubscribeMs });
+  const api = useChat({ client, aliveRef, ringSize, resubscribeMs });
   onReady(api);
+  // The live turn as one line: text/thinking blocks by their text, tool
+  // blocks by `[name]`, in block order — the shape spec 2026-09-06 §3.1 keeps.
+  const live =
+    api.chat?.live?.blocks.map((b) => (b.kind === "tool" ? `[${b.name}]` : b.text)).join("|") ?? "";
   return (
     <Text>
       {api.chat
-        ? `${api.chat.connection}:${api.chat.streaming ? "streaming" : "idle"}:${api.chat.liveText}`
+        ? `${api.chat.connection}:${api.chat.streaming ? "streaming" : "idle"}:${live}`
         : "closed"}
     </Text>
   );
@@ -141,22 +148,14 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     await until(() => r.lastFrame()!.includes("live:idle"));
     c.push(10, metaLine({ ticketId: "acme__api" }));
     c.push(20, chatPrompt());
-    c.push(30, chatTurnStart());
-    c.push(
-      null,
-      JSON.stringify({
-        type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "beca" },
-      }),
-    );
-    c.push(
-      null,
-      JSON.stringify({
-        type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "use" },
-      }),
-    );
+    c.push(30, chatTurnStart({ turn: "t1" }));
+    c.push(null, chatDelta({ turn: "t1", seq: 1, delta: "beca" }));
+    c.push(null, chatDelta({ turn: "t1", seq: 2, delta: "use" }));
     await until(() => r.lastFrame()!.includes("live:streaming:because"));
+    expect(api.chat!.live!.turn).toBe("t1");
+    expect(api.chat!.live!.seq).toBe(2);
+    // A flush bumps `frame` — the memo key the live rows re-render on.
+    expect(api.chat!.frame).toBeGreaterThan(0);
     expect(api.chat!.summary!.runs[0]!.prompt).toBe("why is the build slow?");
     c.push(
       40,
@@ -164,7 +163,7 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     );
     c.push(50, chatTurnEnd());
     await until(() => r.lastFrame()!.includes("live:idle:"));
-    expect(api.chat!.liveText).toBe("");
+    expect(api.chat!.live).toBeNull();
     expect(api.chat!.lastOffset).toBe(50);
     expect(api.chat!.summary!.runs[0]!.end).not.toBeNull();
   });
@@ -414,7 +413,7 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     expect(api.chat).toBeNull();
   });
 
-  // Fix round 1 (MINOR 1): junco_chat_turn_aborted (liveText cleared,
+  // Fix round 1 (MINOR 1): junco_chat_turn_aborted (live turn cleared,
   // ||-combined with turn_end) and junco_chat_transcript_degraded (degraded:
   // true) were untested branches.
   it("turn_aborted clears live text/streaming; transcript_degraded sets degraded", async () => {
@@ -424,17 +423,14 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     api.openChat("acme/api");
     await until(() => api.chat?.connection === "live");
     c.push(10, chatTurnStart());
-    c.push(
-      null,
-      JSON.stringify({
-        type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "hi" },
-      }),
-    );
-    await until(() => api.chat!.liveText === "hi");
+    c.push(null, chatDelta({ seq: 1, delta: "hi" }));
+    await until(() => {
+      const b = api.chat!.live?.blocks[0];
+      return b?.kind === "text" && b.text === "hi";
+    });
     c.push(20, chatTurnAborted());
     await until(() => api.chat!.streaming === false);
-    expect(api.chat!.liveText).toBe("");
+    expect(api.chat!.live).toBeNull();
     // No fixture builder for this record — built inline per the review note.
     c.push(
       30,
@@ -444,6 +440,221 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
       }),
     );
     await until(() => api.chat!.degraded === true);
+  });
+
+  // Spec 2026-09-06 §3.2/§3.5: the live turn is a block list scoped to the
+  // turn id; a `junco_chat_partial` (sent first on subscribe) replaces it
+  // wholesale, and every delta already applied is dropped by `seq`.
+  describe("live turn (spec 2026-09-06 §3)", () => {
+    it("a partial replaces the live blocks, and a delta at or below the applied seq is dropped", async () => {
+      const c = makeClient();
+      let api!: ReturnType<typeof useChat>;
+      const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+      api.openChat("acme/api");
+      await until(() => api.chat?.connection === "live");
+      c.push(10, chatTurnStart({ turn: "t1" }));
+      c.push(null, chatDelta({ turn: "t1", seq: 1, delta: "old" }));
+      await until(() => r.lastFrame()!.includes(":old"));
+      c.push(
+        null,
+        chatPartial({
+          turn: "t1",
+          seq: 5,
+          blocks: [
+            { kind: "text", contentIndex: 0, text: "snap" },
+            {
+              kind: "tool",
+              id: "c1",
+              name: "read",
+              args: {},
+              output: "",
+              result: null,
+              isError: false,
+              truncated: false,
+              done: true,
+            },
+          ],
+        }),
+      );
+      await until(() => r.lastFrame()!.includes(":snap|[read]"));
+      expect(api.chat!.live!.seq).toBe(5);
+      // Replayed after the snapshot: seq 5 and below are already applied.
+      c.push(null, chatDelta({ turn: "t1", seq: 5, delta: "DUP" }));
+      c.push(null, chatDelta({ turn: "t1", seq: 3, delta: "DUP" }));
+      c.push(null, chatDelta({ turn: "t1", seq: 6, delta: "!" }));
+      await until(() => r.lastFrame()!.includes(":snap!|[read]"));
+      expect(r.lastFrame()).not.toContain("DUP");
+      expect(api.chat!.live!.seq).toBe(6);
+    });
+
+    it("a delta for another turn is dropped", async () => {
+      const c = makeClient();
+      let api!: ReturnType<typeof useChat>;
+      const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+      api.openChat("acme/api");
+      await until(() => api.chat?.connection === "live");
+      c.push(10, chatTurnStart({ turn: "t2" }));
+      c.push(null, chatDelta({ turn: "t1", seq: 1, delta: "stale" }));
+      c.push(null, chatDelta({ turn: "t2", seq: 1, delta: "fresh" }));
+      await until(() => r.lastFrame()!.includes(":fresh"));
+      expect(r.lastFrame()).not.toContain("stale");
+      expect(api.chat!.live!.turn).toBe("t2");
+      expect(api.chat!.live!.blocks).toHaveLength(1);
+    });
+
+    it("a turn start without a `turn` id scopes the live turn by its ts", async () => {
+      const c = makeClient();
+      let api!: ReturnType<typeof useChat>;
+      const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+      api.openChat("acme/api");
+      await until(() => api.chat?.connection === "live");
+      const line = JSON.parse(chatTurnStart()) as Record<string, unknown>;
+      delete line.turn;
+      c.push(10, JSON.stringify(line));
+      c.push(null, chatDelta({ turn: line.ts as string, seq: 1, delta: "by-ts" }));
+      await until(() => r.lastFrame()!.includes(":by-ts"));
+      expect(api.chat!.live!.turn).toBe(line.ts);
+    });
+
+    it("a thinking delta lands in a thinking block, ahead of the text at the same index; a tool record adds a tool block", async () => {
+      const c = makeClient();
+      let api!: ReturnType<typeof useChat>;
+      const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+      api.openChat("acme/api");
+      await until(() => api.chat?.connection === "live");
+      c.push(10, chatTurnStart({ turn: "t1" }));
+      c.push(null, chatDelta({ turn: "t1", seq: 1, kind: "thinking", delta: "hmm" }));
+      c.push(null, chatDelta({ turn: "t1", seq: 2, kind: "text", delta: "so" }));
+      c.push(null, chatTool({ turn: "t1", seq: 3, id: "c1", phase: "start", name: "grep" }));
+      await until(() => r.lastFrame()!.includes(":hmm|so|[grep]"));
+      const blocks = api.chat!.live!.blocks;
+      expect(blocks[0]).toMatchObject({ kind: "thinking", text: "hmm", done: true });
+      expect(blocks[1]).toMatchObject({ kind: "text", text: "so" });
+      expect(blocks[2]).toMatchObject({ kind: "tool", id: "c1", name: "grep", done: false });
+    });
+
+    it("toggleThinking flips thinking.pinned and nothing else", async () => {
+      const c = makeClient();
+      let api!: ReturnType<typeof useChat>;
+      render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+      api.openChat("acme/api");
+      await until(() => api.chat?.connection === "live");
+      expect(api.chat!.thinking).toEqual({ pinned: false });
+      api.toggleThinking();
+      await until(() => api.chat!.thinking.pinned === true);
+      api.toggleThinking();
+      await until(() => api.chat!.thinking.pinned === false);
+    });
+
+    it("session_reset clears the live turn along with the summary", async () => {
+      const { client, subscribeCalls, handlersLog } = makeResubClient();
+      let api!: ReturnType<typeof useChat>;
+      const r = render(<Probe client={client} onReady={(a) => (api = a)} resubscribeMs={5} />);
+      api.openChat("acme/api");
+      await until(() => api.chat?.connection === "live");
+      handlersLog[0]!.record(10, chatTurnStart({ turn: "t1" }));
+      handlersLog[0]!.record(null, chatDelta({ turn: "t1", seq: 1, delta: "mid" }));
+      await until(() => r.lastFrame()!.includes(":mid"));
+      handlersLog[0]!.end("session_reset");
+      await until(() => subscribeCalls.length === 2 && api.chat?.summary === null);
+      expect(api.chat!.live).toBeNull();
+      // The pending accumulator went too: a stale-turn delta after the reset
+      // has nothing to land in.
+      handlersLog[1]!.record(null, chatDelta({ turn: "t1", seq: 2, delta: "ghost" }));
+      handlersLog[1]!.record(20, metaLine());
+      await until(() => api.chat!.summary !== null);
+      expect(api.chat!.live).toBeNull();
+    });
+  });
+
+  // Spec 2026-09-06 §4.4: a live tool card's expansion lives in
+  // `live.expanded`; the card keeps it when the turn ends because the finished
+  // turn's card carries the same tool-call id.
+  describe("live tool cards (spec 2026-09-06 §4.4)", () => {
+    it("toggleExpanded on a live tool id flips live.expanded; the cursor reaches the live card; the expansion survives the turn end", async () => {
+      const c = makeClient();
+      let api!: ReturnType<typeof useChat>;
+      const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+      api.openChat("acme/api");
+      await until(() => api.chat?.connection === "live");
+      c.push(10, metaLine({ ticketId: "acme__api" }));
+      c.push(20, chatPrompt());
+      c.push(30, chatTurnStart({ turn: "t1" }));
+      c.push(null, chatTool({ turn: "t1", seq: 1, id: "c1", phase: "start", name: "read" }));
+      await until(() => r.lastFrame()!.includes("[read]"));
+      // The explicit id (the `x` verb's path).
+      api.toggleExpanded("c1");
+      await until(() => api.chat!.live!.expanded.has("c1"));
+      expect(api.chat!.expanded.size).toBe(0); // the finished set is untouched
+      // A flush after the toggle keeps it: the pending accumulator does not
+      // own `expanded`.
+      c.push(null, chatTool({ turn: "t1", seq: 2, id: "c1", phase: "output", output: "L1\n" }));
+      await until(() => (api.chat!.live!.blocks[0] as { output: string }).output === "L1\n");
+      expect(api.chat!.live!.expanded.has("c1")).toBe(true);
+      // The cursor-based path (enter/space) lands on the live card: it is the
+      // only anchor, so a move from the tail stays on it.
+      api.moveCursor(1);
+      await until(() => api.chat!.follow === false);
+      expect(api.chat!.cursor).toBe(0);
+      api.toggleExpanded();
+      await until(() => !api.chat!.live!.expanded.has("c1"));
+      api.toggleExpanded();
+      await until(() => api.chat!.live!.expanded.has("c1"));
+      // Turn end: the finished turn arrives with the same id, and the card is
+      // still open — `live.expanded` merged into `expanded`.
+      c.push(null, chatTool({ turn: "t1", seq: 3, id: "c1", phase: "end", result: "L1" }));
+      c.push(
+        40,
+        turnEndFull({ text: "", calls: [{ id: "c1", name: "read", args: {}, result: "L1" }] }),
+      );
+      c.push(50, chatTurnEnd());
+      await until(() => api.chat!.live === null);
+      expect(api.chat!.expanded.has("c1")).toBe(true);
+      expect(api.chat!.cursor).toBe(0);
+      // And the finished card toggles through the same call.
+      api.toggleExpanded("c1");
+      await until(() => !api.chat!.expanded.has("c1"));
+    });
+  });
+
+  // Spec 2026-09-06 §3.3: the summary is extended one record at a time, and
+  // a ring overflow recomputes from the ring — either way the result must be
+  // what a whole-ring recompute gives, before, at, and after the overflow.
+  it("the incremental summary equals a whole-ring recompute across an overflow", async () => {
+    const c = makeClient();
+    let api!: ReturnType<typeof useChat>;
+    render(<Probe client={c.client} onReady={(a) => (api = a)} ringSize={20} />);
+    api.openChat("acme/api");
+    await until(() => api.chat?.connection === "live");
+    const lines: string[] = [];
+    const push = (line: string): void => {
+      lines.push(line);
+      c.push(lines.length, line);
+    };
+    push(metaLine());
+    push(chatPrompt());
+    push(chatTurnStart());
+    for (let i = 0; i < 8; i++) {
+      push(toolStartId(`c${i}`, "read", { path: `f${i}` }));
+      push(toolEndId(`c${i}`, "read", "ok"));
+    }
+    await until(() => api.chat!.lastOffset === lines.length);
+    expect(api.chat!.overflowed).toBe(false);
+    expect(api.chat!.summary).toEqual(summarizeTranscript(lines.slice(-20)));
+    // Line 20 fills the ring exactly — still incremental, not yet an overflow.
+    push(chatTurnEnd());
+    await until(() => api.chat!.lastOffset === lines.length);
+    expect(lines.length).toBe(20);
+    expect(api.chat!.overflowed).toBe(false);
+    expect(api.chat!.summary).toEqual(summarizeTranscript(lines.slice(-20)));
+    // Line 21 splices the head off: a whole-ring recompute, then more pushes.
+    push(chatPrompt({ text: "again" }));
+    await until(() => api.chat!.overflowed === true);
+    push(chatTurnStart());
+    push(toolStartId("c99", "grep", { q: "x" }));
+    await until(() => api.chat!.lastOffset === lines.length);
+    expect(api.chat!.summary).toEqual(summarizeTranscript(lines.slice(-20)));
+    expect(api.chat!.streaming).toBe(true);
   });
 
   // Spec 2026-09-03 §4.1: a proposed junco_submit IS the operator's card — it
@@ -662,7 +873,9 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     await until(() => !api.chat!.expanded.has("tool-1"));
 
     api.toggleThinking();
-    await until(() => api.chat!.showThinking === true);
+    await until(() => api.chat!.thinking.pinned === true);
+    api.toggleThinking();
+    await until(() => api.chat!.thinking.pinned === false);
 
     api.setComposer("draft text");
     await until(() => api.chat!.composer === "draft text");

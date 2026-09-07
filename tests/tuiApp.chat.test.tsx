@@ -219,7 +219,9 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     c.push(50, chatTurnEnd());
     c.push(60, chatPrompt({ text: "and then?" }));
     c.push(70, chatTurnStart());
-    const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 10}`);
+    // A list, one row per item: the answer is markdown now (spec 2026-09-06
+    // §4.2), and single newlines inside a paragraph are soft breaks.
+    const lines = Array.from({ length: 40 }, (_, i) => `- line ${i + 10}`);
     c.push(80, turnEndFull({ text: lines.join("\n") }));
     c.push(90, chatTurnEnd());
     await until(() => r.lastFrame()!.includes("line 49")); // following the tail

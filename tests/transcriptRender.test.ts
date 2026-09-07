@@ -29,9 +29,9 @@ import {
   v2RunLines as v2Lines,
 } from "./helpers/transcriptFixtures.js";
 
-const opts = (over: { width?: number; showThinking?: boolean; expanded?: Set<string> } = {}) => ({
+const opts = (over: { width?: number; pinned?: boolean; expanded?: Set<string> } = {}) => ({
   width: over.width ?? 80,
-  showThinking: over.showThinking ?? false,
+  pinned: over.pinned ?? false,
   expanded: over.expanded ?? new Set<string>(),
 });
 
@@ -166,9 +166,17 @@ describe("renderTranscriptRows", () => {
     });
     expect(rows.map((r) => r.text)).toContain("turn 1 · in 1.8k out 85");
     expect(rows.map((r) => r.text)).toContain("  Assessment complete.");
-    const tool = rows.find((r) => r.anchor === "c1")!;
-    expect(tool.text).toBe("  ▸ read game.js  → 3 lines");
-    expect(rows.filter((r) => r.anchor !== undefined)).toHaveLength(1);
+    // Spec 2026-09-06 §4.4: the finished tool row is the same card the live
+    // turn showed — header with the done glyph, one dim summary row under it.
+    const at = rows.findIndex((r) => r.anchor === "c1");
+    expect(rows[at]).toEqual({ text: "  ▸ read game.js  ✓", anchor: "c1" });
+    expect(rows[at + 1]).toEqual({ text: "    → 3 lines", tone: "dim" });
+    // Two anchored rows: the tool call and the thinking header (spec
+    // 2026-09-06 §4.3) — the latter is not in toolCallIds' cursor space.
+    expect(rows.filter((r) => r.anchor !== undefined).map((r) => r.anchor)).toEqual([
+      "think:0:0",
+      "c1",
+    ]);
     expect(rows.some((r) => r.text.includes("deep thoughts"))).toBe(false);
   });
 
@@ -192,11 +200,61 @@ describe("renderTranscriptRows", () => {
     expect(rowsPr[0]?.text).toContain(" · pr · ");
   });
 
-  it("showThinking renders the thinking block dim, before the text", () => {
-    const rows = renderTranscriptRows(done(), opts({ showThinking: true }));
-    const i = rows.findIndex((r) => r.text === "  deep thoughts");
-    expect(rows[i].tone).toBe("dim");
-    expect(rows.findIndex((r) => r.text === "  Assessment complete.")).toBeGreaterThan(i);
+  // Spec 2026-09-06 §4.3: the thinking block is a header row (collapsed unless
+  // pinned) that carries its own anchor, and — when the run has exactly one
+  // turn and a known duration — the run's duration, since a turn has none of
+  // its own.
+  it("unpinned: a collapsed `▸ thinking · <dur>` header with an anchor and no body", () => {
+    const rows = renderTranscriptRows(done(), opts());
+    const head = rows.find((r) => r.anchor === "think:0:0")!;
+    expect(head.text).toBe("  ▸ thinking · 11m07s");
+    expect(rows.some((r) => r.text.includes("deep thoughts"))).toBe(false);
+    const ti = rows.indexOf(head);
+    expect(rows.findIndex((r) => r.text === "turn 1 · in 1.8k out 85")).toBeLessThan(ti);
+    expect(rows.findIndex((r) => r.text === "  Assessment complete.")).toBeGreaterThan(ti);
+  });
+
+  it("pinned: `▾ thinking · <dur>` then the body in tone thinking, indented under it", () => {
+    const rows = renderTranscriptRows(done(), opts({ pinned: true }));
+    const ti = rows.findIndex((r) => r.anchor === "think:0:0");
+    expect(rows[ti].text).toBe("  ▾ thinking · 11m07s");
+    expect(rows[ti + 1]).toEqual({ text: "    deep thoughts", tone: "thinking" });
+    expect(rows.findIndex((r) => r.text === "  Assessment complete.")).toBeGreaterThan(ti + 1);
+  });
+
+  it("the duration is omitted when the run has more than one turn or no end", () => {
+    const two = summarizeTranscript([
+      runStart({ flow: "assess", modelId: "local/m", ts: "2026-08-29T01:02:47.000Z" }),
+      agentStart(),
+      turnEndFull({ thinking: "first", text: "a", calls: [] }),
+      turnEndFull({ thinking: "second", text: "b", calls: [] }),
+      runEnd({ stopReason: "stop", durationMs: 667_000 }),
+    ]);
+    const rows = renderTranscriptRows(two, opts());
+    expect(rows.find((r) => r.anchor === "think:0:0")?.text).toBe("  ▸ thinking");
+    expect(rows.find((r) => r.anchor === "think:0:1")?.text).toBe("  ▸ thinking");
+    const open = summarizeTranscript([
+      runStart({ flow: "assess", modelId: "local/m", ts: "2026-08-29T01:02:47.000Z" }),
+      agentStart(),
+      turnEndFull({ thinking: "only", text: "a", calls: [] }),
+    ]);
+    expect(renderTranscriptRows(open, opts()).find((r) => r.anchor === "think:0:0")?.text).toBe(
+      "  ▸ thinking",
+    );
+  });
+
+  it("a turn with no thinking shows no header at all", () => {
+    const rows = renderTranscriptRows(
+      summarizeTranscript([
+        runStart(),
+        agentStart(),
+        turnEndFull({ thinking: null, text: "plain", calls: [] }),
+        runEnd(),
+      ]),
+      opts({ pinned: true }),
+    );
+    expect(rows.some((r) => r.text.includes("thinking"))).toBe(false);
+    expect(rows.some((r) => r.anchor?.startsWith("think:"))).toBe(false);
   });
 
   it("expanded tool result renders its body dim under the tool row, capped", () => {
@@ -257,7 +315,41 @@ describe("renderTranscriptRows", () => {
     const rows = renderTranscriptRows(s, opts());
     expect(rows[0].text).toContain("◐ running…");
     expect(rows.map((r) => r.text)).toContain("turn 1 ◐");
-    expect(rows.find((r) => r.anchor === "c2")?.text).toBe("  ▸ read a  → …");
+    // No result yet: the header carries `…` and the summary row says so.
+    const at = rows.findIndex((r) => r.anchor === "c2");
+    expect(rows[at]?.text).toBe("  ▸ read a  …");
+    expect(rows[at + 1]).toEqual({ text: "    → …", tone: "dim" });
+  });
+
+  it("an errored tool call: header in the error tone, body open by default; expanding it collapses", () => {
+    const s = summarizeTranscript([
+      runStart(),
+      turnEndFull({
+        calls: [
+          {
+            id: "e1",
+            name: "read",
+            args: { path: "nope" },
+            result: "ENOENT: nope\nx",
+            isError: true,
+          },
+        ],
+      }),
+      runEnd(),
+    ]);
+    const rows = renderTranscriptRows(s, opts());
+    const at = rows.findIndex((r) => r.anchor === "e1");
+    expect(rows[at]).toEqual({ text: "  ▸ read nope  ✗", tone: "error", anchor: "e1" });
+    expect(rows.slice(at + 1, at + 3).map((r) => [r.text, r.tone])).toEqual([
+      ["      ENOENT: nope", "dim"],
+      ["      x", "dim"],
+    ]);
+    // `expanded` is a toggle against the card's default: an error card
+    // toggled once shows only its summary row.
+    const folded = renderTranscriptRows(s, opts({ expanded: new Set(["e1"]) }));
+    const fat = folded.findIndex((r) => r.anchor === "e1");
+    expect(folded[fat + 1]).toEqual({ text: "    → ✗ ENOENT: nope", tone: "dim" });
+    expect(folded.map((r) => r.text)).not.toContain("      ENOENT: nope");
   });
 
   it("never emits a row wider than width; blank row between runs", () => {
@@ -312,7 +404,7 @@ describe("renderTranscriptRows", () => {
 // blank before the renderer trimmed each block's edges.
 describe("renderTranscriptRows — newline-padded model output", () => {
   /** rows[0] is the run header, rows[1] the turn line — the rest is prose. */
-  const prose = (text?: string, thinking?: string, showThinking = false) =>
+  const prose = (text?: string, thinking?: string, pinned = false) =>
     renderTranscriptRows(
       summarizeTranscript([
         runStart(),
@@ -323,9 +415,11 @@ describe("renderTranscriptRows — newline-padded model output", () => {
         }),
         runEnd(),
       ]),
-      opts({ showThinking }),
+      opts({ pinned }),
     )
       .slice(2)
+      // The thinking header (spec 2026-09-06 §4.3) is not prose.
+      .filter((r) => !r.anchor?.startsWith("think:"))
       .map((r) => r.text);
 
   it("collapses blank runs inside a block and drops its leading/trailing padding", () => {
@@ -337,7 +431,11 @@ describe("renderTranscriptRows — newline-padded model output", () => {
   });
 
   it("thinking is trimmed the same way", () => {
-    expect(prose(undefined, "\n\nthought\n\n\n\ntwo\n", true)).toEqual(["  thought", "", "  two"]);
+    expect(prose(undefined, "\n\nthought\n\n\n\ntwo\n", true)).toEqual([
+      "    thought",
+      "",
+      "    two",
+    ]);
     expect(prose(undefined, "\n\n\n", true)).toEqual([]);
   });
 
@@ -382,6 +480,43 @@ describe("chat rows (spec 2026-09-01 §1.3)", () => {
     expect(
       rows.some((r) => r.text.includes("turn rejected: rate limited") && r.tone === "warn"),
     ).toBe(true);
+  });
+  // Spec 2026-09-06 §2.1 last paragraph / §4.3: the persisted turn keeps its
+  // `<think>` tags (the splitter runs on the live stream only), so the finished
+  // turn is split at render time and looks exactly like the live one did.
+  it("a finished turn whose text still carries <think> tags is split at render time", () => {
+    const s = summarizeTranscript([
+      metaLine({ ticketId: "acme__api" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({
+        thinking: null,
+        text: "<think>hmm\nmore</think>\nThe answer",
+        calls: [],
+        usage: { input: 3, output: 4 },
+      }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const collapsed = renderTranscriptRows(s, opts({ width: 80 }));
+    const head = collapsed.find((r) => r.anchor === "think:0:0")!;
+    expect(head.text).toMatch(/^ {2}▸ thinking/);
+    expect(collapsed.some((r) => r.text.includes("hmm"))).toBe(false);
+    expect(collapsed.some((r) => r.text.includes("<think>"))).toBe(false);
+    // The answer's leading newline (what followed the close tag) is trimmed.
+    expect(collapsed.find((r) => r.text.startsWith("junco:"))).toEqual({
+      text: "junco: The answer",
+      tone: "accent",
+    });
+    const pinned = renderTranscriptRows(s, opts({ width: 80, pinned: true }));
+    const ti = pinned.findIndex((r) => r.anchor === "think:0:0");
+    expect(pinned[ti].text).toMatch(/^ {2}▾ thinking/);
+    expect(pinned.slice(ti + 1, ti + 3)).toEqual([
+      { text: "    hmm", tone: "thinking" },
+      { text: "    more", tone: "thinking" },
+    ]);
+    expect(pinned.findIndex((r) => r.text === "junco: The answer")).toBeGreaterThan(ti + 2);
   });
   it("a ticket transcript renders byte-identically to before", () => {
     const before = renderTranscriptRows(summarizeTranscript(v2Lines()), opts({ width: 80 }));
@@ -596,5 +731,94 @@ describe("junco_chat_command rows", () => {
     expect(empty[at(empty) + 1]).toEqual({ text: "      (no output)", tone: "dim" });
     const none = lines({ status: "declined" }, [commandAnchor("call_1")]);
     expect(none[at(none) + 1]?.text ?? "").not.toContain("(no output)");
+  });
+});
+
+// Task 14 (spec 2026-09-06 §4.2): a chat answer is typeset as markdown on the
+// dashboard (`markdown: true`); ticket transcripts and the `junco transcript`
+// CLI (no flag) keep the plain prose rows — spec Non-goals.
+describe("chat answers as markdown (spec 2026-09-06 §4.2)", () => {
+  const MD = "# Title\n\nSome **bold** text\n\n- a\n- b\n\n```ts\nconst x = 1;\n```";
+  const chatLines = (text: string) => [
+    metaLine({ ticketId: "acme__api" }),
+    chatPrompt(),
+    chatTurnStart(),
+    agentStart(),
+    turnEndFull({ thinking: null, text, calls: [] }),
+    agentEnd(),
+    chatTurnEnd(),
+  ];
+  const fake = (code: string, lang: string | null) =>
+    lang === null ? null : code.split("\n").map((l) => `<${lang}>${l}`);
+
+  it("a chat run renders headings bold, lists bulleted and fences through the highlighter, indented under a lone label", () => {
+    const rows = renderTranscriptRows(summarizeTranscript(chatLines(MD)), {
+      ...opts({ width: 80 }),
+      markdown: true,
+      highlight: fake,
+    });
+    const at = rows.findIndex((r) => r.text === "junco:");
+    expect(at).toBeGreaterThan(0);
+    expect(rows[at]).toEqual({ text: "junco:", tone: "accent" });
+    expect(rows[at + 1]).toEqual({ text: "  Title", tone: "bold" });
+    const texts = rows.map((r) => r.text);
+    expect(texts).toContain("  Some bold text");
+    expect(texts).toContain("  • a");
+    expect(texts).toContain("  • b");
+    expect(texts).toContain("  <ts>const x = 1;");
+    expect(texts.some((t) => t.includes("**"))).toBe(false);
+  });
+
+  it("a paragraph-first answer keeps the label on its first line, wrapped with it", () => {
+    const rows = renderTranscriptRows(
+      summarizeTranscript(chatLines("first line\n\nsecond paragraph")),
+      { ...opts({ width: 80 }), markdown: true, highlight: null },
+    );
+    const texts = rows.map((r) => r.text);
+    const at = texts.indexOf("junco: first line");
+    expect(rows[at]?.tone).toBe("accent");
+    expect(texts.slice(at, at + 3)).toEqual(["junco: first line", "", "  second paragraph"]);
+  });
+
+  it("without a highlighter a fence renders its raw lines", () => {
+    const rows = renderTranscriptRows(summarizeTranscript(chatLines(MD)), {
+      ...opts({ width: 80 }),
+      markdown: true,
+      highlight: null,
+    });
+    expect(rows.map((r) => r.text)).toContain("  const x = 1;");
+  });
+
+  it("the CLI path (no markdown flag) and a ticket run stay plain", () => {
+    const cli = renderTranscriptRows(summarizeTranscript(chatLines(MD)), opts({ width: 80 }));
+    expect(cli.map((r) => r.text)).toContain("junco: # Title");
+    expect(cli.map((r) => r.text)).toContain("  Some **bold** text");
+    const ticket = renderTranscriptRows(
+      summarizeTranscript([
+        metaLine(),
+        runStart(),
+        agentStart(),
+        turnEndFull({ thinking: null, text: MD, calls: [] }),
+        agentEnd(),
+        runEnd(),
+      ]),
+      { ...opts({ width: 80 }), markdown: true, highlight: fake },
+    );
+    const texts = ticket.map((r) => r.text);
+    expect(texts).toContain("  # Title");
+    expect(texts).toContain("  Some **bold** text");
+    expect(texts.some((t) => t.includes("<ts>"))).toBe(false);
+  });
+
+  it("the md cache hands back the same row objects for an unchanged turn", () => {
+    const s = summarizeTranscript(chatLines(MD));
+    const mdCache = new Map();
+    const a = renderTranscriptRows(s, { ...opts(), markdown: true, highlight: fake, mdCache });
+    const b = renderTranscriptRows(s, { ...opts(), markdown: true, highlight: fake, mdCache });
+    const ia = a.findIndex((r) => r.text === "  Title");
+    const ib = b.findIndex((r) => r.text === "  Title");
+    expect(ia).toBeGreaterThan(0);
+    expect(b[ib]).toBe(a[ia]);
+    expect(mdCache.size).toBe(1);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { listCatalogProviders } from "../src/agent/session.js";
+import { listCatalogProviders, loadHighlighter } from "../src/agent/session.js";
 
 // The sandbox wiring in makePiSessionFactory depends on these SDK symbols being
 // on the PACKAGE ROOT. The deep import `dist/core/tools/index.js` is blocked by
@@ -59,5 +59,31 @@ describe("Pi SDK import surface (catalog enumeration depends on this)", () => {
     }
     const providers = catalog.map((e) => e.provider);
     expect(providers).toEqual([...providers].sort());
+  });
+});
+
+// Task 14 (spec 2026-09-06 §4.2): the chat's code fences go through Pi's
+// highlighter, reached only via src/agent/session.ts's loadHighlighter.
+describe("Pi SDK import surface (chat markdown highlighter depends on these)", () => {
+  it("exposes highlightCode and initTheme on the root", async () => {
+    const mod = (await import("@earendil-works/pi-coding-agent")) as Record<string, unknown>;
+    for (const name of ["highlightCode", "initTheme"]) {
+      expect(typeof mod[name], name).toBe("function");
+    }
+  });
+
+  // Integration-flavored, like listCatalogProviders above: the real SDK, no
+  // network — proves the theme is initialised before the first highlight
+  // (highlightCode reads the global theme, which throws until initTheme ran).
+  it("loadHighlighter highlights a known language line-for-line and declines an unknown/null one", async () => {
+    const highlight = await loadHighlighter();
+    const lines = highlight("const x = 1;\nlet y = 2;", "ts");
+    expect(lines).not.toBeNull();
+    expect(lines).toHaveLength(2);
+    expect(lines!.map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))).toEqual([
+      "const x = 1;",
+      "let y = 2;",
+    ]);
+    expect(highlight("plain", null)).toBeNull();
   });
 });

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import type { AgentSessionEvent, CreateModelRuntimeOptions } from "@earendil-works/pi-coding-agent";
 import type { Config, RunResult, ModelCost } from "../types.js";
+import type { HighlightFn } from "../tui/markdown/render.js";
 import { RunAccumulator } from "./runResult.js";
 import { GuardManager, type GuardDecision } from "./guardManager.js";
 import { log } from "../logging.js";
@@ -785,6 +786,37 @@ export async function listCatalogProviders(): Promise<CatalogEntry[]> {
   return Array.from(idsByProvider.entries())
     .map(([provider, ids]) => ({ provider, ids: ids.sort() }))
     .sort((a, b) => a.provider.localeCompare(b.provider));
+}
+
+/**
+ * Pi's syntax highlighter (spec 2026-09-06 §4.2) through the one runtime-import
+ * seam, shaped as markdown/render.ts's `HighlightFn`: code → ANSI lines, or
+ * null when there is no language or the SDK throws (the renderer then shows
+ * the raw fence). Never touches ~/.pi.
+ *
+ * `highlightCode` (theme.d.ts:161) reads the SDK's global `theme` proxy, which
+ * throws "Theme not initialized. Call initTheme() first." until `initTheme`
+ * has run (dist/modes/interactive/theme/theme.js:641–647) — so the loader
+ * calls it once, watcher DISABLED (`enableWatcher = false`, theme.js:667: the
+ * watcher is an fs.watch on a custom theme file that would keep the process
+ * alive). Side effect: one process-global slot
+ * (`globalThis[Symbol.for("@earendil-works/pi-coding-agent:theme")]`) set to
+ * the SDK's built-in dark/light theme, picked from the terminal env
+ * (COLORFGBG; theme.js:630). It is only ever set when still empty, so an SDK
+ * path that initialised its own theme first is left alone.
+ */
+export async function loadHighlighter(): Promise<HighlightFn> {
+  const { highlightCode, initTheme } = await import("@earendil-works/pi-coding-agent");
+  const slot = Symbol.for("@earendil-works/pi-coding-agent:theme");
+  if ((globalThis as unknown as Record<symbol, unknown>)[slot] === undefined)
+    initTheme(undefined, false);
+  return (code, lang) => {
+    try {
+      return lang === null ? null : highlightCode(code, lang);
+    } catch {
+      return null;
+    }
+  };
 }
 
 export function makePiSessionFactory(

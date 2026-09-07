@@ -74,7 +74,8 @@ describe("TranscriptView", () => {
 
   it("rows: tool line, prose; thinking only when toggled; expansion inline", () => {
     const f = frame(state({ summary: SMALL }));
-    expect(f).toContain("▸ read a.ts  → 2 lines");
+    expect(f).toContain("▸ read a.ts  ✓");
+    expect(f).toContain("→ 2 lines");
     expect(f).toContain("hello world");
     expect(f).not.toContain("deep");
     expect(frame(state({ summary: SMALL, showThinking: true }))).toContain("deep");

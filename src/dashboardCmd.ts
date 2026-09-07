@@ -18,6 +18,7 @@ import { openAppendLogSink } from "./logging.js";
 import { draftFilePath } from "./chat/draftStore.js";
 import { checkForUpdate } from "./updateCheck.js";
 import { resolveBotLogin } from "./botIdentity.js";
+import type { HighlightFn } from "./tui/markdown/render.js";
 import type React from "react";
 
 /**
@@ -42,11 +43,23 @@ export const INK_RENDER_OPTIONS = {
   // 2026-09-01-ink-render-perf-design.md, tier 2). Safe with useSuspend's
   // blank-frame handoff: tests/useSuspendTty.test.tsx pins the full repaint.
   incrementalRendering: true,
+  // Ink's own throttle bounds the paint rate; the chat's per-frame flush leans
+  // on it instead of a trailing timer, so 60 keeps the added latency ≤ 16 ms
+  // (spec 2026-09-06-chat-streaming-design.md §3.4, D8). `chat.maxFps` is the
+  // config knob to drop back on a slow terminal — merged in at render time.
+  maxFps: 60,
 } as const;
+
+/** The options object the host hands Ink: INK_RENDER_OPTIONS with `maxFps` widened to the config's. */
+export type InkRenderOptions = Omit<typeof INK_RENDER_OPTIONS, "maxFps"> & { maxFps: number };
 
 export interface DashboardDeps {
   isTTY?: boolean;
-  renderFn?: (element: React.ReactElement) => { waitUntilExit: () => Promise<void> };
+  /** Ink render seam; the second argument is what `ink.render` would receive (tests observe maxFps). */
+  renderFn?: (
+    element: React.ReactElement,
+    options: InkRenderOptions,
+  ) => { waitUntilExit: () => Promise<void> };
   printErr?: (s: string) => void;
   /** Config reload after the wizard writes one (FTUE handoff). Default: loadConfig. */
   loadConfigFn?: (p: string) => Config;
@@ -54,6 +67,10 @@ export interface DashboardDeps {
   printOut?: (s: string) => void;
   /** Existence probe for the truthful cancel message (Amendment 1). Default: fs.existsSync. */
   existsFn?: (p: string) => boolean;
+  /** The chat's code-fence highlighter (spec 2026-09-06 §4.2). Default: Pi's,
+   * through agent/session.ts's `loadHighlighter` — the one runtime SDK import
+   * seam; injected so tests never load the SDK. A rejection means raw fences. */
+  loadHighlighterFn?: () => Promise<HighlightFn>;
 }
 
 /**
@@ -116,6 +133,7 @@ export async function runDashboard(
     { chatCfgFor },
     react,
     ink,
+    highlight,
   ] = await Promise.all([
     // App.js is pulled in transitively by Root.js — no separate value import.
     import("./tui/Root.js"),
@@ -132,12 +150,25 @@ export async function runDashboard(
     import("./chat/chatSession.js"),
     import("react"),
     import("ink"),
+    // Pi's highlighter for the chat's markdown fences — loaded with the rest
+    // of the UI, and a failure (no SDK, theme files missing) degrades to raw
+    // fences rather than blocking the dashboard.
+    (
+      deps.loadHighlighterFn ??
+      (() => import("./agent/session.js").then((m) => m.loadHighlighter()))
+    )().catch((): HighlightFn | null => null),
   ]);
   // INK_RENDER_OPTIONS is the single source of truth for the host options
   // (exitOnCtrlC:false is load-bearing — see the constant's doc); a no-op when
-  // non-interactive, and the TTY guard exits before this anyway.
+  // non-interactive, and the TTY guard exits before this anyway. Only maxFps
+  // varies: the config's `chat.maxFps` (D8), or the constant's default on the
+  // FTUE path where no config exists yet.
+  const renderOptions: InkRenderOptions = {
+    ...INK_RENDER_OPTIONS,
+    maxFps: cfg === null ? INK_RENDER_OPTIONS.maxFps : cfg.chat.maxFps,
+  };
   const renderFn =
-    deps.renderFn ?? ((el: React.ReactElement) => ink.render(el, INK_RENDER_OPTIONS));
+    deps.renderFn ?? ((el: React.ReactElement, opts: InkRenderOptions) => ink.render(el, opts));
 
   // The exact prop assembly that used to live inline — now per-config so the
   // FTUE handoff (and future config re-runs) rebuild the client stack fresh.
@@ -162,6 +193,8 @@ export async function runDashboard(
     // The chat's own model chain (chat.modelId → plannerModelId → model.id),
     // for the chat header strip.
     chatModelId: chatCfgFor(c).model.id,
+    // Spec 2026-09-06 §4.2: the chat's code-fence highlighter (null = raw).
+    highlight,
     queueFn: makeQueueSnapshotFn(c),
     // Per-repo assess history for the rail's audit-age indicator (#193).
     assessHistoryFn: () => Promise.resolve(listHistory(c)),
@@ -207,6 +240,7 @@ export async function runDashboard(
           },
         }),
       ),
+      renderOptions,
     );
     await instance.waitUntilExit();
     if (exitCode === 130) {

@@ -3599,7 +3599,8 @@ describe("transcript view", () => {
     const { client } = makeClient({ "acme/api": [rawIssue] });
     const r = await openRecent(client);
     expect(r.lastFrame()).toContain("Assessment complete.");
-    expect(r.lastFrame()).toContain("▸ read game.js  → 2 lines");
+    expect(r.lastFrame()).toContain("▸ read game.js  ✓");
+    expect(r.lastFrame()).toContain("→ 2 lines");
     expect(r.lastFrame()).toContain("expand"); // footer/chips
     r.stdin.write(ESC);
     await until(

@@ -4,7 +4,7 @@ import type { Key } from "ink";
 import type { DashboardClient } from "../ghClient.js";
 import type { ToastKind } from "../theme.js";
 import type { View } from "../App.js";
-import type { ChatApi } from "./useChat.js";
+import { chatAnchorIds, type ChatApi } from "./useChat.js";
 import type { ChatDraftActions } from "./useChatDrafts.js";
 import { draftLookupError, resolveDraftRef } from "../../chat/draftStore.js";
 import type { PendingDraft } from "../../chat/draftStore.js";
@@ -156,8 +156,26 @@ export function useChatInput({
         // than reading the same stale `follow` on both passes.
         if (!latch.pause()) latch.resume();
       },
+      // Spec 2026-09-06 §4.5: `x` toggles the tool card under the cursor —
+      // the id is read here, off the combined (finished + live) anchors, so
+      // the handler names the card it acted on rather than trusting the
+      // cursor to still point at it by the time the updater runs.
+      expandTool: () => {
+        const id = chat === null ? undefined : chatAnchorIds(chat.summary, chat.live)[chat.cursor];
+        if (id === undefined) showToast("info", "no tool card under the cursor");
+        else toggleExpanded(id);
+      },
     };
-  }, [close, selectedDraft, showToast, chatDraftActions, toggleThinking, latch]);
+  }, [
+    close,
+    selectedDraft,
+    showToast,
+    chatDraftActions,
+    toggleThinking,
+    toggleExpanded,
+    latch,
+    chat,
+  ]);
 
   const onComposerSubmit = useCallback(
     (raw: string): void => {

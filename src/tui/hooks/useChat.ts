@@ -6,13 +6,20 @@ import type { PendingDraft } from "../../chat/draftStore.js";
 import {
   anchorIds,
   commandAnchor,
+  extendSummary,
   summarizeTranscript,
+  type SummaryState,
   type TranscriptSummary,
 } from "../../transcriptSummary.js";
-import { parseTranscriptLine } from "../../agent/transcriptSchema.js";
+import { parseTranscriptLine, type JuncoRecord } from "../../agent/transcriptSchema.js";
+import {
+  applyLiveRecord,
+  liveAnchorIds,
+  startLiveTurn,
+  type LiveTurnState,
+} from "../../chat/liveBlocks.js";
 
 export const CHAT_RING = 2000;
-const CHAT_FLUSH_MS = 50;
 /** Ruling R21: delay before the hook resubscribes after a terminal `end` —
  * long enough that a flapping connection doesn't spin-subscribe, short
  * enough that an operator staring at "reconnecting"/"session reset" text
@@ -28,7 +35,9 @@ export interface ChatState {
   downReason: string | null;
   endReason: string | null;
   summary: TranscriptSummary | null; // over the ring, excluding message_update
-  liveText: string; // in-flight assistant text (bus-only deltas), cleared at turn end
+  /** Spec 2026-09-06 §3.1: the in-flight turn as blocks (bus-only records),
+   *  null when idle. Published once per flush — never mutated in place. */
+  live: LiveTurnState | null;
   streaming: boolean;
   blocked: { reason: string; until: string | null } | null;
   degraded: boolean;
@@ -36,12 +45,17 @@ export interface ChatState {
   drafts: PendingDraft[]; // parked drafts for this key
   composer: string;
   composerFocused: boolean;
-  cursor: number; // index into anchorIds(summary)
+  cursor: number; // index into chatAnchorIds(summary, live)
   follow: boolean;
   /** A cursor move that landed owes the window a nudge onto the anchor —
    * TranscriptBody paints it once and acks through `ackReveal`. */
   reveal: boolean;
-  showThinking: boolean;
+  /** `t` pins the thinking block open (spec §3.1): unpinned, the live block
+   *  shows while it streams and folds when done; pinned keeps it open and
+   *  expands the finished turns' thinking rows the way `showThinking` did. */
+  thinking: { pinned: boolean };
+  /** Bumps once per applied flush — the memo key for the live rows. */
+  frame: number;
   expanded: ReadonlySet<string>;
   lastOffset: number | null;
   error: string | null; // last POST failure (toast-worthy)
@@ -73,7 +87,11 @@ export interface ChatApi {
   moveCursor(delta: number): void;
   /** The view painted the reveal a cursor move owed (TranscriptBody onReveal). */
   ackReveal(): void;
-  toggleExpanded(): void;
+  /** Toggle a tool card's body (spec 2026-09-06 §4.4): `id` names the card
+   *  (the `x` verb reads it off the cursor), else the anchor under the cursor
+   *  (enter/space). A live card toggles `live.expanded`, a finished one the
+   *  `expanded` set — the id is the same tool-call id on both sides. */
+  toggleExpanded(id?: string): void;
   toggleThinking(): void;
   setFollow(on: boolean): void;
   reloadDrafts(): Promise<void>;
@@ -82,13 +100,37 @@ export interface ChatApi {
   decide(decision: "run" | "decline"): Promise<void>;
 }
 
+/**
+ * The chat view's cursor space (spec 2026-09-06 §4.4): the finished anchors
+ * (tool ids ∪ draft/command cards, transcriptSummary.ts's `anchorIds`) and
+ * then the live turn's tool cards, so the cursor can land on a card that is
+ * still running. A live id the summary already holds is not repeated — the
+ * card keeps ONE index across the turn end. ChatView (the body's `anchors`),
+ * useChatInput (the anchor under the cursor) and the clamps below all read
+ * this one function.
+ */
+export function chatAnchorIds(
+  summary: TranscriptSummary | null,
+  live: LiveTurnState | null,
+): string[] {
+  return mergeAnchorIds(summary === null ? [] : anchorIds(summary), liveAnchorIds(live));
+}
+
+/** `chatAnchorIds` from its two halves — ChatView memoizes each on its own
+ * input so a flush that adds no tool card keeps the array's identity. */
+export function mergeAnchorIds(finished: string[], live: string[]): string[] {
+  if (live.length === 0) return finished;
+  const seen = new Set(finished);
+  return [...finished, ...live.filter((id) => !seen.has(id))];
+}
+
 const freshState = (key: string): ChatState => ({
   key,
   connection: "connecting",
   downReason: null,
   endReason: null,
   summary: null,
-  liveText: "",
+  live: null,
   streaming: false,
   blocked: null,
   degraded: false,
@@ -99,20 +141,38 @@ const freshState = (key: string): ChatState => ({
   cursor: 0,
   follow: true,
   reveal: false,
-  showThinking: false,
+  thinking: { pinned: false },
+  frame: 0,
   expanded: new Set(),
   lastOffset: null,
   error: null,
   pending: null,
 });
 
+/** The three bus-only record types (spec 2026-09-06 §1.1) — never in the
+ *  ring, never persisted; `parseTranscriptLine` hands them over as `junco`
+ *  records whose `type` the persisted union does not know. */
+const LIVE_TYPES: ReadonlySet<string> = new Set([
+  "junco_chat_delta",
+  "junco_chat_tool",
+  "junco_chat_partial",
+]);
+const isLiveRecord = (rec: JuncoRecord): boolean => LIVE_TYPES.has((rec as { type: string }).type);
+
 /**
  * chat-view domain (spec 2026-09-01 §8.5). The record ring lives in a ref
- * (`ringSize` persisted lines, default CHAT_RING); the summary is recomputed
- * only when a NON-delta record lands, and message_update deltas accumulate
- * into `liveText` through a `flushMs` flush — the spike showed per-delta
- * setState is survivable, and the batch is cheap insurance for slow
- * terminals.
+ * (`ringSize` persisted lines, default CHAT_RING); the summary is extended
+ * one record at a time (`extendSummary`, spec 2026-09-06 §3.3) with the
+ * builder state kept in a ref, and recomputed from the whole ring when the
+ * ring overflows — so the invariant is: `summaryState` is null exactly when
+ * the ring is empty or has just been spliced, and a whole-ring recompute
+ * follows every splice (once the ring is full, every push is one).
+ *
+ * The live turn (spec 2026-09-06 §3.2, §3.4): bus-only records fold into a
+ * pending `LiveTurnState` synchronously in the SSE callback (a string
+ * append) and a `setImmediate` flush publishes it in ONE setState per frame,
+ * bumping `frame`; Ink's `maxFps` then bounds the paint rate. The old 50 ms
+ * trailing timer is gone.
  *
  * Ruling R21: `subscribeChat` (src/tui/chatClient.ts) treats `event: end` as
  * terminal and never reconnects on its own — daemon facts: `/chat/new` ends
@@ -124,7 +184,7 @@ const freshState = (key: string): ChatState => ({
  * pending resubscribe timer, so a stale one is inert instead of touching
  * state for a subscription the hook has already moved on from. `end`'s
  * reason decides whether the resubscribe starts a fresh session
- * (`session_reset`: ring/summary/live-text cleared, `since: null`) or
+ * (`session_reset`: ring/summary/live turn cleared, `since: null`) or
  * resumes the same one (`daemon_stopped` and anything else: ring/summary
  * kept, `since: lastOffset` — read from a ref kept in sync on every record,
  * not from stale closure state).
@@ -132,20 +192,21 @@ const freshState = (key: string): ChatState => ({
 export function useChat({
   client,
   aliveRef,
-  flushMs = CHAT_FLUSH_MS,
   ringSize = CHAT_RING,
   resubscribeMs = CHAT_RESUBSCRIBE_MS,
 }: {
   client: DashboardClient;
   aliveRef: MutableRefObject<boolean>;
-  flushMs?: number;
   ringSize?: number;
   resubscribeMs?: number;
 }): ChatApi {
   const [chat, setChat] = useState<ChatState | null>(null);
   const ring = useRef<string[]>([]);
-  const pendingDelta = useRef("");
-  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The incremental summary's carried builder; see the invariant above. */
+  const summaryState = useRef<SummaryState | null>(null);
+  /** The live turn between flushes — the only copy the SSE callback writes. */
+  const pendingLive = useRef<LiveTurnState | null>(null);
+  const flushScheduled = useRef(false);
   const resubscribeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
   const keyRef = useRef<string | null>(null);
@@ -170,13 +231,30 @@ export function useChat({
   // exhaustive-deps would otherwise flag as a self-reference).
   const connectRef = useRef<(key: string, since: number | null) => void>(() => {});
 
-  const flushDelta = useCallback((): void => {
-    flushTimer.current = null;
-    const d = pendingDelta.current;
-    pendingDelta.current = "";
-    if (d === "" || !aliveRef.current) return;
-    setChat((s) => (s === null ? s : { ...s, liveText: s.liveText + d }));
+  const flushLive = useCallback((): void => {
+    flushScheduled.current = false;
+    if (!aliveRef.current) return;
+    const live = pendingLive.current;
+    // `expanded` is React state (toggleExpanded), not the accumulator's: a
+    // flush of the same turn carries the operator's toggles over.
+    setChat((s) =>
+      s === null
+        ? s
+        : {
+            ...s,
+            live:
+              live !== null && s.live !== null && s.live.turn === live.turn
+                ? { ...live, expanded: s.live.expanded }
+                : live,
+            frame: s.frame + 1,
+          },
+    );
   }, [aliveRef]);
+  const scheduleFlush = useCallback((): void => {
+    if (flushScheduled.current) return;
+    flushScheduled.current = true;
+    setImmediate(flushLive);
+  }, [flushLive]);
 
   const reloadDrafts = useCallback(async (): Promise<void> => {
     const key = keyRef.current;
@@ -190,22 +268,29 @@ export function useChat({
   const onRecord = useCallback(
     (offset: number | null, line: string): void => {
       const p = parseTranscriptLine(line);
-      if (p.kind === "sdk" && p.event.type === "message_update") {
-        const ev = p.event.assistantMessageEvent as { type?: string; delta?: string } | undefined;
-        if (ev?.type === "text_delta" && typeof ev.delta === "string") {
-          pendingDelta.current += ev.delta;
-          flushTimer.current ??= setTimeout(flushDelta, flushMs);
-        }
+      // Never in the ring: the summary excludes provider deltas, and the
+      // daemon's bus-only records carry the live turn instead (spec §1.1).
+      if (p.kind === "sdk" && p.event.type === "message_update") return;
+      const rec = p.kind === "junco" ? p.record : null;
+      if (rec !== null && isLiveRecord(rec)) {
+        pendingLive.current = applyLiveRecord(pendingLive.current, rec);
+        scheduleFlush();
         return;
       }
       let overflowed = false;
+      let summary: TranscriptSummary;
       ring.current.push(line);
       if (ring.current.length > ringSize) {
         ring.current.splice(0, ring.current.length - ringSize);
         overflowed = true;
+        summaryState.current = null;
+        summary = summarizeTranscript(ring.current);
+      } else {
+        // The builder is authoritative (`_prev` is documented as unread).
+        const r = extendSummary(null, summaryState.current, line);
+        summaryState.current = r.state;
+        summary = r.summary;
       }
-      const summary = summarizeTranscript(ring.current);
-      const rec = p.kind === "junco" ? p.record : null;
       // Ruling R20: computed before setChat, not inside the updater — React
       // may run the updater lazily, so a flag set and read inside it can
       // observe the read happening before the write.
@@ -217,6 +302,15 @@ export function useChat({
       const command = rec?.type === "junco_chat_command" ? rec : null;
       const settledCommand =
         command !== null && command.status !== "proposed" && command.status !== "running";
+      // Spec 2026-09-06 §3.2: a turn start opens the pending live turn under
+      // its id (`ts` for a transcript written before ids existed); its end
+      // drops it — the finished turn arrives through the summary. Outside the
+      // updater (R20): `pendingLive` is the SSE callback's, not React's.
+      if (rec?.type === "junco_chat_turn_start") {
+        pendingLive.current = startLiveTurn(rec.turn ?? rec.ts);
+      } else if (rec?.type === "junco_chat_turn_end" || rec?.type === "junco_chat_turn_aborted") {
+        pendingLive.current = null;
+      }
       // Ruling R20 again: outside the updater, which React may run lazily.
       // The same three transitions the updater below makes, on the ref the
       // y/n keystroke reads.
@@ -235,20 +329,28 @@ export function useChat({
       }
       setChat((s) => {
         if (s === null) return s;
-        const n = anchorIds(summary).length;
         let next: ChatState = {
           ...s,
           summary,
           streaming: summary.live,
           overflowed: s.overflowed || overflowed,
-          cursor: Math.min(s.cursor, Math.max(0, n - 1)),
           lastOffset: offset ?? s.lastOffset,
         };
         // Ruling R21 point 3: endReason clears here too, same as `blocked`.
         if (rec?.type === "junco_chat_turn_start")
-          next = { ...next, liveText: "", blocked: null, endReason: null };
-        if (rec?.type === "junco_chat_turn_end" || rec?.type === "junco_chat_turn_aborted")
-          next = { ...next, liveText: "" };
+          next = { ...next, live: null, blocked: null, endReason: null };
+        if (rec?.type === "junco_chat_turn_end" || rec?.type === "junco_chat_turn_aborted") {
+          // Spec 2026-09-06 §4.4: a card the operator opened stays open past
+          // the turn end — the finished turn's card has the same tool-call
+          // id, so the live set folds into the finished one.
+          const expanded =
+            s.live === null || s.live.expanded.size === 0
+              ? s.expanded
+              : new Set([...s.expanded, ...s.live.expanded]);
+          next = { ...next, live: null, expanded };
+        }
+        const n = chatAnchorIds(summary, next.live).length;
+        next = { ...next, cursor: Math.min(s.cursor, Math.max(0, n - 1)) };
         if (rec?.type === "junco_chat_turn_rejected")
           next = { ...next, blocked: { reason: rec.reason, until: rec.until } };
         if (rec?.type === "junco_chat_transcript_degraded") next = { ...next, degraded: true };
@@ -302,7 +404,7 @@ export function useChat({
       });
       if (draftsChanged || settledCommand) void reloadDrafts();
     },
-    [flushDelta, flushMs, ringSize, reloadDrafts],
+    [scheduleFlush, ringSize, reloadDrafts],
   );
 
   // Ruling R21: one subscription attempt. Wraps the raw record/status/end
@@ -344,7 +446,8 @@ export function useChat({
             if (genRef.current !== gen || !aliveRef.current || keyRef.current !== key) return;
             if (reason === "session_reset") {
               ring.current = [];
-              pendingDelta.current = "";
+              summaryState.current = null;
+              pendingLive.current = null;
               lastOffsetRef.current = null;
               pendingRef.current = null;
               setChat((st) =>
@@ -353,7 +456,7 @@ export function useChat({
                   : {
                       ...st,
                       summary: null,
-                      liveText: "",
+                      live: null,
                       blocked: null,
                       degraded: false,
                       overflowed: false,
@@ -392,9 +495,10 @@ export function useChat({
     composerRef.current = "";
     pendingRef.current = null;
     ring.current = [];
-    pendingDelta.current = "";
-    if (flushTimer.current !== null) clearTimeout(flushTimer.current);
-    flushTimer.current = null;
+    summaryState.current = null;
+    // A flush already scheduled runs against the cleared ref and a null
+    // state: `setChat(null)` below wins, the flush's updater is a no-op.
+    pendingLive.current = null;
     if (resubscribeTimer.current !== null) clearTimeout(resubscribeTimer.current);
     resubscribeTimer.current = null;
     setChat(null);
@@ -499,8 +603,8 @@ export function useChat({
   const moveCursor = useCallback(
     (delta: number): void =>
       setChat((s) => {
-        if (s === null || s.summary === null) return s;
-        const n = anchorIds(s.summary).length;
+        if (s === null) return s;
+        const n = chatAnchorIds(s.summary, s.live).length;
         // Nothing to move to ⇒ nothing changes, `follow` included. `tab` is
         // the cursor key now (chat-scroll brief) and a plain Q&A chat has no
         // anchors at all: dropping follow here unpinned the window from the
@@ -527,21 +631,29 @@ export function useChat({
     [],
   );
   const toggleExpanded = useCallback(
-    (): void =>
+    (target?: string): void =>
       setChat((s) => {
-        if (s === null || s.summary === null) return s;
-        const id = anchorIds(s.summary)[s.cursor];
+        if (s === null) return s;
+        const id = target ?? chatAnchorIds(s.summary, s.live)[s.cursor];
         // A draft card has no body to show; a `cmd:` card has the CLI output.
         if (id === undefined || id.startsWith("draft:")) return s;
-        const expanded = new Set(s.expanded);
-        if (expanded.has(id)) expanded.delete(id);
-        else expanded.add(id);
-        return { ...s, expanded };
+        const toggled = (set: ReadonlySet<string>): Set<string> => {
+          const next = new Set(set);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        };
+        // A live card (spec 2026-09-06 §4.4) toggles the live turn's set; the
+        // turn end folds it into `expanded` under the same id.
+        if (s.live !== null && s.live.blocks.some((b) => b.kind === "tool" && b.id === id))
+          return { ...s, live: { ...s.live, expanded: toggled(s.live.expanded) } };
+        return { ...s, expanded: toggled(s.expanded) };
       }),
     [],
   );
   const toggleThinking = useCallback(
-    (): void => setChat((s) => (s === null ? s : { ...s, showThinking: !s.showThinking })),
+    (): void =>
+      setChat((s) => (s === null ? s : { ...s, thinking: { pinned: !s.thinking.pinned } })),
     [],
   );
   const setFollow = useCallback(
@@ -575,7 +687,7 @@ export function useChat({
   );
   const selectedDraft = useCallback((): PendingDraft | null => {
     if (chat === null || chat.summary === null) return null;
-    const id = anchorIds(chat.summary)[chat.cursor];
+    const id = chatAnchorIds(chat.summary, chat.live)[chat.cursor];
     if (id === undefined || !id.startsWith("draft:")) return null;
     const draftId = id.slice("draft:".length);
     return chat.drafts.find((d) => d.id === draftId) ?? null;
