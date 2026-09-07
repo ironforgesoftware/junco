@@ -658,7 +658,11 @@ describe("runDoctor chat check (spec 2026-09-01 §9)", () => {
     } as unknown as Config;
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => cfg,
+        resolveInfoFn: async () => catalogInfo(),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0); // warn-level only — never fails doctor
     expect(lines.join("")).toMatch(/⚠ chat/);
@@ -675,11 +679,66 @@ describe("runDoctor chat check (spec 2026-09-01 §9)", () => {
     } as unknown as Config;
     const code = await runDoctor(
       "/x/config.json",
-      deps({ loadConfigFn: () => cfg, printFn: (s) => lines.push(s) }),
+      deps({
+        loadConfigFn: () => cfg,
+        resolveInfoFn: async () => catalogInfo(),
+        printFn: (s) => lines.push(s),
+      }),
     );
     expect(code).toBe(0);
     expect(lines.join("")).toMatch(/✓ chat/);
     expect(lines.join("")).toContain(dataTreePaths(cfg).chats);
+  });
+});
+
+describe("runDoctor chat thinking hint (spec 2026-09-06 §2.2)", () => {
+  it("prints an ℹ row that counts as neither a failure nor a warning — exit 0", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      chat: { ...okConfig.chat, enabled: true, thinkTags: "auto" },
+      healthEnabled: true,
+      healthHost: "127.0.0.1",
+    } as unknown as Config;
+    const code = await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        resolveInfoFn: async () =>
+          catalogInfo({
+            provider: "local",
+            modelId: "m",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            api: "openai-completions",
+            path: "inline",
+          }),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    const out = lines.join("");
+    expect(code).toBe(0);
+    expect(out).toMatch(/ℹ chat thinking — <think> tags are split by junco/);
+    expect(out).toContain("--reasoning-format deepseek");
+    expect(out).toMatch(/ready — 0 failure\(s\), 0 warning\(s\)/);
+  });
+
+  it("stays silent for a hosted model even with chat on", async () => {
+    const lines: string[] = [];
+    const cfg = {
+      ...okConfig,
+      chat: { ...okConfig.chat, enabled: true, thinkTags: "auto" },
+      healthEnabled: true,
+      healthHost: "127.0.0.1",
+    } as unknown as Config;
+    await runDoctor(
+      "/x/config.json",
+      deps({
+        loadConfigFn: () => cfg,
+        resolveInfoFn: async () => catalogInfo(),
+        printFn: (s) => lines.push(s),
+      }),
+    );
+    expect(lines.join("")).not.toMatch(/chat thinking/);
   });
 });
 

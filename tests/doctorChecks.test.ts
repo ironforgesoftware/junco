@@ -14,6 +14,7 @@ import { join } from "node:path";
 import {
   CHECKS,
   createDoctorCtx,
+  serverThinkingFlag,
   type DoctorCheck,
   type DoctorCtx,
   type DoctorDeps,
@@ -26,6 +27,7 @@ import { writeDraft } from "../src/commentReview.js";
 import { recordRun } from "../src/assessHistory.js";
 import { SKILL_DIR_NAME } from "../src/skillLinks.js";
 import type { Config } from "../src/types.js";
+import type { ResolvedModelInfo } from "../src/agent/session.js";
 
 const SEAMS: ConfigSeams = {
   dataDir: "/sbxroot/doc-data",
@@ -89,7 +91,7 @@ function check(id: string): DoctorCheck {
 
 /** `<mark> label — detail`, the way runDoctor renders it. */
 function render(f: Finding): string {
-  const mark = f.v === "ok" ? "✓" : f.v === "warn" ? "⚠" : "✗";
+  const mark = f.v === "ok" ? "✓" : f.v === "info" ? "ℹ" : f.v === "warn" ? "⚠" : "✗";
   return `${mark} ${f.label}${f.detail ? ` — ${f.detail}` : ""}`;
 }
 
@@ -115,6 +117,7 @@ const EXPECTED_ORDER = [
   "split-queue",
   "health-bind",
   "chat",
+  "chat-thinking",
   "github-bridge",
   "outbox",
   "audit-review",
@@ -487,6 +490,141 @@ describe("check: health-bind", () => {
 
   it("is silent for a loopback host", async () => {
     expect(await check("health-bind").run(ctxOf(cfgOf()))).toEqual([]);
+  });
+});
+
+describe("check: chat-thinking (spec 2026-09-06 §2.2)", () => {
+  /** An inline-resolved local model on an openai-completions server. */
+  function inlineInfo(baseUrl: string, over: Partial<ResolvedModelInfo> = {}): ResolvedModelInfo {
+    return {
+      provider: "local",
+      modelId: "m",
+      baseUrl,
+      api: "openai-completions",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      path: "inline",
+      ...over,
+    };
+  }
+
+  function chatCfg(thinkTags: "auto" | "on" | "off" = "auto"): Config {
+    const base = cfgOf();
+    return cfgOf({ chat: { ...base.chat, enabled: true, thinkTags } });
+  }
+
+  it("names the llama.cpp flag for a port-8080 server, as an info (never a warn)", async () => {
+    const [f] = await check("chat-thinking").run(
+      ctxOf(chatCfg(), { resolveInfoFn: async () => inlineInfo("http://127.0.0.1:8080/v1") }),
+    );
+    expect(f.v).toBe("info");
+    expect(f.label).toBe("chat thinking");
+    expect(f.detail).toContain("chat.thinkTags=auto");
+    expect(f.detail).toContain("start llama.cpp with --reasoning-format deepseek");
+    expect(render(f)).toMatch(/^ℹ chat thinking — /);
+  });
+
+  it("names the LM Studio setting for a port-1234 server", async () => {
+    const [f] = await check("chat-thinking").run(
+      ctxOf(chatCfg("on"), { resolveInfoFn: async () => inlineInfo("http://localhost:1234/v1") }),
+    );
+    expect(f.v).toBe("info");
+    expect(f.detail).toContain("chat.thinkTags=on");
+    expect(f.detail).toContain("in LM Studio enable 'Reasoning → separate field'");
+  });
+
+  it("falls back to generic wording for an unrecognized server", async () => {
+    const [f] = await check("chat-thinking").run(
+      ctxOf(chatCfg(), { resolveInfoFn: async () => inlineInfo("http://gpu-box:11434/v1") }),
+    );
+    expect(f.v).toBe("info");
+    expect(f.detail).toContain("move reasoning into reasoning_content on the server");
+  });
+
+  it("is silent when chat.thinkTags is off", async () => {
+    let calls = 0;
+    const out = await check("chat-thinking").run(
+      ctxOf(chatCfg("off"), {
+        resolveInfoFn: async () => {
+          calls++;
+          return inlineInfo("http://127.0.0.1:8080/v1");
+        },
+      }),
+    );
+    expect(out).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  it("is silent when chat is disabled", async () => {
+    const base = cfgOf();
+    expect(
+      await check("chat-thinking").run(
+        ctxOf(cfgOf({ chat: { ...base.chat, enabled: false } }), {
+          resolveInfoFn: async () => inlineInfo("http://127.0.0.1:8080/v1"),
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("is silent for a hosted (non openai-completions) api — native thinking there", async () => {
+    expect(
+      await check("chat-thinking").run(
+        ctxOf(chatCfg(), {
+          resolveInfoFn: async () =>
+            inlineInfo("https://api.anthropic.com", {
+              provider: "anthropic",
+              api: "anthropic-messages",
+              path: "catalog",
+            }),
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("is silent (not a failure) when the model does not resolve — endpoint-model owns that verdict", async () => {
+    expect(
+      await check("chat-thinking").run(
+        ctxOf(chatCfg(), {
+          resolveInfoFn: async () => {
+            throw new Error("no such model");
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("resolves the chat model (chat.modelId) rather than the worker model", async () => {
+    const seen: (string | undefined)[] = [];
+    const base = cfgOf();
+    await check("chat-thinking").run(
+      ctxOf(cfgOf({ chat: { ...base.chat, enabled: true, modelId: "local/chat-m" } }), {
+        resolveInfoFn: async (_cfg, id) => {
+          seen.push(id);
+          return inlineInfo("http://127.0.0.1:8080/v1");
+        },
+      }),
+    );
+    expect(seen).toEqual(["local/chat-m"]);
+  });
+});
+
+describe("serverThinkingFlag", () => {
+  it("port 8080 → llama.cpp wording", () => {
+    expect(serverThinkingFlag("http://127.0.0.1:8080/v1")).toBe(
+      "for a cleaner stream start llama.cpp with --reasoning-format deepseek",
+    );
+  });
+
+  it("port 1234 → LM Studio wording", () => {
+    expect(serverThinkingFlag("http://localhost:1234/v1")).toBe(
+      "in LM Studio enable 'Reasoning → separate field' for a cleaner stream",
+    );
+  });
+
+  it("anything else (including an unparsable url) → generic wording", () => {
+    const generic = "move reasoning into reasoning_content on the server for a cleaner stream";
+    expect(serverThinkingFlag("http://gpu-box:11434/v1")).toBe(generic);
+    expect(serverThinkingFlag("https://api.example.com/v1")).toBe(generic);
+    expect(serverThinkingFlag("not a url")).toBe(generic);
   });
 });
 
