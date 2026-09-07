@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatManager, type ChatManagerDeps } from "../src/chat/chatManager.js";
 import type { ChatCwdError } from "../src/chat/chatCwd.js";
+import type { ChatCheckoutOutcome } from "../src/chat/chatCheckout.js";
 import { makeConfig } from "./helpers/config.js";
 import { fakeChatSession, chatScriptText, chatScriptToolCall } from "./helpers/fakeSession.js";
 import { fakeSpawn } from "./helpers/fakeSpawn.js";
@@ -47,6 +48,25 @@ const fakeSm = async (mode: SessionManagerMode) => {
   return { manager: {}, file: mode.open.file };
 };
 
+/** The default #526 stub: no test may fetch, and the outcome a test does not
+ *  care about must not vary. `calls` records the cwds it was handed. */
+function fakeFreshen(action: ChatCheckoutOutcome["action"] = "up_to_date") {
+  const calls: string[] = [];
+  const fn: ChatManagerDeps["freshenCheckout"] = async (_cfg, cwd) => {
+    calls.push(cwd);
+    return {
+      cwd,
+      branch: "main",
+      head: "0".repeat(40),
+      action,
+      reason: null,
+      from: null,
+      commits: 0,
+    };
+  };
+  return { calls, fn };
+}
+
 function setup(over: Partial<ChatManagerDeps> = {}, scripts = [chatScriptText("hi", 0.3)]) {
   const root = mkdtempSync(join(tmpdir(), "junco-cm-"));
   const cfg = makeConfig({
@@ -70,6 +90,7 @@ function setup(over: Partial<ChatManagerDeps> = {}, scripts = [chatScriptText("h
     gate,
     spend,
     resolveCwd: async () => ({ ok: true, cwd: root, kind: "watched", nwo: "acme/api" }),
+    freshenCheckout: fakeFreshen().fn,
     session: { makeSessionManager: fakeSm, sessionFactoryFor: () => factory },
     abortGraceMs: 20,
     ...over,
@@ -490,6 +511,83 @@ describe("ChatManager watchlist reconciliation (#452, #453)", () => {
     await m.fresh("acme/api");
     const again = await m.get("acme/api");
     expect(first.ok && again.ok && again.value).toBe(first.ok ? first.value : null);
+  });
+});
+
+// #526: the chat reads a WORKING TREE, and nothing used to advance it. The
+// fast-forward itself is chatCheckout.ts's; what this pins is WHEN the manager
+// asks for it and that the answer reaches the transcript.
+describe("ChatManager checkout freshness (#526)", () => {
+  const tmp = (): string => mkdtempSync(join(tmpdir(), "junco-cm-ff-"));
+  /** A movable watchlist entry behind the `resolveCwd` seam. */
+  function movable(initial: string) {
+    const state = { cwd: initial };
+    const resolveCwd: ChatManagerDeps["resolveCwd"] = async () => ({
+      ok: true,
+      cwd: state.cwd,
+      kind: "watched",
+      nwo: "acme/api",
+    });
+    return { state, resolveCwd };
+  }
+  const checkouts = (p: string): Array<Record<string, unknown>> =>
+    lines(p).filter((r) => r.type === "junco_chat_checkout");
+
+  it("freshens the checkout on the first open and records which commit the chat reads", async () => {
+    const { calls, fn } = fakeFreshen("fast_forwarded");
+    const { m, root } = setup({ freshenCheckout: fn });
+    const got = await m.get("acme/api");
+    if (!got.ok) throw new Error(got.error);
+    expect(calls).toEqual([root]);
+    expect(checkouts(got.value.transcriptPath)).toEqual([
+      expect.objectContaining({ action: "fast_forwarded", branch: "main", head: "0".repeat(40) }),
+    ]);
+  });
+
+  it("every later verb on a live session reuses it — the tree holds still mid-conversation", async () => {
+    const { calls, fn } = fakeFreshen();
+    const { m } = setup({ freshenCheckout: fn });
+    await runTurn(m, "acme/api", "one");
+    await runTurn(m, "acme/api", "two");
+    await m.subscribe("acme/api", 0, { onLine: () => {}, onEnd: () => {} });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("/new freshens again on the next open, into the fresh transcript", async () => {
+    const { calls, fn } = fakeFreshen();
+    const { m } = setup({ freshenCheckout: fn });
+    await runTurn(m, "acme/api", "one");
+    expect(await m.fresh("acme/api")).toEqual({ ok: true, value: null });
+    const again = await m.get("acme/api");
+    if (!again.ok) throw new Error(again.error);
+    expect(calls).toHaveLength(2);
+    // reset() archived the old dir, so this is the new transcript's first word
+    // after junco_meta.
+    expect(checkouts(again.value.transcriptPath)).toHaveLength(1);
+  });
+
+  it("reconcile() never freshens — 'on open' is not 'once per poll tick'", async () => {
+    const { state, resolveCwd } = movable(tmp());
+    const { calls, fn } = fakeFreshen();
+    const { m } = setup({ resolveCwd, freshenCheckout: fn });
+    await m.get("acme/api");
+    await m.reconcile();
+    await m.reconcile();
+    expect(calls).toHaveLength(1);
+    // ...but the reopen a MOVED entry forces does freshen the new path.
+    state.cwd = tmp();
+    await m.reconcile();
+    await m.get("acme/api");
+    expect(calls).toEqual([expect.any(String), state.cwd]);
+  });
+
+  it("a freshen that throws never blocks the open", async () => {
+    const { m } = setup({
+      freshenCheckout: async () => {
+        throw new Error("git exploded");
+      },
+    });
+    expect(await runTurn(m, "acme/api", "hello")).toEqual({ ok: true, mode: "prompt" });
   });
 });
 

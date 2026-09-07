@@ -244,6 +244,7 @@ export function assembleConfig(
       thinkingLevel: d.chat.thinkingLevel ?? null,
       turnTimeoutMinutes: d.chat.turnTimeoutMinutes ?? null,
       submitTool: d.chat.submitTool,
+      fastForward: d.chat.fastForward,
       confirmTimeoutMinutes: d.chat.confirmTimeoutMinutes,
       thinkTags: d.chat.thinkTags,
       maxFps: d.chat.maxFps,

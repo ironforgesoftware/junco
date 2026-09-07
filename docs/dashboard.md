@@ -100,6 +100,19 @@ for the full per-view list.
 
 `c` from an issue or PR opens the repo's chat with `/issue N` (or `/pr N`) already typed into the composer — enter pulls the thread in; esc blurs the composer (the prefilled text stays), esc again leaves the chat view; nothing is sent unless you press enter.
 
+The chat reads the repo's **working tree** — the managed clone, or whatever checkout you
+watched it with — so which commit that tree is on decides what the agent sees. Opening a
+session (the first `c` after a daemon restart, a checkout that moved, or the reopen after
+`/new`) fast-forwards a junco-**managed** clone to `origin/<default branch>` first, which is the
+same commit a ticket run would build on, and writes one row into the transcript saying so:
+`⤓ checkout main fast-forwarded 8af698a → b36161f (+18)`. Your own checkouts are never
+touched — junco only ever advances clones it made, only by `merge --ff-only`, and it skips
+(saying why) when the tree is dirty, `HEAD` is detached or on another branch, or there are
+local commits `origin` does not have: `⚠ checkout not fast-forwarded — the working tree is
+dirty; reading main at 8af698a`. Either way the row names the commit, so a plan drafted here
+carries its own evidence of what it was drafted against. `chat.fastForward` turns the advance
+off and keeps the row.
+
 Asking the chat to **submit** a draft it parked ("submit it", "queue the README ticket")
 makes the agent call its one action tool, `junco_submit`. Nothing runs yet: a card
 appears under the answer — `▸ submit add-readme → inbox — awaiting you · y submit · n keep parked`

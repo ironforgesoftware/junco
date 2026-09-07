@@ -13,6 +13,7 @@ import {
   agentStart,
   chatDraft,
   chatPrompt,
+  chatCheckout,
   chatReset,
   chatTurnEnd,
   chatTurnRejected,
@@ -652,6 +653,30 @@ describe("chat rows (spec 2026-09-01 §1.3)", () => {
     expect(draftRows[0]!.text).toContain("draft parked (lint failed)");
     expect(draftRows[1]!.text).toContain("draft submitted → inbox");
     expect(draftRows[2]!.text).toContain("draft discarded");
+  });
+  it("checkout notes name the commit the chat reasons about (#526)", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatCheckout({ action: "fast_forwarded", from: "a".repeat(40), commits: 18 }),
+      chatCheckout({ action: "up_to_date" }),
+      chatCheckout({ action: "skipped", reason: "dirty" }),
+      chatCheckout({ action: "failed", reason: "fetch_failed" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const rows = renderTranscriptRows(s, opts({ width: 100 })).filter((r) =>
+      r.text.includes("checkout"),
+    );
+    expect(rows).toHaveLength(4);
+    expect(rows[0]!.text).toContain("checkout main fast-forwarded aaaaaaa → bbbbbbb (+18)");
+    expect(rows[1]!.text).toContain("checkout main up to date at bbbbbbb");
+    expect(rows[2]!.text).toContain("the working tree is dirty");
+    expect(rows[2]!.text).toContain("reading main at bbbbbbb");
+    expect(rows[3]!.text).toContain("fetch failed");
+    expect(rows.map((r) => r.tone)).toEqual(["dim", "dim", "warn", "warn"]);
   });
   it("session-reset and transcript-degraded notes render as warn rows", () => {
     const s = summarizeTranscript([

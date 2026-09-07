@@ -22,6 +22,7 @@ import type { ChatDraftRecord } from "../agent/transcriptSchema.js";
 import { log } from "../logging.js";
 import { chatSlug, isWatchedKey } from "./chatKey.js";
 import { resolveChatCwd, type ChatCwd, type ChatCwdError } from "./chatCwd.js";
+import { fastForwardChatCheckout } from "./chatCheckout.js";
 import { ChatSession, type ChatSessionDeps, type ChatSubscriber } from "./chatSession.js";
 import type { ChatTurnResult } from "./chatTurn.js";
 import type { SubmitExecDeps } from "./submitExec.js";
@@ -68,6 +69,9 @@ export interface ChatManagerDeps {
   >;
   spend: Pick<SpendLedger, "recordUsd" | "todayUsd" | "nextMidnightMs">;
   resolveCwd?: typeof resolveChatCwd;
+  /** Checkout freshness on session open (#526). The daemon passes nothing —
+   *  the real fast-forward; tests inject a stub so no test ever fetches. */
+  freshenCheckout?: typeof fastForwardChatCheckout;
   session?: ChatSessionDeps;
   /** How a confirmed `junco_submit` reaches the CLI (spec 2026-09-03 §3.4).
    *  The daemon passes nothing — the real spawner and the real draft store;
@@ -161,7 +165,45 @@ export class ChatManager {
     if (!cwd.ok) return { ok: false, error: cwd.error };
     const session = this.build(key, slug, cwd, cfg);
     this.sessions.set(slug, session);
+    await this.freshen(session, cfg);
     return { ok: true, value: session };
+  }
+
+  /**
+   * #526: advance the checkout the agent is about to read, ONCE per open —
+   * the first touch after daemon start, a cwd change, and the reopen that
+   * follows `/new`. Deliberately not in `reconcile()`: "on open" must not
+   * become a fetch per watched repo per poll tick, and not in `prompt()`:
+   * mid-conversation the tree must hold still.
+   *
+   * `ensureMeta()` first, always: `writeRecord` appends to transcript.jsonl,
+   * and an append before the session dir exists latches `degraded` for the
+   * life of the session. Best-effort as a whole — the fast-forward itself
+   * never throws (a fetch failure is an outcome), so a throw here is
+   * `ensureMeta`'s, and a chat must still open when git or the SDK is having
+   * a bad day.
+   */
+  private async freshen(session: ChatSession, cfg: Config): Promise<void> {
+    try {
+      const outcome = await (this.deps.freshenCheckout ?? fastForwardChatCheckout)(
+        cfg,
+        session.cwd,
+      );
+      await session.ensureMeta();
+      session.writeRecord({ type: "junco_chat_checkout", ...outcome });
+      if (outcome.action === "fast_forwarded")
+        log.info("chat checkout fast-forwarded", {
+          slug: session.slug,
+          branch: outcome.branch,
+          head: outcome.head,
+          commits: outcome.commits,
+        });
+    } catch (e) {
+      log.warn("chat checkout freshen failed; opening on the tree as it stands", {
+        slug: session.slug,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   private build(
@@ -220,12 +262,18 @@ export class ChatManager {
       await this.evict(slug, existing, "unwatched");
       return { ok: false, error: cwd.error };
     }
-    if (cwd.cwd === existing.cwd) return { ok: true, value: existing };
+    if (cwd.cwd === existing.cwd) {
+      // Same path, but this IS an open (`/new`, or a watchlist move that
+      // resolved back to where it was): the tree behind it may have moved on.
+      await this.freshen(existing, cfg);
+      return { ok: true, value: existing };
+    }
     await this.evict(slug, existing, "cwd_changed");
     const session = this.build(key, slug, cwd, cfg);
     this.sessions.set(slug, session);
     await session.ensureMeta();
     session.writeRecord({ type: "junco_chat_session_reset", reason: "cwd_changed" });
+    await this.freshen(session, cfg);
     return { ok: true, value: session };
   }
 

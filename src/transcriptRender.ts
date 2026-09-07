@@ -8,7 +8,11 @@
  * tool bodies are word-wrapped, everything else is truncated — so a surface
  * can render rows with `wrap="truncate-end"` and lose nothing.
  */
-import type { ChatCommandRecord, GuardDecisionRecord } from "./agent/transcriptSchema.js";
+import type {
+  ChatCheckoutRecord,
+  ChatCommandRecord,
+  GuardDecisionRecord,
+} from "./agent/transcriptSchema.js";
 import { commandAnchor, draftAnchor, thinkingAnchor } from "./transcriptSummary.js";
 import type { RunSummary, ToolResultSummary, TranscriptSummary } from "./transcriptSummary.js";
 import { splitThinkingText } from "./chat/thinkSplitter.js";
@@ -385,6 +389,25 @@ function fmtFlow(flow: string): string {
   return flow === "assess" ? "audit" : flow === "analyze" ? "investigate" : flow;
 }
 
+/** Seven characters, git's own abbreviation length, or "?" for an outcome that
+ *  never got as far as reading HEAD. */
+const shortSha = (sha: string | null): string => (sha === null ? "?" : sha.slice(0, 7));
+
+/** Why the chat's checkout was not fast-forwarded (#526), in the operator's
+ *  words rather than the record's enum. */
+const CHECKOUT_REASON_TEXT: Record<NonNullable<ChatCheckoutRecord["reason"]>, string> = {
+  disabled: "chat.fastForward is off",
+  not_managed: "junco does not manage this checkout",
+  not_a_repo: "no git checkout there",
+  detached: "HEAD is detached",
+  no_default_branch: "origin/HEAD is unset",
+  not_default_branch: "not on origin's default branch",
+  dirty: "the working tree is dirty",
+  diverged: "there are local commits origin does not have",
+  fetch_failed: "the fetch failed",
+  merge_failed: "the fast-forward merge was refused",
+};
+
 /** The run header's outcome segment. `live` = this is the file's open last run. */
 export function fmtRunOutcome(run: RunSummary, live: boolean): { text: string; tone: RowTone } {
   const end = run.end;
@@ -625,6 +648,35 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
             for (const raw of body.slice(0, TOOL_BODY_MAX_LINES))
               for (const l of wrapText(raw, width - 6)) push(`      ${l}`, "dim");
           }
+          break;
+        }
+        case "checkout": {
+          // #526. Every branch names the commit, because "which commit was
+          // this conversation reasoning about" is the question a stale tree
+          // makes unanswerable — and a skip must read as a skip, not silence.
+          const at = `${n.branch ?? "?"}${n.head === null ? "" : ` at ${shortSha(n.head)}`}`;
+          if (n.action === "fast_forwarded")
+            push(
+              truncate(
+                `   ⤓ checkout ${n.branch ?? "?"} fast-forwarded ${shortSha(n.from)} → ` +
+                  `${shortSha(n.head)}${n.commits === null ? "" : ` (+${n.commits})`}`,
+                width,
+              ),
+              "dim",
+            );
+          else if (n.action === "up_to_date")
+            push(
+              truncate(`   ⤓ checkout ${n.branch ?? "?"} up to date at ${shortSha(n.head)}`, width),
+              "dim",
+            );
+          else
+            push(
+              truncate(
+                `   ⚠ checkout not fast-forwarded — ${CHECKOUT_REASON_TEXT[n.reason ?? "not_a_repo"]}; reading ${at}`,
+                width,
+              ),
+              "warn",
+            );
           break;
         }
         case "reset":

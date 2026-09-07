@@ -863,6 +863,15 @@ export const LEVERS: Lever[] = [
       "Register the junco_submit tool on new chat sessions (the model can submit a parked draft after you confirm).",
   },
   {
+    path: "chat.fastForward",
+    type: "boolean",
+    default: true,
+    editable: true,
+    reload: "live",
+    description:
+      "Fast-forward a junco-MANAGED watched clone to origin's default branch when a chat session opens (and after /new), so the chat reads the same commit a ticket run would build on. Never touches your own checkouts, never resets, and skips a dirty/detached/diverged tree — the transcript records which commit the chat read either way.",
+  },
+  {
     path: "chat.confirmTimeoutMinutes",
     type: "number",
     default: 10,
