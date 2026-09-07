@@ -19,10 +19,15 @@ export function toneProps(tone: RowTone | undefined): {
   color?: string;
   dimColor?: boolean;
   bold?: boolean;
+  italic?: boolean;
 } {
   switch (tone) {
     case "dim":
       return { dimColor: true };
+    // Spec 2026-09-06 §4.3: reasoning is set apart from the answer, not
+    // merely dimmed like a tool body.
+    case "thinking":
+      return { dimColor: true, italic: true };
     case "accent":
       return { color: theme.accent };
     case "error":
@@ -171,13 +176,16 @@ export const TranscriptBody = React.memo(function TranscriptBody(
           const row = p.rows.at(start + i);
           const isAnchor = row.anchor !== undefined && row.anchor === anchorId;
           const idx = row.anchor === undefined ? -1 : p.anchors.indexOf(row.anchor);
+          // Only a row in the cursor's index space is pressable: a thinking
+          // header (transcriptRender.ts's thinkingAnchor) names its row but is
+          // not a cursor stop, and pressing it with idx -1 would move the
+          // cursor to the first anchor instead.
+          const pressable = idx >= 0;
           return (
             <ClickableBox
               key={start + i}
-              hoverBg={row.anchor !== undefined ? theme.hoverBg : undefined}
-              onPress={
-                row.anchor !== undefined && p.onRowPress ? () => p.onRowPress!(idx) : undefined
-              }
+              hoverBg={pressable ? theme.hoverBg : undefined}
+              onPress={pressable && p.onRowPress ? () => p.onRowPress!(idx) : undefined}
             >
               <Text
                 wrap="truncate-end"

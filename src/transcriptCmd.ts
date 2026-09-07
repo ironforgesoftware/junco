@@ -117,7 +117,7 @@ export async function runTranscriptCmd(argv: string[], deps: TranscriptCmdDeps):
   }
   const rows = renderTranscriptRows(summary, {
     width,
-    showThinking: values.thinking === true,
+    pinned: values.thinking === true,
     expanded: new Set(values.tools === true ? toolCallIds(summary) : []),
   });
   for (const r of rows) deps.stdout(r.text);

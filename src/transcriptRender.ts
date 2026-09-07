@@ -11,20 +11,27 @@
 import type { ChatCommandRecord, GuardDecisionRecord } from "./agent/transcriptSchema.js";
 import { commandAnchor, draftAnchor } from "./transcriptSummary.js";
 import type { RunSummary, ToolResultSummary, TranscriptSummary } from "./transcriptSummary.js";
+import { splitThinkingText } from "./chat/thinkSplitter.js";
 
-export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success";
+/** `thinking`: the model's reasoning body (spec 2026-09-06 §4.3 — dim italic). */
+export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success" | "thinking";
 
 export interface TranscriptRow {
   text: string;
   tone?: RowTone;
-  /** Set on a tool-call row: the toolCallId the cursor/expand key targets. */
+  /** Set on a tool-call row: the toolCallId the cursor/expand key targets.
+   * A thinking header carries `thinkingAnchor(run, turn)` — not part of the
+   * cursor's index space (transcriptSummary.ts's anchorIds/toolCallIds), it
+   * only names the row. */
   anchor?: string;
 }
 
 export interface RenderOpts {
   /** Wrap/truncate column; values below MIN_WIDTH are raised to it. */
   width: number;
-  showThinking: boolean;
+  /** Spec 2026-09-06 §4.3: every finished turn's thinking block is a collapsed
+   * `▸ thinking` header unless pinned (`t`), which opens them all. */
+  pinned: boolean;
   /** toolCallIds whose result body renders inline under the tool row. */
   expanded: ReadonlySet<string>;
 }
@@ -85,7 +92,7 @@ export function wrapText(text: string, width: number): string[] {
  * edges; `[]` for a block that is only whitespace. The summary keeps the block
  * raw, so `junco transcript --json` stays lossless.
  */
-function proseLines(block: string, width: number): string[] {
+export function proseLines(block: string, width: number): string[] {
   const prose = block.replace(/\n{3,}/g, "\n\n").trim();
   return prose === "" ? [] : wrapText(prose, width);
 }
@@ -96,12 +103,32 @@ function fmtK(n: number): string {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
 }
 
-function fmtDuration(ms: number): string {
+export function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m${String(s % 60).padStart(2, "0")}s`;
   return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** Anchor of the thinking header of turn `turnIdx` (TurnSummary.index) in the
+ * summary's `runIdx`-th run (0-based position in `runs`). */
+export const thinkingAnchor = (runIdx: number, turnIdx: number): string =>
+  `think:${runIdx}:${turnIdx}`;
+
+/**
+ * The thinking block's header row (spec 2026-09-06 §4.3), shared by the live
+ * turn (LiveTurn.tsx) and the finished turns below so the row does not change
+ * shape when the turn ends: `· thinking · 3s` while it streams, `▸ thinking ·
+ * 3s` folded, `▾ thinking · 3s` pinned open; the duration segment is dropped
+ * when `ms` is null (a finished turn whose duration is not knowable).
+ */
+export function fmtThinkingHeader(
+  state: "streaming" | "collapsed" | "pinned",
+  ms: number | null,
+): string {
+  const glyph = state === "streaming" ? "·" : state === "collapsed" ? "▸" : "▾";
+  return ms === null ? `${glyph} thinking` : `${glyph} thinking · ${fmtDuration(ms)}`;
 }
 
 /** HH:MM:SS (UTC, matching the log's ISO stamps); the raw string if unparsable. */
@@ -245,17 +272,38 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
       const usage =
         turn.usage === null ? "" : ` · in ${fmtK(turn.usage.input)} out ${fmtK(turn.usage.output)}`;
       push(truncate(`turn ${turn.index + 1}${turn.provisional ? " ◐" : ""}${usage}`, width), "dim");
-      if (o.showThinking && turn.thinking !== null)
-        for (const l of proseLines(turn.thinking, width - 2)) push(l === "" ? "" : `  ${l}`, "dim");
-      if (turn.text !== null) {
+      // Spec 2026-09-06 §4.3 / §2.1 last paragraph: the persisted turn keeps
+      // its `<think>` tags (the splitter runs on the live stream only), so a
+      // tag-carrying text is split here, at render time, and the finished
+      // turn looks exactly like the live one did.
+      const split =
+        turn.thinking === null && turn.text !== null && turn.text.includes("<think>")
+          ? splitThinkingText(turn.text)
+          : null;
+      const thinking = split === null ? turn.thinking : split.thinking;
+      const text = split === null ? turn.text : split.text.trimStart();
+      if (thinking !== null) {
+        // A turn has no duration of its own; the run's is the block's only
+        // when the turn is the run's only turn.
+        const ms = run.turns.length === 1 ? (run.end?.durationMs ?? null) : null;
+        push(
+          `  ${fmtThinkingHeader(o.pinned ? "pinned" : "collapsed", ms)}`,
+          undefined,
+          thinkingAnchor(i, turn.index),
+        );
+        if (o.pinned)
+          for (const l of proseLines(thinking, width - 4))
+            push(l === "" ? "" : `    ${l}`, "thinking");
+      }
+      if (text !== null) {
         // A chat answer carries the other side's label, the way the prompt
         // carries `you:` — inline on the first line in the same tone, the
         // rest indented under it. The label is wrapped WITH the text so the
         // first row fits the width like every other; ticket transcripts have
         // no dialogue to label.
         // A tool-only turn carries "" (not null): no prose, so no label either.
-        const chat = run.flow === "chat" && turn.text.trim() !== "";
-        const lines = proseLines(chat ? `junco: ${turn.text.trim()}` : turn.text, width - 2);
+        const chat = run.flow === "chat" && text.trim() !== "";
+        const lines = proseLines(chat ? `junco: ${text.trim()}` : text, width - 2);
         lines.forEach((l, li) => {
           if (chat && li === 0) push(l, "accent");
           else push(l === "" ? "" : `  ${l}`);

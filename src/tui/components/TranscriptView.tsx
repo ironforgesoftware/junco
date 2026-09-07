@@ -68,7 +68,7 @@ export const TranscriptView = React.memo(function TranscriptView({
           ? []
           : renderTranscriptRows(state.summary, {
               width: textWidth,
-              showThinking: state.showThinking,
+              pinned: state.showThinking,
               expanded: state.expanded,
             }),
       ),

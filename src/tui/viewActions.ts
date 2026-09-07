@@ -168,6 +168,15 @@ const OVERLAY_RESERVED: ReadonlyMap<string, string> = new Map([
   ["close", "q"],
   ["help", "?"],
 ]);
+/** The chat view's reservations: the overlay pair plus `t` for the thinking
+ * pin (spec 2026-09-06 §4.3). The label reads "pin thinking" — it says what
+ * the key does now — and would derive `p`; the key is `t` by the spec (the
+ * transcript view's `thinking` derives it naturally) and the chip underlines
+ * the `t` in-label. */
+const CHAT_RESERVED: ReadonlyMap<string, string> = new Map([
+  ...OVERLAY_RESERVED,
+  ["thinking", "t"],
+]);
 const CLOSE: MnemonicOption = { id: "close", label: "close", hidden: true };
 const HELP: MnemonicOption = { id: "help", label: "help", hidden: true };
 
@@ -222,7 +231,7 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     { id: "edit", label: "edit" },
     { id: "discard", label: "discard", guarded: true },
     { id: "route", label: "route" },
-    { id: "thinking", label: "thinking" },
+    { id: "thinking", label: "pin thinking" },
     { id: "follow", label: "follow" },
     CLOSE,
     HELP,
@@ -462,7 +471,9 @@ export function buildContextBindings(context: BindingContext, _mode: LayoutMode)
       };
     }
     case "view": {
-      const all = deriveMnemonics(VIEW_OPTIONS[context.view], { reserved: OVERLAY_RESERVED });
+      const all = deriveMnemonics(VIEW_OPTIONS[context.view], {
+        reserved: context.view === "chat" ? CHAT_RESERVED : OVERLAY_RESERVED,
+      });
       return {
         chips: [
           ...viewStructural(context.view).slice(0, -1),

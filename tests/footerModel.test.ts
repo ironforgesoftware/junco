@@ -504,7 +504,7 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       "mnemonic:edit:edit",
       "mnemonic:discard:discard",
       "mnemonic:route:route",
-      "mnemonic:thinking:thinking",
+      "mnemonic:thinking:pin thinking",
       "mnemonic:follow:follow",
     ]);
     expect(texts(r.navigate.chips)).toEqual([

@@ -75,7 +75,7 @@ describe("runTranscriptCmd", () => {
   it("--thinking and --tools expand thinking and every tool body", async () => {
     const { out, d } = deps({ [path]: FIXTURE });
     expect(await runTranscriptCmd(["t-1", "--thinking", "--tools"], d)).toBe(0);
-    expect(out).toContain("  deep thoughts");
+    expect(out).toContain("    deep thoughts");
     expect(out).toContain("      L2");
   });
 

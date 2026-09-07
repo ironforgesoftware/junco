@@ -490,7 +490,7 @@ describe("ChatView", () => {
       expect(r.lastFrame()).toContain("junco: done"); // the history is still there
     });
 
-    it("thinking and tool blocks render as plain dim rows (interim, Tasks 12/15)", async () => {
+    it("a streaming thinking block and a tool block render their header rows (tool: interim, Task 15)", async () => {
       const summary = summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart()]);
       const r = render(
         <ChatView
@@ -537,8 +537,121 @@ describe("ChatView", () => {
       );
       await until(() => r.lastFrame()!.includes("junco: so far"));
       const f = r.lastFrame()!;
-      expect(f).toContain("· thinking");
+      // A fixed, day-old startedAt: the elapsed prints through fmtDuration.
+      expect(f).toMatch(/· thinking · \d+h\d+m/);
       expect(f).toContain("▸ read");
+    });
+  });
+
+  // Spec 2026-09-06 §4.3 (D4): the four live states, then a finished turn
+  // whose text still carries the tags.
+  describe("thinking block", () => {
+    const props = {
+      modelId: "m",
+      chatTodayUsd: null,
+      scroll: 0,
+      height: 20,
+      width: 80,
+      focused: true,
+      onComposerChange: () => {},
+      onComposerSubmit: () => {},
+    };
+    const summary = () => summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart()]);
+    const liveWith = (
+      blocks: NonNullable<ChatState["live"]>["blocks"],
+    ): NonNullable<ChatState["live"]> => ({
+      turn: "t1",
+      seq: 3,
+      blocks,
+      expanded: new Set(),
+      dropped: 0,
+    });
+    const think = (done: boolean, ageMs = 3000) =>
+      ({
+        kind: "thinking" as const,
+        contentIndex: 0,
+        text: "let me see\nwhat this does",
+        done,
+        startedAt: new Date(Date.now() - ageMs).toISOString(),
+      }) as const;
+    const answer = { kind: "text" as const, contentIndex: 1, text: "so far" };
+    const view = (state: ChatState) => render(<ChatView {...props} state={state} />);
+
+    it("streaming: `· thinking · <elapsed>s` header plus the body, wrapped plain and indented", async () => {
+      const r = view(
+        base({ summary: summary(), streaming: true, live: liveWith([think(false), answer]) }),
+      );
+      await until(() => r.lastFrame()!.includes("junco: so far"));
+      const f = r.lastFrame()!;
+      // 3 s old at mount; the clock may tick once before the frame is read.
+      expect(f).toMatch(/· thinking · [34]s/);
+      expect(f).toContain("  let me see");
+      expect(f).toContain("  what this does");
+      expect(f).not.toContain("▸ thinking");
+    });
+
+    it("done and unpinned: one collapsed `▸ thinking · <dur>s` row, no body", async () => {
+      const r = view(
+        base({ summary: summary(), streaming: true, live: liveWith([think(true), answer]) }),
+      );
+      await until(() => r.lastFrame()!.includes("junco: so far"));
+      const f = r.lastFrame()!;
+      expect(f).toMatch(/▸ thinking · [34]s/);
+      expect(f).not.toContain("let me see");
+      expect(f).not.toContain("· thinking ·");
+    });
+
+    it("done and pinned: `▾ thinking · <dur>s` with the body kept", async () => {
+      const r = view(
+        base({
+          summary: summary(),
+          streaming: true,
+          thinking: { pinned: true },
+          live: liveWith([think(true), answer]),
+        }),
+      );
+      await until(() => r.lastFrame()!.includes("junco: so far"));
+      const f = r.lastFrame()!;
+      expect(f).toMatch(/▾ thinking · [34]s/);
+      expect(f).toContain("  let me see");
+    });
+
+    it("no thinking block: no header at all (D2)", async () => {
+      const r = view(
+        base({
+          summary: summary(),
+          streaming: true,
+          thinking: { pinned: true },
+          live: liveWith([answer]),
+        }),
+      );
+      await until(() => r.lastFrame()!.includes("junco: so far"));
+      expect(r.lastFrame()).not.toContain("thinking");
+    });
+
+    it("a finished turn with <think> in its text is split at render time; t pins the body", async () => {
+      const done = summarizeTranscript([
+        metaLine(),
+        chatPrompt(),
+        chatTurnStart(),
+        agentStart(),
+        turnEndFull({ thinking: null, text: "<think>weighing it</think>\nThe answer", calls: [] }),
+        agentEnd(),
+        chatTurnEnd(),
+      ]);
+      const r = view(base({ summary: done }));
+      await until(() => r.lastFrame()!.includes("junco: The answer"));
+      let f = r.lastFrame()!;
+      expect(f).toContain("▸ thinking");
+      expect(f).not.toContain("weighing it");
+      expect(f).not.toContain("<think>");
+      r.rerender(
+        <ChatView {...props} state={base({ summary: done, thinking: { pinned: true } })} />,
+      );
+      await until(() => r.lastFrame()!.includes("weighing it"));
+      f = r.lastFrame()!;
+      expect(f).toContain("▾ thinking");
+      expect(f).toContain("junco: The answer");
     });
   });
 });

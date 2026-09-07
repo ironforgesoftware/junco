@@ -160,6 +160,13 @@ describe("pinned per-context keymaps (a label edit that re-binds FAILS here)", (
       q: "close",
       "?": "help",
     });
+    // Spec 2026-09-06 §4.3: the verb's label says what `t` does now (pins the
+    // thinking block) while the key stays `t` — reserved, since "pin thinking"
+    // would otherwise derive `p` — and the chip underlines the `t` in-label.
+    const pin = buildContextBindings({ kind: "view", view: "chat" }, "wide").all.find(
+      (d) => d.id === "thinking",
+    )!;
+    expect([pin.key, pin.label, pin.charIndex]).toEqual(["t", "pin thinking", 4]);
     expect(km({ kind: "structuralOnly", view: "chatCompose" })).toEqual({});
     const chips = buildContextBindings(
       { kind: "structuralOnly", view: "chatCompose" },

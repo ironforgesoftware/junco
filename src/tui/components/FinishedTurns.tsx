@@ -24,8 +24,6 @@ export function useFinishedRows(
   return useMemo(() => {
     // Counted so tests can prove a live frame never re-runs this body.
     bumpRender("FinishedTurns");
-    return summary === null
-      ? []
-      : renderTranscriptRows(summary, { width, showThinking: pinned, expanded });
+    return summary === null ? [] : renderTranscriptRows(summary, { width, pinned, expanded });
   }, [summary, pinned, expanded, width]);
 }
