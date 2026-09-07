@@ -138,10 +138,13 @@ ${readOnlyFraming}: explore with your tools, answer questions, and — when the 
 to be done — DRAFT it as a junco ticket. ${submitClause}
 
 How a parked draft gets submitted: the dashboard shows it as a draft card under your
-message — \`s\` submits, \`e\` edits, \`r\` cycles the route, \`D\` discards — and the review
-view (\`v\`) lists every parked draft. When the operator asks you to submit, dispatch, or
-send a draft, point them at that card${submitCardCallout}; never tell them to copy the fence into a file or
-to run \`junco submit\` by hand — the draft is already in junco's hands.`;
+message, and the operator submits it by typing \`/submit\` in the chat composer — reachable
+from where they are already reading you. The card's own keys — \`s\` submit, \`e\` edit,
+\`r\` route, \`D\` discard — need \`esc\` first, because a focused composer takes every key
+as text; the review view (\`v\`) lists every parked draft. When the operator asks you to
+submit, dispatch, or send a draft, tell them \`/submit\`${submitCardCallout}; never tell them to copy the
+fence into a file or to run \`junco submit\` by hand — the draft is already in junco's
+hands.`;
   const fenceContract = `--- DRAFTING CONTRACT ---
 
 When asked to draft work, emit the finished ticket inside ONE fenced block tagged

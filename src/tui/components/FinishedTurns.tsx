@@ -21,6 +21,10 @@ import type { HighlightFn, MdCache } from "../markdown/render.js";
  * answers, null when Pi's could not be loaded (raw fences). A memo input —
  * it changes at most once, at mount. `key` is the chat's key
  * (`ChatState.key`): the per-turn markdown caches are scoped to it (#512).
+ * `composerFocused` (#524) reaches the parked draft cards' action row, which
+ * names what is reachable from the current focus; it is a memo input, so a
+ * blur/focus rebuilds the rows — a keystroke does not, and the per-turn
+ * markdown caches survive the rebuild untouched.
  */
 export function useFinishedRows(
   summary: TranscriptSummary | null,
@@ -29,6 +33,7 @@ export function useFinishedRows(
   width: number,
   highlight: HighlightFn | null,
   key: string,
+  composerFocused: boolean,
 ): TranscriptRow[] {
   // Per-turn markdown caches across memo misses (a new summary arrives on
   // every finished turn; without this each one would re-typeset the whole
@@ -48,7 +53,8 @@ export function useFinishedRows(
           expanded,
           markdown: true,
           highlight,
+          composerFocused,
           mdCache: mdCache.current.map,
         });
-  }, [summary, pinned, expanded, width, highlight]);
+  }, [summary, pinned, expanded, width, highlight, composerFocused]);
 }

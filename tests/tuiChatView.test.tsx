@@ -283,6 +283,48 @@ describe("ChatView", () => {
     expect(f).not.toContain("y submit · n keep parked"); // the footer's row now
   });
 
+  // #524: the composer-focused state is the one the operator is in the moment
+  // the card appears, and it is exactly the state in which the card's own
+  // verbs are swallowed as text. The row must name the route that works.
+  it("a parked card's action row follows the focus: /submit while composing, the verbs once blurred", async () => {
+    const summary = summarizeTranscript([
+      metaLine({ ticketId: "acme__api" }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: null, text: "here you go", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+      chatDraft(),
+    ]);
+    const frameOf = async (composerFocused: boolean): Promise<string> => {
+      const r = render(
+        <ChatView
+          state={base({ summary, composerFocused })}
+          modelId={null}
+          chatTodayUsd={null}
+          scroll={0}
+          height={20}
+          width={100}
+          focused
+          highlight={null}
+          onComposerChange={() => {}}
+          onComposerSubmit={() => {}}
+        />,
+      );
+      await until(() => (r.lastFrame() ?? "").includes("draft parked"));
+      return r.lastFrame()!;
+    };
+    const composing = await frameOf(true);
+    expect(composing).toContain("draft parked · ticket · add-cache — /submit · esc then s/e/r/D");
+    expect(composing).not.toContain("s submit");
+    const blurred = await frameOf(false);
+    expect(blurred).toContain(
+      "draft parked · ticket · add-cache — s submit · e edit · r route · D discard",
+    );
+    expect(blurred).not.toContain("/submit");
+  });
+
   it("shows the overflow note and disables the composer when the daemon is down", async () => {
     const r = render(
       <ChatView
@@ -928,7 +970,7 @@ describe("useFinishedRows", () => {
     summary: ReturnType<typeof finished>;
     out: { rows?: TranscriptRow[] };
   }): null {
-    p.out.rows = useFinishedRows(p.summary, false, EXPANDED, 80, null, p.chatKey);
+    p.out.rows = useFinishedRows(p.summary, false, EXPANDED, 80, null, p.chatKey, false);
     return null;
   }
   const bullet = (rows: TranscriptRow[] | undefined) => rows?.find((r) => r.text === "  • a");
