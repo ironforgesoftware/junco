@@ -25,7 +25,7 @@ const base = (over: Partial<ChatState> = {}): ChatState => ({
   downReason: null,
   endReason: null,
   summary: null,
-  liveText: "",
+  live: null,
   streaming: false,
   blocked: null,
   degraded: false,
@@ -36,7 +36,8 @@ const base = (over: Partial<ChatState> = {}): ChatState => ({
   cursor: 0,
   follow: true,
   reveal: false,
-  showThinking: false,
+  thinking: { pinned: false },
+  frame: 0,
   expanded: new Set(),
   lastOffset: null,
   error: null,
@@ -150,7 +151,13 @@ describe("ChatView", () => {
     ]);
     const state = base({
       summary,
-      liveText: "thinking about it",
+      live: {
+        turn: "t1",
+        seq: 1,
+        blocks: [{ kind: "text", contentIndex: 0, text: "thinking about it" }],
+        expanded: new Set(),
+        dropped: 0,
+      },
       streaming: true,
       composer: "",
       composerFocused: false,
@@ -185,7 +192,7 @@ describe("ChatView", () => {
     expect(f).toContain("junco: because of X"); // the answer carries the other label
     expect(f).toContain("▌"); // cursor on the draft card (the only anchor)
     expect(f).toContain("draft parked · ticket · add-cache");
-    // liveText trailing rows — labelled like a finished answer, so the label
+    // live-turn trailing rows — labelled like a finished answer, so the label
     // does not appear out of nowhere when the turn ends.
     expect(f).toContain("junco: thinking about it");
     expect(f).toContain("type a message"); // composer placeholder (blurred still renders)
@@ -377,7 +384,7 @@ describe("ChatView", () => {
     expect(r.lastFrame()).toContain("connecting…");
   });
 
-  it("empty liveText adds no trailing row", async () => {
+  it("no live turn adds no trailing row", async () => {
     const summary = summarizeTranscript([
       metaLine(),
       chatPrompt(),
@@ -389,7 +396,7 @@ describe("ChatView", () => {
     ]);
     const r = render(
       <ChatView
-        state={base({ summary, liveText: "" })}
+        state={base({ summary, live: null })}
         modelId="m"
         chatTodayUsd={null}
         scroll={0}

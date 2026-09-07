@@ -1,6 +1,6 @@
 /**
  * The operator ↔ agent chat pane (spec 2026-09-01 §8.2): header strip +
- * TranscriptBody over the chat summary (with the in-flight `liveText`
+ * TranscriptBody over the chat summary (with the in-flight live turn's text
  * appended as trailing rows) + Composer. Pure layout — every action arrives
  * as a prop; ChatView never touches useChat itself.
  */
@@ -134,19 +134,26 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
         ? []
         : renderTranscriptRows(state.summary, {
             width: textWidth,
-            showThinking: state.showThinking,
+            showThinking: state.thinking.pinned,
             expanded: state.expanded,
           });
     // Streaming text is labelled exactly as the finished answer will be
     // (transcriptRender.ts's chat rows): label wrapped in with the text, the
     // first row accent, the rest indented — so nothing jumps when the turn
-    // ends and the renderer takes over.
-    if (state.liveText !== "")
-      wrapText(`junco: ${state.liveText.trimStart()}`, textWidth - 2).forEach((l, i) =>
+    // ends and the renderer takes over. Interim (spec 2026-09-06 Task 11
+    // splits the live rows out): only the live turn's TEXT blocks render;
+    // thinking and tool blocks wait for their own components.
+    const liveText =
+      state.live?.blocks
+        .filter((b) => b.kind === "text")
+        .map((b) => b.text)
+        .join("") ?? "";
+    if (liveText !== "")
+      wrapText(`junco: ${liveText.trimStart()}`, textWidth - 2).forEach((l, i) =>
         out.push(i === 0 ? { text: l, tone: "accent" } : { text: l === "" ? "" : `  ${l}` }),
       );
     return out;
-  }, [state.summary, state.showThinking, state.expanded, state.liveText, textWidth]);
+  }, [state.summary, state.thinking.pinned, state.expanded, state.live, textWidth]);
   // Memoized: a fresh array every render would defeat TranscriptBody's
   // React.memo on almost every ChatView re-render (e.g. a composer
   // keystroke, which touches state.composer but not state.summary).
