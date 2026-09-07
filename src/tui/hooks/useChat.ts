@@ -12,7 +12,12 @@ import {
   type TranscriptSummary,
 } from "../../transcriptSummary.js";
 import { parseTranscriptLine, type JuncoRecord } from "../../agent/transcriptSchema.js";
-import { applyLiveRecord, startLiveTurn, type LiveTurnState } from "../../chat/liveBlocks.js";
+import {
+  applyLiveRecord,
+  liveAnchorIds,
+  startLiveTurn,
+  type LiveTurnState,
+} from "../../chat/liveBlocks.js";
 
 export const CHAT_RING = 2000;
 /** Ruling R21: delay before the hook resubscribes after a terminal `end` —
@@ -40,7 +45,7 @@ export interface ChatState {
   drafts: PendingDraft[]; // parked drafts for this key
   composer: string;
   composerFocused: boolean;
-  cursor: number; // index into anchorIds(summary)
+  cursor: number; // index into chatAnchorIds(summary, live)
   follow: boolean;
   /** A cursor move that landed owes the window a nudge onto the anchor —
    * TranscriptBody paints it once and acks through `ackReveal`. */
@@ -82,13 +87,41 @@ export interface ChatApi {
   moveCursor(delta: number): void;
   /** The view painted the reveal a cursor move owed (TranscriptBody onReveal). */
   ackReveal(): void;
-  toggleExpanded(): void;
+  /** Toggle a tool card's body (spec 2026-09-06 §4.4): `id` names the card
+   *  (the `x` verb reads it off the cursor), else the anchor under the cursor
+   *  (enter/space). A live card toggles `live.expanded`, a finished one the
+   *  `expanded` set — the id is the same tool-call id on both sides. */
+  toggleExpanded(id?: string): void;
   toggleThinking(): void;
   setFollow(on: boolean): void;
   reloadDrafts(): Promise<void>;
   selectedDraft(): PendingDraft | null; // the draft under the cursor, when the anchor is a draft
   /** Answer the pending junco_submit card (spec 2026-09-03 §4.3). */
   decide(decision: "run" | "decline"): Promise<void>;
+}
+
+/**
+ * The chat view's cursor space (spec 2026-09-06 §4.4): the finished anchors
+ * (tool ids ∪ draft/command cards, transcriptSummary.ts's `anchorIds`) and
+ * then the live turn's tool cards, so the cursor can land on a card that is
+ * still running. A live id the summary already holds is not repeated — the
+ * card keeps ONE index across the turn end. ChatView (the body's `anchors`),
+ * useChatInput (the anchor under the cursor) and the clamps below all read
+ * this one function.
+ */
+export function chatAnchorIds(
+  summary: TranscriptSummary | null,
+  live: LiveTurnState | null,
+): string[] {
+  return mergeAnchorIds(summary === null ? [] : anchorIds(summary), liveAnchorIds(live));
+}
+
+/** `chatAnchorIds` from its two halves — ChatView memoizes each on its own
+ * input so a flush that adds no tool card keeps the array's identity. */
+export function mergeAnchorIds(finished: string[], live: string[]): string[] {
+  if (live.length === 0) return finished;
+  const seen = new Set(finished);
+  return [...finished, ...live.filter((id) => !seen.has(id))];
 }
 
 const freshState = (key: string): ChatState => ({
@@ -202,7 +235,20 @@ export function useChat({
     flushScheduled.current = false;
     if (!aliveRef.current) return;
     const live = pendingLive.current;
-    setChat((s) => (s === null ? s : { ...s, live, frame: s.frame + 1 }));
+    // `expanded` is React state (toggleExpanded), not the accumulator's: a
+    // flush of the same turn carries the operator's toggles over.
+    setChat((s) =>
+      s === null
+        ? s
+        : {
+            ...s,
+            live:
+              live !== null && s.live !== null && s.live.turn === live.turn
+                ? { ...live, expanded: s.live.expanded }
+                : live,
+            frame: s.frame + 1,
+          },
+    );
   }, [aliveRef]);
   const scheduleFlush = useCallback((): void => {
     if (flushScheduled.current) return;
@@ -283,20 +329,28 @@ export function useChat({
       }
       setChat((s) => {
         if (s === null) return s;
-        const n = anchorIds(summary).length;
         let next: ChatState = {
           ...s,
           summary,
           streaming: summary.live,
           overflowed: s.overflowed || overflowed,
-          cursor: Math.min(s.cursor, Math.max(0, n - 1)),
           lastOffset: offset ?? s.lastOffset,
         };
         // Ruling R21 point 3: endReason clears here too, same as `blocked`.
         if (rec?.type === "junco_chat_turn_start")
           next = { ...next, live: null, blocked: null, endReason: null };
-        if (rec?.type === "junco_chat_turn_end" || rec?.type === "junco_chat_turn_aborted")
-          next = { ...next, live: null };
+        if (rec?.type === "junco_chat_turn_end" || rec?.type === "junco_chat_turn_aborted") {
+          // Spec 2026-09-06 §4.4: a card the operator opened stays open past
+          // the turn end — the finished turn's card has the same tool-call
+          // id, so the live set folds into the finished one.
+          const expanded =
+            s.live === null || s.live.expanded.size === 0
+              ? s.expanded
+              : new Set([...s.expanded, ...s.live.expanded]);
+          next = { ...next, live: null, expanded };
+        }
+        const n = chatAnchorIds(summary, next.live).length;
+        next = { ...next, cursor: Math.min(s.cursor, Math.max(0, n - 1)) };
         if (rec?.type === "junco_chat_turn_rejected")
           next = { ...next, blocked: { reason: rec.reason, until: rec.until } };
         if (rec?.type === "junco_chat_transcript_degraded") next = { ...next, degraded: true };
@@ -549,8 +603,8 @@ export function useChat({
   const moveCursor = useCallback(
     (delta: number): void =>
       setChat((s) => {
-        if (s === null || s.summary === null) return s;
-        const n = anchorIds(s.summary).length;
+        if (s === null) return s;
+        const n = chatAnchorIds(s.summary, s.live).length;
         // Nothing to move to ⇒ nothing changes, `follow` included. `tab` is
         // the cursor key now (chat-scroll brief) and a plain Q&A chat has no
         // anchors at all: dropping follow here unpinned the window from the
@@ -577,16 +631,23 @@ export function useChat({
     [],
   );
   const toggleExpanded = useCallback(
-    (): void =>
+    (target?: string): void =>
       setChat((s) => {
-        if (s === null || s.summary === null) return s;
-        const id = anchorIds(s.summary)[s.cursor];
+        if (s === null) return s;
+        const id = target ?? chatAnchorIds(s.summary, s.live)[s.cursor];
         // A draft card has no body to show; a `cmd:` card has the CLI output.
         if (id === undefined || id.startsWith("draft:")) return s;
-        const expanded = new Set(s.expanded);
-        if (expanded.has(id)) expanded.delete(id);
-        else expanded.add(id);
-        return { ...s, expanded };
+        const toggled = (set: ReadonlySet<string>): Set<string> => {
+          const next = new Set(set);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        };
+        // A live card (spec 2026-09-06 §4.4) toggles the live turn's set; the
+        // turn end folds it into `expanded` under the same id.
+        if (s.live !== null && s.live.blocks.some((b) => b.kind === "tool" && b.id === id))
+          return { ...s, live: { ...s.live, expanded: toggled(s.live.expanded) } };
+        return { ...s, expanded: toggled(s.expanded) };
       }),
     [],
   );
@@ -626,7 +687,7 @@ export function useChat({
   );
   const selectedDraft = useCallback((): PendingDraft | null => {
     if (chat === null || chat.summary === null) return null;
-    const id = anchorIds(chat.summary)[chat.cursor];
+    const id = chatAnchorIds(chat.summary, chat.live)[chat.cursor];
     if (id === undefined || !id.startsWith("draft:")) return null;
     const draftId = id.slice("draft:".length);
     return chat.drafts.find((d) => d.id === draftId) ?? null;

@@ -101,6 +101,15 @@ export interface LiveTurnState {
   dropped: number;
 }
 
+/** The live turn's tool-call ids in block order — the cursor anchors the
+ * in-flight turn adds after the finished ones (spec 2026-09-06 §4.4). */
+export function liveAnchorIds(live: LiveTurnState | null): string[] {
+  if (live === null) return [];
+  const out: string[] = [];
+  for (const b of live.blocks) if (b.kind === "tool") out.push(b.id);
+  return out;
+}
+
 /** Fresh state for a turn; the caller builds it from `junco_chat_turn_start` (`turn ?? ts`). */
 export function startLiveTurn(turn: string): LiveTurnState {
   return { turn, seq: 0, blocks: [], expanded: new Set(), dropped: 0 };

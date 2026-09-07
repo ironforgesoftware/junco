@@ -506,6 +506,7 @@ describe("buildFooterRows — overlays and text-owning contexts", () => {
       "mnemonic:route:route",
       "mnemonic:thinking:pin thinking",
       "mnemonic:follow:follow",
+      "mnemonic:expandTool:expand tool",
     ]);
     expect(texts(r.navigate.chips)).toEqual([
       "structural:↑/↓:scroll",

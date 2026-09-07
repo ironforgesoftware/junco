@@ -10,14 +10,15 @@ import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { bumpRender } from "../renderCount.js";
 import { MIN_WIDTH, type RowTone } from "../../transcriptRender.js";
-import { anchorIds } from "../../transcriptSummary.js";
 import type { ChatState } from "../hooks/useChat.js";
 import type { HighlightFn } from "../markdown/render.js";
 import { TranscriptBody, bodyWindow, concatRows, toneProps } from "./TranscriptBody.js";
 import { useFinishedRows } from "./FinishedTurns.js";
 import { useLiveRows } from "./LiveTurn.js";
 import { Composer } from "./Composer.js";
-import { CHAT_RING } from "../hooks/useChat.js";
+import { CHAT_RING, mergeAnchorIds } from "../hooks/useChat.js";
+import { anchorIds } from "../../transcriptSummary.js";
+import { liveAnchorIds } from "../../chat/liveBlocks.js";
 
 const hhmm = (iso: string): string => iso.slice(11, 16);
 
@@ -151,9 +152,18 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
   // Memoized: a fresh array every render would defeat TranscriptBody's
   // React.memo on almost every ChatView re-render (e.g. a composer
   // keystroke, which touches state.composer but not state.summary).
-  const anchors = useMemo(
+  // The finished anchors plus the live turn's tool cards (spec 2026-09-06
+  // §4.4) — useChat's `chatAnchorIds`, the list the cursor is clamped
+  // against, memoized in two halves: a flush that adds no card keeps the
+  // array's identity (the live ids are keyed as a string for that).
+  const finishedAnchors = useMemo(
     () => (state.summary === null ? [] : anchorIds(state.summary)),
     [state.summary],
+  );
+  const liveKey = liveAnchorIds(state.live).join("\0");
+  const anchors = useMemo(
+    () => mergeAnchorIds(finishedAnchors, liveKey === "" ? [] : liveKey.split("\0")),
+    [finishedAnchors, liveKey],
   );
   const visible = chatVisibleRows(p.height);
   const { start, end } = bodyWindow({

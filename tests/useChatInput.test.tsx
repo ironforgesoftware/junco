@@ -19,6 +19,8 @@ import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { PendingDraft } from "../src/chat/draftStore.js";
 import type { View } from "../src/tui/App.js";
 import { okv, stubClient } from "./helpers/localFixtures.js";
+import { summarizeTranscript } from "../src/transcriptSummary.js";
+import { chatPrompt, chatTurnStart, metaLine, turnEndFull } from "./helpers/transcriptFixtures.js";
 import { until } from "./helpers/until.js";
 
 const KEY_NAMES = [
@@ -122,7 +124,7 @@ function mount(
     focusComposer: (on) => void calls.push(`focus:${String(on)}`),
     moveCursor: (d) => void calls.push(`cursor:${d}`),
     ackReveal: rec("ackReveal"),
-    toggleExpanded: rec("expand"),
+    toggleExpanded: (id) => void calls.push(id === undefined ? "expand" : `expand:${id}`),
     toggleThinking: rec("thinking"),
     setFollow: (on) => void calls.push(`follow:${String(on)}`),
     reloadDrafts: async () => {},
@@ -411,6 +413,48 @@ describe("useChatInput — the verbs (spec §8.6)", () => {
     h.setChat(chatState({ error: null }));
     h.setChat(chatState({ error: "no_checkout" }));
     await until(() => h.calls.filter((c) => c.startsWith("toast:")).length === 2);
+  });
+
+  // Spec 2026-09-06 §4.4/§4.5: `x` toggles the tool card under the cursor —
+  // a finished turn's card, or the live turn's, which sits after the
+  // finished anchors in the cursor space.
+  it("expandTool toggles the anchor under the cursor: a finished tool, then a live one", () => {
+    const summary = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      turnEndFull({ text: "", calls: [{ id: "c1", name: "read", args: {}, result: "x" }] }),
+      chatTurnStart({ turn: "t2" }),
+    ]);
+    const live: NonNullable<ChatState["live"]> = {
+      turn: "t2",
+      seq: 1,
+      blocks: [
+        {
+          kind: "tool",
+          id: "l1",
+          name: "bash",
+          args: { command: "ls" },
+          output: "",
+          result: null,
+          isError: false,
+          truncated: false,
+          done: false,
+        },
+      ],
+      expanded: new Set(),
+      dropped: 0,
+    };
+    const fin = mount({ chat: chatState({ summary, live, cursor: 0 }) });
+    fin.api.chatHandlers.expandTool!();
+    expect(fin.calls).toEqual(["expand:c1"]);
+    const lv = mount({ chat: chatState({ summary, live, cursor: 1 }) });
+    lv.api.chatHandlers.expandTool!();
+    expect(lv.calls).toEqual(["expand:l1"]);
+    // Nothing under the cursor (a plain Q&A chat has no anchors): say so.
+    const none = mount({ chat: chatState({ summary: null, live: null }) });
+    none.api.chatHandlers.expandTool!();
+    expect(none.calls).toEqual(["toast:info:no tool card under the cursor"]);
   });
 
   it("thinking, follow (pausing at the tail), and close", () => {

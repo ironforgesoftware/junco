@@ -11,7 +11,9 @@
  * the finished turn's `text` is, and typeset through a single `MdCache` held
  * in a ref and dropped with the turn (spec §4.2): a frame re-renders only
  * the open tail block. Thinking blocks are spec §4.3's four states (below).
- * Tool blocks are an interim one-row `▸ <name>` until Task 15 (ToolCard).
+ * Tool blocks are spec §4.4's cards (ToolCard.tsx): the spinner frame comes
+ * from Ink's shared animation timer, ticking only while a tool is running,
+ * and a card's expansion is `live.expanded` (toggled by `x`/enter).
  *
  * Thinking (spec §4.3, D4): while a block streams, its header `· thinking ·
  * <elapsed>s` ticks off `startedAt` against a 1 s clock and the body follows
@@ -36,6 +38,7 @@ import {
   type TranscriptRow,
 } from "../../transcriptRender.js";
 import { createMdCache, type HighlightFn, type MdCache } from "../markdown/render.js";
+import { toolCardRows, useToolSpinner } from "./ToolCard.js";
 
 /** Elapsed ms since an ISO stamp, never negative; 0 if the stamp is unparsable. */
 function elapsedMs(startedAt: string, now: number): number {
@@ -56,6 +59,7 @@ export function useLiveRows(
   // second for nothing.
   const ticking = live?.blocks.some((b) => b.kind === "thinking" && !b.done) ?? false;
   const now = useClock(ticking ? 1000 : 60_000).getTime();
+  const spinnerFrame = useToolSpinner(live);
   // Fold durations, measured on the first frame a block is seen done. A ref,
   // not state: the value is derived from the frame that revealed it, and
   // setting state here would schedule a second render for the same rows.
@@ -104,12 +108,13 @@ export function useLiveRows(
           break;
         }
         case "tool":
-          out.push({ text: `▸ ${b.name}`, tone: "dim" });
+          out.push(...toolCardRows(b, { width, expanded: live.expanded.has(b.id), spinnerFrame }));
           break;
       }
     }
     out.push(...chatAnswerRows(text, width, { highlight, cache: md.current.cache }));
     return out;
-    // `now` moves once a second only while a block streams (see `ticking`).
-  }, [live, frame, width, pinned, now, highlight]);
+    // `now` moves once a second only while a block streams (see `ticking`);
+    // `spinnerFrame` ten times a second only while a tool runs.
+  }, [live, frame, width, pinned, now, highlight, spinnerFrame]);
 }

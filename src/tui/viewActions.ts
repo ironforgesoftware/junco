@@ -176,6 +176,10 @@ const OVERLAY_RESERVED: ReadonlyMap<string, string> = new Map([
 const CHAT_RESERVED: ReadonlyMap<string, string> = new Map([
   ...OVERLAY_RESERVED,
   ["thinking", "t"],
+  // Spec 2026-09-06 §4.5: `x` expands the tool card. "expand tool" happens
+  // to derive `x` on its own (e → edit, t → thinking), but the spec names the
+  // key, so it is pinned rather than left to the label's luck.
+  ["expandTool", "x"],
 ]);
 const CLOSE: MnemonicOption = { id: "close", label: "close", hidden: true };
 const HELP: MnemonicOption = { id: "help", label: "help", hidden: true };
@@ -223,8 +227,9 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     { id: "chat", label: "chat" },
   ],
   // Spec 2026-09-01 §8.3, in this order: submit → s, edit → e, discard → D,
-  // route → r, thinking → t, follow → f, close (hidden) → q. The first four
-  // act on the draft card under the cursor, the last two on the view. No
+  // route → r, thinking → t, follow → f, expandTool → x (spec 2026-09-06
+  // §4.5), close (hidden) → q. The first four act on the draft card under the
+  // cursor, `x` on the tool card under it, the other two on the view. No
   // `chat` here (spec 2026-09-02 §5) — the chat view has no `c` of its own.
   chat: [
     { id: "submit", label: "submit" },
@@ -233,6 +238,7 @@ const VIEW_OPTIONS: Record<OverlayView, MnemonicOption[]> = {
     { id: "route", label: "route" },
     { id: "thinking", label: "pin thinking" },
     { id: "follow", label: "follow" },
+    { id: "expandTool", label: "expand tool" },
     CLOSE,
     HELP,
   ],

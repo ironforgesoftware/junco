@@ -166,8 +166,11 @@ describe("renderTranscriptRows", () => {
     });
     expect(rows.map((r) => r.text)).toContain("turn 1 · in 1.8k out 85");
     expect(rows.map((r) => r.text)).toContain("  Assessment complete.");
-    const tool = rows.find((r) => r.anchor === "c1")!;
-    expect(tool.text).toBe("  ▸ read game.js  → 3 lines");
+    // Spec 2026-09-06 §4.4: the finished tool row is the same card the live
+    // turn showed — header with the done glyph, one dim summary row under it.
+    const at = rows.findIndex((r) => r.anchor === "c1");
+    expect(rows[at]).toEqual({ text: "  ▸ read game.js  ✓", anchor: "c1" });
+    expect(rows[at + 1]).toEqual({ text: "    → 3 lines", tone: "dim" });
     // Two anchored rows: the tool call and the thinking header (spec
     // 2026-09-06 §4.3) — the latter is not in toolCallIds' cursor space.
     expect(rows.filter((r) => r.anchor !== undefined).map((r) => r.anchor)).toEqual([
@@ -312,7 +315,41 @@ describe("renderTranscriptRows", () => {
     const rows = renderTranscriptRows(s, opts());
     expect(rows[0].text).toContain("◐ running…");
     expect(rows.map((r) => r.text)).toContain("turn 1 ◐");
-    expect(rows.find((r) => r.anchor === "c2")?.text).toBe("  ▸ read a  → …");
+    // No result yet: the header carries `…` and the summary row says so.
+    const at = rows.findIndex((r) => r.anchor === "c2");
+    expect(rows[at]?.text).toBe("  ▸ read a  …");
+    expect(rows[at + 1]).toEqual({ text: "    → …", tone: "dim" });
+  });
+
+  it("an errored tool call: header in the error tone, body open by default; expanding it collapses", () => {
+    const s = summarizeTranscript([
+      runStart(),
+      turnEndFull({
+        calls: [
+          {
+            id: "e1",
+            name: "read",
+            args: { path: "nope" },
+            result: "ENOENT: nope\nx",
+            isError: true,
+          },
+        ],
+      }),
+      runEnd(),
+    ]);
+    const rows = renderTranscriptRows(s, opts());
+    const at = rows.findIndex((r) => r.anchor === "e1");
+    expect(rows[at]).toEqual({ text: "  ▸ read nope  ✗", tone: "error", anchor: "e1" });
+    expect(rows.slice(at + 1, at + 3).map((r) => [r.text, r.tone])).toEqual([
+      ["      ENOENT: nope", "dim"],
+      ["      x", "dim"],
+    ]);
+    // `expanded` is a toggle against the card's default: an error card
+    // toggled once shows only its summary row.
+    const folded = renderTranscriptRows(s, opts({ expanded: new Set(["e1"]) }));
+    const fat = folded.findIndex((r) => r.anchor === "e1");
+    expect(folded[fat + 1]).toEqual({ text: "    → ✗ ENOENT: nope", tone: "dim" });
+    expect(folded.map((r) => r.text)).not.toContain("      ENOENT: nope");
   });
 
   it("never emits a row wider than width; blank row between runs", () => {

@@ -567,6 +567,56 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     });
   });
 
+  // Spec 2026-09-06 §4.4: a live tool card's expansion lives in
+  // `live.expanded`; the card keeps it when the turn ends because the finished
+  // turn's card carries the same tool-call id.
+  describe("live tool cards (spec 2026-09-06 §4.4)", () => {
+    it("toggleExpanded on a live tool id flips live.expanded; the cursor reaches the live card; the expansion survives the turn end", async () => {
+      const c = makeClient();
+      let api!: ReturnType<typeof useChat>;
+      const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+      api.openChat("acme/api");
+      await until(() => api.chat?.connection === "live");
+      c.push(10, metaLine({ ticketId: "acme__api" }));
+      c.push(20, chatPrompt());
+      c.push(30, chatTurnStart({ turn: "t1" }));
+      c.push(null, chatTool({ turn: "t1", seq: 1, id: "c1", phase: "start", name: "read" }));
+      await until(() => r.lastFrame()!.includes("[read]"));
+      // The explicit id (the `x` verb's path).
+      api.toggleExpanded("c1");
+      await until(() => api.chat!.live!.expanded.has("c1"));
+      expect(api.chat!.expanded.size).toBe(0); // the finished set is untouched
+      // A flush after the toggle keeps it: the pending accumulator does not
+      // own `expanded`.
+      c.push(null, chatTool({ turn: "t1", seq: 2, id: "c1", phase: "output", output: "L1\n" }));
+      await until(() => (api.chat!.live!.blocks[0] as { output: string }).output === "L1\n");
+      expect(api.chat!.live!.expanded.has("c1")).toBe(true);
+      // The cursor-based path (enter/space) lands on the live card: it is the
+      // only anchor, so a move from the tail stays on it.
+      api.moveCursor(1);
+      await until(() => api.chat!.follow === false);
+      expect(api.chat!.cursor).toBe(0);
+      api.toggleExpanded();
+      await until(() => !api.chat!.live!.expanded.has("c1"));
+      api.toggleExpanded();
+      await until(() => api.chat!.live!.expanded.has("c1"));
+      // Turn end: the finished turn arrives with the same id, and the card is
+      // still open — `live.expanded` merged into `expanded`.
+      c.push(null, chatTool({ turn: "t1", seq: 3, id: "c1", phase: "end", result: "L1" }));
+      c.push(
+        40,
+        turnEndFull({ text: "", calls: [{ id: "c1", name: "read", args: {}, result: "L1" }] }),
+      );
+      c.push(50, chatTurnEnd());
+      await until(() => api.chat!.live === null);
+      expect(api.chat!.expanded.has("c1")).toBe(true);
+      expect(api.chat!.cursor).toBe(0);
+      // And the finished card toggles through the same call.
+      api.toggleExpanded("c1");
+      await until(() => !api.chat!.expanded.has("c1"));
+    });
+  });
+
   // Spec 2026-09-06 §3.3: the summary is extended one record at a time, and
   // a ring overflow recomputes from the ring — either way the result must be
   // what a whole-ring recompute gives, before, at, and after the overflow.

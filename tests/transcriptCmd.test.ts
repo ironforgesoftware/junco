@@ -67,7 +67,8 @@ describe("runTranscriptCmd", () => {
     // Recorded flow id is "assess" (unchanged data); rendered as "audit" (M-2).
     expect(out[0]).toContain("── run 1/1 · audit · m · 01:02:47 · stop · 5s");
     expect(out).toContain("  Assessment complete.");
-    expect(out).toContain("  ▸ read game.js  → 2 lines");
+    expect(out).toContain("  ▸ read game.js  ✓");
+    expect(out).toContain("    → 2 lines");
     expect(out.some((l) => l.includes("deep thoughts"))).toBe(false);
     expect(out.some((l) => l.includes("L2"))).toBe(false);
   });

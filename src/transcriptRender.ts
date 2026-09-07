@@ -251,6 +251,105 @@ export function fmtToolResult(r: ToolResultSummary | null): string {
   return `→ ${r.lines} line${r.lines === 1 ? "" : "s"}`;
 }
 
+/** Rows of streamed output a running card shows (spec 2026-09-06 §4.4: N = 6). */
+export const TOOL_TAIL_LINES = 6;
+
+/**
+ * A tool card's input: the live turn's tool block (chat/liveBlocks.ts) as is,
+ * or a finished `ToolCallSummary` lifted into the same shape (`output: ""`,
+ * `done` = has a result) — so the two render through ONE function and the
+ * card does not change shape when the turn ends.
+ */
+export interface ToolCardBlock {
+  id: string;
+  name: string;
+  args: unknown;
+  output: string;
+  result: string | null;
+  isError: boolean;
+  truncated: boolean;
+  done: boolean;
+}
+
+export interface ToolCardOpts {
+  width: number;
+  /** The operator's toggle for this id — a toggle AGAINST the card's default,
+   * which is closed for a result and OPEN for an error. */
+  expanded: boolean;
+  /** The running glyph: a spinner frame from the dashboard, null for a static
+   * surface (`junco transcript`, a ticket transcript's provisional turn) which
+   * prints `…`. Ignored once `done`. */
+  spinner: string | null;
+}
+
+/**
+ * One tool card (spec 2026-09-06 §4.4, D6), anchored on the tool-call id:
+ *
+ *     ▸ bash npm test  ⠋          running: header + the last TOOL_TAIL_LINES
+ *         line 4                    of `output`, dim (a `…` row first when
+ *         line 5                    the rolling cap dropped the head)
+ *     ▸ bash npm test  ✓          done, closed: one dim summary row
+ *         → 3 lines
+ *     ▸ bash npm test  ✗          done, open (an error is open by default):
+ *           ENOENT: nope            the result wrapped, capped at
+ *           …                       TOOL_BODY_MAX_LINES, `… (truncated)` when
+ *                                   the daemon cut the result
+ *
+ * The header is in tone `error` for an error; the call's argument summary is
+ * `fmtToolCall`'s, the summary row `fmtToolResult`'s — the same vocabulary the
+ * ticket transcript has always used.
+ */
+export function renderToolCard(b: ToolCardBlock, o: ToolCardOpts): TranscriptRow[] {
+  const width = Math.max(MIN_WIDTH, o.width);
+  const rows: TranscriptRow[] = [];
+  const push = (text: string, tone?: RowTone, anchor?: string): void => {
+    const row: TranscriptRow = { text: truncate(text, width) };
+    if (tone !== undefined) row.tone = tone;
+    if (anchor !== undefined) row.anchor = anchor;
+    rows.push(row);
+  };
+  const args: Record<string, unknown> =
+    typeof b.args === "object" && b.args !== null ? (b.args as Record<string, unknown>) : {};
+  const glyph = !b.done ? (o.spinner ?? "…") : b.isError ? "✗" : "✓";
+  // 2 (indent) + 2 (`▸ `) + call + 2 + 1 (glyph) ≤ width.
+  const call = fmtToolCall(b.name, args, Math.max(8, width - 7));
+  push(`  ▸ ${call}  ${glyph}`, b.isError ? "error" : undefined, b.id);
+  if (!b.done) {
+    // A static surface has no spinner to say "still running": keep the
+    // `→ …` row the ticket transcript has always printed for a call without
+    // a result. The dashboard's spinner says it, and the tail follows.
+    if (b.output === "") {
+      if (o.spinner === null) push(`    ${fmtToolResult(null)}`, "dim");
+      return rows;
+    }
+    const lines = b.output.split("\n");
+    if (lines.at(-1) === "") lines.pop(); // a trailing newline is not a blank line
+    if (b.truncated) push("    …", "dim");
+    for (const l of lines.slice(-TOOL_TAIL_LINES)) push(`    ${l}`, "dim");
+    return rows;
+  }
+  const open = o.expanded !== b.isError;
+  if (!open) {
+    const summary =
+      b.result === null
+        ? null
+        : {
+            text: b.result,
+            lines: b.result === "" ? 0 : b.result.split("\n").length,
+            isError: b.isError,
+          };
+    push(`    ${fmtToolResult(summary)}`, "dim");
+    return rows;
+  }
+  const body = b.result === null || b.result === "" ? ["(empty)"] : b.result.split("\n");
+  for (const raw of body.slice(0, TOOL_BODY_MAX_LINES))
+    for (const l of wrapText(raw, width - 6)) push(`      ${l}`, "dim");
+  if (body.length > TOOL_BODY_MAX_LINES)
+    push(`      … +${body.length - TOOL_BODY_MAX_LINES} more lines`, "dim");
+  if (b.truncated) push("      … (truncated)", "dim");
+  return rows;
+}
+
 /** Display-only rename for a run header's recorded flow id (RunSummary.flow,
  * transcriptSchema.ts's FlowKind): the recorded transcript data keeps its
  * internal `"assess"`/`"analyze"` values (out of surface-legibility Task 2's
@@ -400,24 +499,25 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
           });
         }
       }
-      for (const c of turn.toolCalls) {
-        const suffix = fmtToolResult(c.result);
-        push(
-          `  ▸ ${fmtToolCall(c.name, c.args, Math.max(8, width - 6 - suffix.length))}  ${suffix}`,
-          undefined,
-          c.id,
+      // Spec 2026-09-06 §4.4: the same card the live turn showed, so nothing
+      // changes shape at turn end; a call without a result (a ticket
+      // transcript's provisional turn) is a static `…` card.
+      for (const c of turn.toolCalls)
+        rows.push(
+          ...renderToolCard(
+            {
+              id: c.id,
+              name: c.name,
+              args: c.args,
+              output: "",
+              result: c.result?.text ?? null,
+              isError: c.result?.isError ?? false,
+              truncated: false,
+              done: c.result !== null,
+            },
+            { width, expanded: o.expanded.has(c.id), spinner: null },
+          ),
         );
-        if (o.expanded.has(c.id) && c.result !== null) {
-          const body = c.result.text === "" ? ["(empty)"] : c.result.text.split("\n");
-          for (const raw of body.slice(0, TOOL_BODY_MAX_LINES))
-            for (const l of wrapText(raw, width - 6)) push(`      ${l}`, "dim");
-          if (body.length > TOOL_BODY_MAX_LINES)
-            push(
-              truncate(`      … +${body.length - TOOL_BODY_MAX_LINES} more lines`, width),
-              "dim",
-            );
-        }
-      }
       for (const g of run.guardDecisions) if (g.turnIndex === turn.index) guardRow(g);
     }
     for (const g of run.guardDecisions) if (g.turnIndex >= run.turns.length) guardRow(g);

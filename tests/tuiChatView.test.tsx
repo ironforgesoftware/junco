@@ -500,7 +500,7 @@ describe("ChatView", () => {
       expect(r.lastFrame()).toContain("junco: done"); // the history is still there
     });
 
-    it("a streaming thinking block and a tool block render their header rows (tool: interim, Task 15)", async () => {
+    it("a streaming thinking block and a tool block render their header rows", async () => {
       const summary = summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart()]);
       const r = render(
         <ChatView
@@ -550,7 +550,117 @@ describe("ChatView", () => {
       const f = r.lastFrame()!;
       // A fixed, day-old startedAt: the elapsed prints through fmtDuration.
       expect(f).toMatch(/· thinking · \d+h\d+m/);
-      expect(f).toContain("▸ read");
+      expect(f).toContain("▸ read x");
+    });
+  });
+
+  // Spec 2026-09-06 §4.4 (D6): one card per tool block — header with the
+  // call, a spinner while it runs and the streamed tail under it; `✓`/`✗`
+  // when done with a summary row, or the capped body when expanded.
+  describe("tool cards", () => {
+    const props = {
+      modelId: "m",
+      chatTodayUsd: null,
+      scroll: 0,
+      height: 24,
+      width: 80,
+      focused: true,
+      highlight: null,
+      onComposerChange: () => {},
+      onComposerSubmit: () => {},
+    };
+    const summary = () => summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart()]);
+    type Tool = Extract<NonNullable<ChatState["live"]>["blocks"][number], { kind: "tool" }>;
+    const tool = (over: Partial<Tool> = {}): Tool => ({
+      kind: "tool",
+      id: "c1",
+      name: "bash",
+      args: { command: "npm test" },
+      output: "",
+      result: null,
+      isError: false,
+      truncated: false,
+      done: false,
+      ...over,
+    });
+    const liveWith = (blocks: Tool[], expanded: string[] = []): NonNullable<ChatState["live"]> => ({
+      turn: "t1",
+      seq: 3,
+      blocks,
+      expanded: new Set(expanded),
+      dropped: 0,
+    });
+    const view = (state: ChatState) => render(<ChatView {...props} state={state} />);
+    const SPIN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
+
+    it("running: header with a spinner and the last six output lines, dim and indented", async () => {
+      const out = Array.from({ length: 9 }, (_, i) => `line ${i + 1}`).join("\n");
+      const r = view(
+        base({
+          summary: summary(),
+          streaming: true,
+          composerFocused: false,
+          follow: false,
+          live: liveWith([tool({ output: out })]),
+        }),
+      );
+      await until(() => SPIN.test(r.lastFrame() ?? ""));
+      const f = r.lastFrame()!;
+      const head = f.split("\n").find((l) => l.includes("▸ bash npm test"))!;
+      expect(head).toMatch(SPIN);
+      expect(f).toContain("▌"); // the live card is the cursor's anchor
+      expect(f).not.toContain("line 3");
+      expect(f).toContain("    line 4");
+      expect(f).toContain("    line 9");
+      expect(f).not.toContain("→ ");
+    });
+
+    it("done and collapsed: ✓ in the header and one summary row, no body", async () => {
+      const r = view(
+        base({
+          summary: summary(),
+          streaming: true,
+          live: liveWith([tool({ done: true, result: "a\nb\nc", output: "a\nb\nc" })]),
+        }),
+      );
+      await until(() => r.lastFrame()!.includes("▸ bash npm test  ✓"));
+      const f = r.lastFrame()!;
+      expect(f).toContain("→ 3 lines");
+      expect(f).not.toMatch(SPIN);
+      expect(f).not.toMatch(/^\s+a$/m);
+    });
+
+    it("done and expanded: the result body under the header, with a … row when truncated", async () => {
+      const r = view(
+        base({
+          summary: summary(),
+          streaming: true,
+          live: liveWith(
+            [tool({ done: true, result: "a\nb", output: "", truncated: true })],
+            ["c1"],
+          ),
+        }),
+      );
+      await until(() => r.lastFrame()!.includes("▸ bash npm test  ✓"));
+      const f = r.lastFrame()!;
+      expect(f).toContain("      a");
+      expect(f).toContain("      b");
+      expect(f).toContain("… (truncated)");
+      expect(f).not.toContain("→ 2 lines");
+    });
+
+    it("an error: ✗ header and the body open by default; the toggle collapses it", async () => {
+      const err = tool({ id: "e1", done: true, isError: true, result: "boom: bad\nmore" });
+      const r = view(base({ summary: summary(), streaming: true, live: liveWith([err]) }));
+      await until(() => r.lastFrame()!.includes("▸ bash npm test  ✗"));
+      expect(r.lastFrame()!).toContain("      boom: bad");
+      expect(r.lastFrame()!).toContain("      more");
+      const folded = view(
+        base({ summary: summary(), streaming: true, live: liveWith([err], ["e1"]) }),
+      );
+      await until(() => folded.lastFrame()!.includes("▸ bash npm test  ✗"));
+      expect(folded.lastFrame()!).toContain("→ ✗ boom: bad");
+      expect(folded.lastFrame()!).not.toContain("      more");
     });
   });
 
