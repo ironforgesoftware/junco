@@ -47,6 +47,7 @@ function cfgFor(root: string, overrides: Partial<Config> = {}) {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: false,
+      chatEnabled: true,
     },
     overrides,
   );

@@ -34,6 +34,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       verifyCommandTimeout: 10, // short so per-command timeout paths are reachable in-test

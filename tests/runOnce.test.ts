@@ -43,6 +43,7 @@ function cfg(root: string): Config {
       supervisorEnabled: true,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       dataLayout: "flat", // transcripts-dir assertions below are root-relative

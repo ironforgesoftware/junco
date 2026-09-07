@@ -40,6 +40,8 @@ const SEAMS: ConfigSeams = {
   supervisorEnabled: false,
   healthEnabled: true,
   removeWorktreeOnSuccess: false,
+  // Off, like doctor.test.ts's okConfig: the chat checks below opt in per test.
+  chatEnabled: false,
 };
 
 /** A local (never catalog-eligible) model, so `endpoint-model` takes the
@@ -555,10 +557,10 @@ describe("check: chat-thinking (spec 2026-09-06 §2.2)", () => {
   });
 
   it("is silent when chat is disabled", async () => {
-    const base = cfgOf();
+    // The SEAMS say chat off; nothing here opts in.
     expect(
       await check("chat-thinking").run(
-        ctxOf(cfgOf({ chat: { ...base.chat, enabled: false } }), {
+        ctxOf(cfgOf(), {
           resolveInfoFn: async () => inlineInfo("http://127.0.0.1:8080/v1"),
         }),
       ),

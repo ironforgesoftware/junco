@@ -49,6 +49,7 @@ function makeConfig(work: string, tmpRoot: string, ghBin = "gh"): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       ghBin, // the caller's fake gh script; gh-free tests keep the parameter default

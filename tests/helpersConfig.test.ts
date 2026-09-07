@@ -13,6 +13,7 @@ const seams: ConfigSeams = {
   supervisorEnabled: false,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
+  chatEnabled: true,
 };
 
 describe("makeConfig", () => {
@@ -23,6 +24,15 @@ describe("makeConfig", () => {
     expect(c.worktreeRoot).toBe("/sbxroot/wts");
     expect(c.criticEnabled).toBe(false);
     expect(c.removeWorktreeOnSuccess).toBe(true);
+    expect(c.chat.enabled).toBe(true);
+  });
+
+  // #514: chat.enabled is a seam, not ballast — two doctor fixtures had drifted
+  // to opposite values of it. The rest of the chat block stays ballast.
+  it("routes the chatEnabled seam to chat.enabled and keeps the rest of chat as ballast", () => {
+    const off = makeConfig({ ...seams, chatEnabled: false });
+    expect(off.chat.enabled).toBe(false);
+    expect(off.chat).toMatchObject({ submitTool: true, thinkTags: "auto", maxFps: 60 });
   });
 
   it("fills the ballast keys", () => {

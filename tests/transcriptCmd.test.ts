@@ -24,6 +24,7 @@ const seams: ConfigSeams = {
   supervisorEnabled: true,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
+  chatEnabled: true,
 };
 
 const FIXTURE = [

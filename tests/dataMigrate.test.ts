@@ -59,6 +59,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       dataLayout: "flat",

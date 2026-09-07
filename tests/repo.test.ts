@@ -81,6 +81,7 @@ function makeConfig(work: string, ghBin: string): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       ghBin, // the caller's fake gh script — never the real, authenticated gh

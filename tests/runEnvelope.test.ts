@@ -21,6 +21,7 @@ const seams: ConfigSeams = {
   supervisorEnabled: true,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
+  chatEnabled: true,
 };
 
 describe("guardOptionsFromConfig", () => {

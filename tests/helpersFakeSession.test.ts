@@ -26,7 +26,13 @@ describe("fakeSession", () => {
   it("delivers text_delta, turn_end and agent_end to a subscriber", async () => {
     const events = (await collect(fakeSession("hello"))) as Array<Record<string, any>>;
     expect(events.map((e) => e.type)).toEqual(["message_update", "turn_end", "agent_end"]);
-    expect(events[0].assistantMessageEvent).toEqual({ type: "text_delta", delta: "hello" });
+    // contentIndex is required by the SDK's text_delta (#514 — the fake is
+    // now typed against pi-ai's AssistantMessageEvent).
+    expect(events[0].assistantMessageEvent).toEqual({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "hello",
+    });
     expect(events[1].message.stopReason).toBe("stop");
     expect(events[2].willRetry).toBe(false);
   });

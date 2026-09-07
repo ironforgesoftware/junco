@@ -292,6 +292,7 @@ async function shippedTree(layout: "v2" | "flat"): Promise<ShippedTree> {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: false,
+      chatEnabled: true,
     },
     {
       dataLayout: layout,

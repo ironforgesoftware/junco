@@ -25,6 +25,7 @@ function makeConfig(): { cfg: Config; root: string } {
       supervisorEnabled: true,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       defaultTimeoutMinutes: 1,

@@ -28,6 +28,7 @@ function makeFakeConfig(root = "/tmp/q"): Config {
       supervisorEnabled: true,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       defaultTimeoutMinutes: 1,

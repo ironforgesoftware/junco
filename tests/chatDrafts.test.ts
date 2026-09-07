@@ -22,6 +22,7 @@ function cfgAt(root: string) {
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: true,
+    chatEnabled: true,
   });
 }
 const sess = { slug: "acme__api", key: "acme/api", cwd: "/repo", nwo: "acme/api" };

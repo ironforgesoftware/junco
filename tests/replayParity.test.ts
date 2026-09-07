@@ -33,6 +33,7 @@ const seams: ConfigSeams = {
   supervisorEnabled: true,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
+  chatEnabled: true,
 };
 
 // One shared Config for BOTH the live run and the replay's guard options —

@@ -25,6 +25,7 @@ function cfgAt(root: string) {
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: true,
+    chatEnabled: true,
   });
 }
 

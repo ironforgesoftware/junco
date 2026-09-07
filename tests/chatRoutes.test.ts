@@ -71,24 +71,63 @@ function fakeManager(over: Partial<ChatRoutesManager> & { partial?: string | nul
   return m;
 }
 
-async function readSse(resp: Response, untilEvents: number): Promise<string[]> {
+/** Reads SSE frames until `untilEvents` have arrived. Bounded on purpose
+ * (#514): a frame-ordering regression used to surface as vitest's 5 s
+ * timeout with no frames to look at; now it rejects in `deadlineMs` naming
+ * the frames seen so far. */
+async function readSse(
+  resp: Response,
+  untilEvents: number,
+  { deadlineMs = 2000 }: { deadlineMs?: number } = {},
+): Promise<string[]> {
   const reader = resp.body!.getReader();
   const dec = new TextDecoder();
   let buf = "";
   const events: string[] = [];
-  while (events.length < untilEvents) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let i: number;
-    while ((i = buf.indexOf("\n\n")) !== -1) {
-      events.push(buf.slice(0, i));
-      buf = buf.slice(i + 2);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `readSse: ${deadlineMs}ms passed with ${events.length}/${untilEvents} frames: ` +
+              JSON.stringify(events),
+          ),
+        ),
+      deadlineMs,
+    );
+  });
+  try {
+    while (events.length < untilEvents) {
+      const { value, done } = await Promise.race([reader.read(), deadline]);
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) !== -1) {
+        events.push(buf.slice(0, i));
+        buf = buf.slice(i + 2);
+      }
     }
+  } finally {
+    clearTimeout(timer);
+    await reader.cancel();
   }
-  await reader.cancel();
   return events;
 }
+
+describe("readSse (the test helper itself)", () => {
+  it("rejects at the deadline with the frames seen so far", async () => {
+    const url = await serve(fakeManager(), { pingMs: 60_000 });
+    // since=10 replays exactly one frame; with pings off nothing else arrives.
+    const resp = await fetch(`${url}/chat/events?key=k&since=10`);
+    const err = await readSse(resp, 2, { deadlineMs: 60 }).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err?.message).toMatch(/^readSse: 60ms passed with 1\/2 frames: /);
+    expect(err?.message).toContain('id: 30\\ndata: {\\"type\\":\\"junco_chat_prompt\\"}');
+  });
+});
 
 /** `fetch()` always derives `Host` from the URL — Node's `http.request` is
  *  the only way to send an arbitrary one, needed for the Host-allowlist

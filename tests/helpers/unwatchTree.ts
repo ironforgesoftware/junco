@@ -31,6 +31,7 @@ export function makeTree(opts: { configRepos?: { nwo: string; path: string }[] }
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: false,
+      chatEnabled: true,
     },
     {
       github: {

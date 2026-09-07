@@ -80,6 +80,7 @@ const cfg = makeConfig({
   supervisorEnabled: false,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
+  chatEnabled: true,
 });
 
 describe("makePiSessionFactory — non-sandbox appendSystemPrompt wiring (Task 12)", () => {

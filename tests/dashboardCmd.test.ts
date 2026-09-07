@@ -9,26 +9,28 @@ import type { Config } from "../src/types.js";
 import { makeConfig, READ_ONLY_TOOLS } from "./helpers/config.js";
 import type React from "react";
 
-const cfg = {
-  dataDir: "/tmp/junco-dash-test",
-  queueRoot: "/tmp/junco-dash-test-vault/Junco",
-  maxConcurrent: 1,
+/** The dashboard's seams: the GitHub bridge ON (the LOCAL-mode tests below
+ * flip it off per test) and the health server off. Everything the host reads
+ * beyond that — chat.maxFps for the Ink render options (D8), `tools` for the
+ * chat model chain (chatCfgFor) — is makeConfig ballast. */
+const dashSeams = (dataDir: string) => ({
+  dataDir,
+  queueRoot: `${dataDir}/queue`,
+  worktreeRoot: `${dataDir}/worktrees`,
+  tools: READ_ONLY_TOOLS,
+  criticEnabled: false,
+  planLintEnabled: false,
+  verifyEnabled: false,
+  supervisorEnabled: false,
   healthEnabled: false,
-  healthHost: "127.0.0.1",
+  removeWorktreeOnSuccess: false,
+  chatEnabled: true,
+});
+
+const cfg = makeConfig(dashSeams("/sbxroot/junco-dash-test"), {
   healthPort: 0,
-  github: {
-    enabled: true,
-    triggerLabel: "junco",
-    askLabel: "junco:ask",
-    pollIntervalSeconds: 60,
-    repos: [],
-    requireApproval: true,
-    plannerModelId: null,
-    externalReposRoot: "/tmp/junco-test-external",
-  },
-  // Ballast: runDashboard reads chat.maxFps for the Ink render options (D8).
-  chat: { maxFps: 60 },
-} as unknown as Config;
+  github: { ...makeConfig(dashSeams("/sbxroot/junco-dash-test")).github, enabled: true },
+});
 
 describe("runDashboard", () => {
   it("non-TTY exits 1 with guidance and never renders", async () => {
@@ -64,10 +66,7 @@ describe("runDashboard", () => {
   // into the local surface instead of refusing — Task 18 relaxes the old
   // Fix-4 refusal now that there's a non-GitHub UI to land on.
   it("github.enabled=false launches into LOCAL mode (renders) rather than refusing", async () => {
-    const disabled = {
-      ...cfg,
-      github: { ...cfg.github, enabled: false },
-    } as unknown as Config;
+    const disabled: Config = { ...cfg, github: { ...cfg.github, enabled: false } };
     let rendered = false;
     const errs: string[] = [];
     const code = await runDashboard(disabled, "/x/config.json", {
@@ -84,10 +83,7 @@ describe("runDashboard", () => {
   });
 
   it("still refuses when there is no TTY, regardless of github.enabled", async () => {
-    const disabled = {
-      ...cfg,
-      github: { ...cfg.github, enabled: false },
-    } as unknown as Config;
+    const disabled: Config = { ...cfg, github: { ...cfg.github, enabled: false } };
     let rendered = false;
     const code = await runDashboard(disabled, "/x/config.json", {
       isTTY: false,
@@ -179,7 +175,7 @@ describe("runDashboard FTUE (nullable config)", () => {
 describe("runDashboard unhandledRejection net", () => {
   const withDataDir = (): Config => {
     const root = mkdtempSync(join(tmpdir(), "junco-dash-reject-"));
-    const c = { ...cfg, dataDir: root } as unknown as Config;
+    const c: Config = { ...cfg, dataDir: root };
     mkdirSync(dirname(dataTreePaths(c).logFile), { recursive: true });
     return c;
   };
@@ -285,6 +281,7 @@ describe("runDashboard maxFps (spec 2026-09-06 §3.4, D8)", () => {
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: false,
+    chatEnabled: true,
   });
 
   it("INK_RENDER_OPTIONS defaults to 60 fps", () => {
@@ -322,8 +319,6 @@ describe("runDashboard maxFps (spec 2026-09-06 §3.4, D8)", () => {
 // Task 14 (spec 2026-09-06 §4.2): Pi's highlighter reaches the chat view
 // through the session seam, injected here so the test never loads the SDK.
 describe("runDashboard highlighter wiring", () => {
-  // A full Config: buildAppProps resolves the chat model chain (chatCfgFor
-  // reads cfg.tools), which the file-level stub above does not carry.
   const cfg = makeConfig({
     dataDir: "/sbxroot/junco-dash-hl",
     queueRoot: "/sbxroot/junco-dash-hl/queue",
@@ -335,6 +330,7 @@ describe("runDashboard highlighter wiring", () => {
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: false,
+    chatEnabled: true,
   });
   const rootProps = (element: React.ReactElement) =>
     (

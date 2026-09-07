@@ -69,6 +69,7 @@ describe("plan-set store", () => {
         supervisorEnabled: false,
         healthEnabled: false,
         removeWorktreeOnSuccess: false,
+        chatEnabled: true,
       },
       { dataLayout: "v2" },
     );

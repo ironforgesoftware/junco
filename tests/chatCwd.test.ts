@@ -14,6 +14,7 @@ const cfg = makeConfig({
   supervisorEnabled: false,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
+  chatEnabled: true,
 });
 const ok = (stdout: string): CmdResult => ({ code: 0, stdout, stderr: "" });
 

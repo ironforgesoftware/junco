@@ -70,6 +70,7 @@ function cfg() {
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: false,
+    chatEnabled: true,
   });
 }
 
@@ -105,6 +106,7 @@ function ghCfg(opts: { githubEnabled?: boolean; botEnabled?: boolean } = {}) {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: false,
+      chatEnabled: true,
     },
     {
       github: { ...DEFAULT_GITHUB, enabled: opts.githubEnabled ?? true },

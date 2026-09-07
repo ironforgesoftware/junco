@@ -3,8 +3,10 @@
  *
  * Replaces 19 near-identical ~83-line copies. Derived mechanically from those
  * 19: 71 key paths, 50 byte-identical (ballast, below), 21 varying. Of the
- * varying, TEN are semantic and are REQUIRED seams the call site must state —
+ * varying, TEN were semantic and are REQUIRED seams the call site must state —
  * a test must never silently inherit a value that changes what is under test.
+ * `chat.enabled` became the eleventh (#514): two doctor fixtures had drifted
+ * to opposite values of a feature toggle nobody was stating.
  * Three others (model.id/apiKey/baseUrl) were pure spelling noise ("m", "k",
  * "u" vs "test-model", "test-key") and are canonicalized here.
  *
@@ -20,8 +22,8 @@ import type { Config } from "../../src/types.js";
 export const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 
 /**
- * The ten keys whose value changes what is under test. All required — omission
- * is a type error, which is the point.
+ * The eleven keys whose value changes what is under test. All required —
+ * omission is a type error, which is the point.
  */
 export interface ConfigSeams {
   /** Unified data root. Prefer a synthetic /sbxroot/... path over a real one. */
@@ -36,6 +38,8 @@ export interface ConfigSeams {
   supervisorEnabled: boolean;
   healthEnabled: boolean;
   removeWorktreeOnSuccess: boolean;
+  /** `chat.enabled` — gates the chat manager and both doctor chat checks. */
+  chatEnabled: boolean;
 }
 
 export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}): Config {
@@ -144,7 +148,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
     botAccount: { enabled: false, configDir: "/sbxroot/junco-gh" },
     planSets: { enabled: false, mergePollSeconds: 60, maxTasks: 10 },
     chat: {
-      enabled: true,
+      enabled: seams.chatEnabled,
       modelId: null,
       thinkingLevel: null,
       turnTimeoutMinutes: null,
