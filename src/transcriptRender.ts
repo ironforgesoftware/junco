@@ -13,14 +13,29 @@ import { commandAnchor, draftAnchor } from "./transcriptSummary.js";
 import type { RunSummary, ToolResultSummary, TranscriptSummary } from "./transcriptSummary.js";
 import { splitThinkingText } from "./chat/thinkSplitter.js";
 import { parseBlocks } from "./tui/markdown/blocks.js";
-import { renderMarkdown, type HighlightFn, type MdCache } from "./tui/markdown/render.js";
+import {
+  createMdCache,
+  renderMarkdown,
+  type HighlightFn,
+  type MdCache,
+} from "./tui/markdown/render.js";
 
 /** `thinking`: the model's reasoning body (spec 2026-09-06 §4.3 — dim italic). */
 export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success" | "thinking";
 
+/** A markdown link the row's text carries as `text (url)` (F3, #512):
+ * TranscriptBody wraps `text` in an OSC 8 hyperlink post-layout. */
+export interface RowLink {
+  text: string;
+  url: string;
+}
+
 export interface TranscriptRow {
   text: string;
   tone?: RowTone;
+  /** Links whose `text` appears in this row (markdown/render.ts); absent on
+   * every other row so the plain paint path stays the common one. */
+  links?: readonly RowLink[];
   /** Set on a tool-call row: the toolCallId the cursor/expand key targets.
    * A thinking header carries `thinkingAnchor(run, turn)` — not part of the
    * cursor's index space (transcriptSummary.ts's anchorIds/toolCallIds), it
@@ -94,7 +109,8 @@ export function chatAnswerRows(
   const out: TranscriptRow[] = [];
   if (!labelled) out.push({ text: CHAT_LABEL.trimEnd(), tone: "accent" });
   rows.forEach((r, i) => {
-    if (labelled && i === 0) out.push({ text: r.text, tone: "accent" });
+    if (labelled && i === 0)
+      out.push(r.links === undefined ? { text: r.text, tone: "accent" } : { ...r, tone: "accent" });
     else if (r.text === "") out.push(r);
     else out.push(indented(r));
   });
@@ -109,7 +125,7 @@ const INDENTED = new WeakMap<TranscriptRow, TranscriptRow>();
 function indented(r: TranscriptRow): TranscriptRow {
   let hit = INDENTED.get(r);
   if (hit === undefined) {
-    hit = r.tone === undefined ? { text: `  ${r.text}` } : { text: `  ${r.text}`, tone: r.tone };
+    hit = { ...r, text: `  ${r.text}` };
     INDENTED.set(r, hit);
   }
   return hit;
@@ -487,7 +503,7 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
           // escapes as columns and could cut one in half).
           let cache = o.mdCache?.get(mdCacheKey(i, turn.index));
           if (o.mdCache && cache === undefined) {
-            cache = { width: 0, highlight: undefined, entries: [] };
+            cache = createMdCache();
             o.mdCache.set(mdCacheKey(i, turn.index), cache);
           }
           rows.push(...chatAnswerRows(text, width, { highlight: o.highlight ?? null, cache }));

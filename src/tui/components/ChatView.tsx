@@ -140,6 +140,7 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
     state.expanded,
     textWidth,
     p.highlight,
+    state.key,
   );
   const liveRows = useLiveRows(
     state.live,

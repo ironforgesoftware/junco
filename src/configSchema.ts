@@ -253,6 +253,7 @@ export const ConfigSchema = z.object({
       confirmTimeoutMinutes: z.number().min(1).default(10),
       thinkTags: z.enum(["auto", "on", "off"]).default("auto"),
       maxFps: z.number().int().min(10).max(120).default(60),
+      theme: z.enum(["auto", "dark", "light"]).default("auto"),
     })
     .prefault({}),
 });

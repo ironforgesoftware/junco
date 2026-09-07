@@ -236,9 +236,40 @@ describe("renderMarkdown inline", () => {
     expect(texts(rows)).toEqual(["use foo_bar_baz; 2 * 3 * 4"]);
   });
 
-  it("renders a link as its text followed by the URL", () => {
+  it("renders a link as its text followed by the URL and records it on the row", () => {
     const rows = renderMarkdown("see [the docs](https://x.test/d) now", { width: 80 });
-    expect(texts(rows)).toEqual(["see the docs (https://x.test/d) now"]);
+    expect(rows).toEqual([
+      {
+        text: "see the docs (https://x.test/d) now",
+        links: [{ text: "the docs", url: "https://x.test/d" }],
+      },
+    ]);
+  });
+
+  it("records links on heading, list and quote rows, and only on the row carrying the text", () => {
+    const rows = renderMarkdown(
+      "# [H](https://h.test)\n\n- [a](https://a.test) and [b](https://b.test)\n\n> [q](https://q.test)\n\nplain",
+      { width: 80 },
+    );
+    expect(rows).toEqual([
+      { text: "H (https://h.test)", tone: "bold", links: [{ text: "H", url: "https://h.test" }] },
+      { text: "" },
+      {
+        text: "• a (https://a.test) and b (https://b.test)",
+        links: [
+          { text: "a", url: "https://a.test" },
+          { text: "b", url: "https://b.test" },
+        ],
+      },
+      { text: "" },
+      { text: "│ q (https://q.test)", tone: "dim", links: [{ text: "q", url: "https://q.test" }] },
+      { text: "" },
+      { text: "plain" },
+    ]);
+    // A bare url link (`[u](u)`) renders once and is still a link.
+    expect(renderMarkdown("[https://x.test](https://x.test)", { width: 80 })).toEqual([
+      { text: "https://x.test", links: [{ text: "https://x.test", url: "https://x.test" }] },
+    ]);
   });
 
   it("applies inline handling inside headings, lists and quotes", () => {
@@ -288,6 +319,61 @@ describe("renderMarkdown fences and highlighting", () => {
   it("renders no rows for a fence with no lines yet", () => {
     expect(renderMarkdown("```ts", { width: 40 })).toEqual([]);
     expect(renderMarkdown("```ts\n", { width: 40 })).toEqual([]);
+  });
+
+  // F3 (#512): an OPEN fence is highlighted per line through a per-line cache
+  // keyed on (lang, line text), so a streaming frame re-highlights only the
+  // line still growing — O(1) calls per frame, however long the block. The
+  // closing fence re-highlights the whole block once (multi-line context) and
+  // the block cache keeps it.
+  it("highlights an open fence per line, re-running only the line still growing", () => {
+    const calls: string[] = [];
+    const highlight = (code: string, lang: string | null): string[] => {
+      calls.push(`${lang}:${code}`);
+      return code.split("\n").map((l) => `<${l}>`);
+    };
+    const cache = createMdCache();
+    // Distinct prefixes, so a partial line is never a stale hit from an
+    // earlier line ("const a" / "const b" would share "c" … "const ").
+    const lines = ["alpha();", "beta();", "gamma();"];
+    let text = "```ts\n";
+    for (const line of lines) {
+      for (let i = 1; i <= line.length; i++) {
+        calls.length = 0;
+        const rows = renderMarkdown(`${text}${line.slice(0, i)}`, { width: W, cache, highlight });
+        expect(calls).toEqual([`ts:${line.slice(0, i)}`]);
+        expect(texts(rows).at(-1)).toBe(`<${line.slice(0, i)}>`);
+      }
+      text += `${line}\n`;
+      calls.length = 0;
+      const rows = renderMarkdown(text, { width: W, cache, highlight });
+      expect(calls).toEqual([]);
+      expect(texts(rows)).toEqual(lines.slice(0, lines.indexOf(line) + 1).map((l) => `<${l}>`));
+    }
+    calls.length = 0;
+    const done = renderMarkdown(`${text}\`\`\`\n`, { width: W, cache, highlight });
+    expect(calls).toEqual([`ts:${lines.join("\n")}`]);
+    expect(texts(done)).toEqual(lines.map((l) => `<${l}>`));
+    // The line cache is scoped to the open fence: gone once it closed.
+    expect(cache.lines.size).toBe(0);
+    calls.length = 0;
+    renderMarkdown(`${text}\`\`\`\n`, { width: W, cache, highlight });
+    expect(calls).toEqual([]);
+  });
+
+  it("falls back to the raw line when the per-line highlight declines or mis-shapes", () => {
+    const highlight = (code: string, lang: string | null): string[] | null =>
+      lang === "none" ? null : code === "two" ? ["a", "b"] : [`<${code}>`];
+    expect(texts(renderMarkdown("```none\nraw", { width: W, highlight }))).toEqual(["raw"]);
+    expect(texts(renderMarkdown("```x\ntwo\nok", { width: W, highlight }))).toEqual([
+      "two",
+      "<ok>",
+    ]);
+    // Without a cache the per-line path still renders the same rows.
+    const cache = createMdCache();
+    expect(renderMarkdown("```x\nok\nmore", { width: W, highlight, cache })).toEqual(
+      renderMarkdown("```x\nok\nmore", { width: W, highlight }),
+    );
   });
 });
 

@@ -8,6 +8,7 @@ import {
   bodyWindow,
   concatRows,
 } from "../src/tui/components/TranscriptBody.js";
+import { useFinishedRows } from "../src/tui/components/FinishedTurns.js";
 import { renderCounts, resetRenderCounts } from "../src/tui/renderCount.js";
 import type { ChatState } from "../src/tui/hooks/useChat.js";
 import type { TranscriptRow } from "../src/transcriptRender.js";
@@ -793,6 +794,49 @@ describe("ChatView", () => {
   });
 });
 
+// F3 (#512): the finished turns' per-turn markdown caches belong to one chat.
+describe("useFinishedRows", () => {
+  const EXPANDED = new Set<string>();
+  // The bullet list is a CLOSED block (a paragraph follows): renderMarkdown
+  // caches closed blocks only, so a hit hands back the same row objects.
+  const MD = "Intro\n\n- a\n- b\n\nOutro";
+  const finished = () =>
+    summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: null, text: MD, calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+  function Probe(p: {
+    chatKey: string;
+    summary: ReturnType<typeof finished>;
+    out: { rows?: TranscriptRow[] };
+  }): null {
+    p.out.rows = useFinishedRows(p.summary, false, EXPANDED, 80, null, p.chatKey);
+    return null;
+  }
+  const bullet = (rows: TranscriptRow[] | undefined) => rows?.find((r) => r.text === "  • a");
+
+  it("keeps the markdown cache across summaries of one chat and drops it when the key changes", async () => {
+    const out: { rows?: TranscriptRow[] } = {};
+    const r = render(<Probe chatKey="acme/api" summary={finished()} out={out} />);
+    await until(() => bullet(out.rows) !== undefined);
+    const first = bullet(out.rows)!;
+    out.rows = undefined;
+    r.rerender(<Probe chatKey="acme/api" summary={finished()} out={out} />);
+    await until(() => out.rows !== undefined && bullet(out.rows) === first);
+    expect(bullet(out.rows)).toBe(first);
+    out.rows = undefined;
+    r.rerender(<Probe chatKey="acme/web" summary={finished()} out={out} />);
+    await until(() => bullet(out.rows) !== undefined && bullet(out.rows) !== first);
+    expect(bullet(out.rows)).toEqual(first);
+    expect(bullet(out.rows)).not.toBe(first);
+  });
+});
+
 describe("TranscriptBody", () => {
   it("wires onScrollMax (reported during render) and accepts onRowPress", () => {
     const onScrollMax = vi.fn();
@@ -971,6 +1015,28 @@ describe("ChatView markdown answers (spec 2026-09-06 §4.2)", () => {
     expect(f).not.toContain("**");
     expect(f).toContain("• a");
     expect(f).toContain("• b");
+  });
+
+  // F3 (#512): a link row is painted through an Ink <Transform> that wraps the
+  // link text in OSC 8 post-layout; ink-testing-library keeps the escapes.
+  it("a link row carries an OSC 8 hyperlink around the link text", async () => {
+    const summary = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: null, text: "see [the docs](https://x.test/d) now", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const r = render(<ChatView {...props} state={base({ summary })} />);
+    const visible = (s: string) => strip(s).replace(/\u001b\]8;;[^\u0007]*\u0007/g, "");
+    await until(() => visible(r.lastFrame() ?? "").includes("the docs (https://x.test/d)"));
+    const f = r.lastFrame()!;
+    expect(f).toContain("\u001b]8;;https://x.test/d\u0007the docs\u001b]8;;\u0007");
+    expect(f).toContain("\u001b[2m(https://x.test/d)\u001b[22m");
+    // Zero-width: the visible text is what the plain renderer produced.
+    expect(visible(f)).toContain("see the docs (https://x.test/d) now");
   });
 
   it("a live text block renders the same way, and a null highlighter shows the raw fence", async () => {

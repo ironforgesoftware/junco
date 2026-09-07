@@ -892,6 +892,16 @@ export const LEVERS: Lever[] = [
     description:
       "Dashboard frame cap while the chat streams (lower on a slow terminal or machine).",
   },
+  {
+    path: "chat.theme",
+    type: "enum",
+    enumValues: ["auto", "dark", "light"],
+    default: "auto",
+    editable: true,
+    reload: "restart",
+    description:
+      "Palette for the chat's highlighted code fences: auto guesses from the terminal background (COLORFGBG), dark/light pin it.",
+  },
 
   // --- assess.* ---
   {

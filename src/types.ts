@@ -119,6 +119,9 @@ interface ChatConfig {
   thinkTags: "auto" | "on" | "off";
   /** Ink frame cap for the dashboard while chat streams (spec 2026-09-06 D8). */
   maxFps: number;
+  /** The code-fence highlighter's palette (#512): Pi's built-in `dark`/`light`
+   * theme, or `auto` — Pi's terminal-background guess (COLORFGBG). */
+  theme: "auto" | "dark" | "light";
 }
 /** Runtime-resolved bot auth context (src/ghAuth.ts) — attached to Config by
  * entrypoints, never parsed from config.json. Carried by cfg into git()/gh()

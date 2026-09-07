@@ -156,6 +156,7 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
       confirmTimeoutMinutes: 10,
       thinkTags: "auto",
       maxFps: 60,
+      theme: "auto",
     },
     ...overrides,
   };
