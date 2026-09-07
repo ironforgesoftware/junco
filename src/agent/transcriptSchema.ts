@@ -175,6 +175,48 @@ export interface ChatCommandRecord {
   detail: string | null;
   ts: string;
 }
+/**
+ * What the session's checkout was doing when the chat opened (#526). The
+ * dashboard chat reads a WORKING TREE, and until this record nothing said
+ * which commit that tree was on — a clone eleven days behind `origin/main`
+ * read exactly like a current one. `action`/`reason` are the fast-forward's
+ * verdict (src/chat/chatCheckout.ts); `head` is the answer to "which commit
+ * did this conversation reason about".
+ */
+export const CHAT_CHECKOUT_ACTIONS = ["fast_forwarded", "up_to_date", "skipped", "failed"] as const;
+export type ChatCheckoutAction = (typeof CHAT_CHECKOUT_ACTIONS)[number];
+
+export const CHAT_CHECKOUT_REASONS = [
+  "disabled", // chat.fastForward is off
+  "not_managed", // the path is not a junco-owned clone (the operator's own checkout)
+  "not_a_repo", // no git checkout at the path
+  "detached", // HEAD is not on a branch
+  "no_default_branch", // origin/HEAD is unset, so "the default branch" has no answer
+  "not_default_branch", // parked on something else on purpose
+  "dirty", // uncommitted work in the tree
+  "diverged", // local commits origin does not have
+  "fetch_failed", // bounded fetch failed (offline, auth, timeout)
+  "merge_failed", // `merge --ff-only` refused
+] as const;
+export type ChatCheckoutReason = (typeof CHAT_CHECKOUT_REASONS)[number];
+
+export interface ChatCheckoutRecord {
+  type: "junco_chat_checkout";
+  /** The working tree the session runs in (ChatSession.cwd). */
+  cwd: string;
+  /** Branch HEAD is on; null when detached or unreadable. */
+  branch: string | null;
+  /** HEAD after the attempt — the commit this conversation reasons about. */
+  head: string | null;
+  action: ChatCheckoutAction;
+  /** null on the two clean outcomes; the skip/failure cause otherwise. */
+  reason: ChatCheckoutReason | null;
+  /** fast_forwarded only: the commit the tree was on before. */
+  from: string | null;
+  /** Commits gained (0 on up_to_date); null when it was never determined. */
+  commits: number | null;
+  ts: string;
+}
 export interface ChatSessionResetRecord {
   type: "junco_chat_session_reset";
   /** cwd_changed: the checkout moved under a live session and it was rebuilt
@@ -194,6 +236,7 @@ export type ChatRecord =
   | ChatTurnRejectedRecord
   | ChatDraftRecord
   | ChatCommandRecord
+  | ChatCheckoutRecord
   | ChatSessionResetRecord
   | ChatTranscriptDegradedRecord;
 

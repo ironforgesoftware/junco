@@ -250,6 +250,7 @@ export const ConfigSchema = z.object({
       thinkingLevel: z.string().min(1).optional(),
       turnTimeoutMinutes: z.number().min(1).optional(),
       submitTool: z.boolean().default(true),
+      fastForward: z.boolean().default(true),
       confirmTimeoutMinutes: z.number().min(1).default(10),
       thinkTags: z.enum(["auto", "on", "off"]).default("auto"),
       maxFps: z.number().int().min(10).max(120).default(60),

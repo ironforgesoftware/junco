@@ -112,6 +112,8 @@ interface ChatConfig {
   turnTimeoutMinutes: number | null;
   /** Register `junco_submit` on new chat sessions (spec 2026-09-03). */
   submitTool: boolean;
+  /** Fast-forward a junco-owned watched clone when a chat session opens (#526). */
+  fastForward: boolean;
   /** How long a proposed submit waits for the operator's y/n before expiring. */
   confirmTimeoutMinutes: number;
   /** Split inline `<think>…</think>` spans into thinking deltas (spec 2026-09-06 §2.1).
