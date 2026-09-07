@@ -116,6 +116,35 @@ describe("liveTurn (spec 2026-09-06 §1.2, §2.3)", () => {
     for (const d of deltas(all)) expect(d.delta).not.toMatch(/<\/?think>/);
   });
 
+  it("tag turn: the newline after `</think>` never reaches the wire, even across chunks (#509)", () => {
+    const lt = makeLiveTurn(opts({ thinkTags: "on" }));
+    const all: ChatBusRecord[] = [];
+    // The chunk ends exactly at the close tag: nothing is emitted for the
+    // position after it until the next chunk says whether a newline follows.
+    all.push(...lt.observe(text("<think>plan</think>", 0)));
+    expect(lt.partial().blocks).toEqual([
+      expect.objectContaining({ kind: "thinking", contentIndex: 0, text: "plan" }),
+    ]);
+    all.push(...lt.observe(text("\n# Done", 0)));
+    all.push(...lt.finish());
+    expect(joined(all)).toEqual([
+      { kind: "thinking", contentIndex: 0, delta: "plan" },
+      { kind: "text", contentIndex: 0, delta: "# Done" },
+    ]);
+    expect(lt.partial().blocks[1]).toEqual({ kind: "text", contentIndex: 0, text: "# Done" });
+
+    const crlf = makeLiveTurn(opts({ thinkTags: "on" }));
+    const recs = [
+      ...crlf.observe(text("<think>plan</think>\r", 0)),
+      ...crlf.observe(text("\nans", 0)),
+      ...crlf.finish(),
+    ];
+    expect(joined(recs)).toEqual([
+      { kind: "thinking", contentIndex: 0, delta: "plan" },
+      { kind: "text", contentIndex: 0, delta: "ans" },
+    ]);
+  });
+
   it("finish() flushes the splitter's held tail", () => {
     const lt = makeLiveTurn(opts({ thinkTags: "on" }));
     expect(lt.observe(text("hello <thin", 0))).toEqual([

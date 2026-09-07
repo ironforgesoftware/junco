@@ -3,7 +3,9 @@
  * byte sequence, never throws, never drops bytes: at most `tag.length - 1`
  * trailing chars that could be a tag prefix are held back and released on the
  * next push or on end(). Tags are never emitted; whitespace is trimmed only at
- * the two edges of a thinking block. No nesting; a bare close tag is text.
+ * the two edges of a thinking block, plus exactly one `\n` (or `\r\n`) directly
+ * after a close tag (#509) — held across chunk boundaries like a tag prefix,
+ * and end() releases nothing for it. No nesting; a bare close tag is text.
  */
 export interface SplitPiece {
   kind: "text" | "thinking";
@@ -22,6 +24,7 @@ export function makeThinkSplitter(opts: { open?: string; close?: string } = {}):
   let inThink = false;
   let held = ""; // unemitted tail that may be a tag prefix
   let atBlockStart = false; // trim leading whitespace of a thinking block
+  let afterClose = false; // just past a close tag: swallow one newline if it follows
   let sawTag = false;
 
   /** Longest proper prefix of `tag` that `s` ends with — the chars to hold. */
@@ -47,6 +50,16 @@ export function makeThinkSplitter(opts: { open?: string; close?: string } = {}):
     let buf = held + delta;
     held = "";
     for (;;) {
+      if (afterClose) {
+        // Wait until the next chunk shows whether `\n` / `\r\n` follows the tag.
+        if (buf === "" || buf === "\r") {
+          held = buf;
+          return out;
+        }
+        afterClose = false;
+        if (buf.startsWith("\r\n")) buf = buf.slice(2);
+        else if (buf.startsWith("\n")) buf = buf.slice(1);
+      }
       const tag = inThink ? close : open;
       const i = buf.indexOf(tag);
       if (i === -1) {
@@ -66,6 +79,7 @@ export function makeThinkSplitter(opts: { open?: string; close?: string } = {}):
       if (inThink) {
         emit(out, "thinking", before.replace(/\s+$/, ""));
         inThink = false;
+        afterClose = true;
       } else {
         emit(out, "text", before);
         inThink = true;
@@ -78,6 +92,7 @@ export function makeThinkSplitter(opts: { open?: string; close?: string } = {}):
 
   const end = (): SplitPiece[] => {
     const out: SplitPiece[] = [];
+    afterClose = false; // a held lone `\r` is text; nothing else is pending
     if (held !== "") {
       if (inThink) emit(out, "thinking", held.replace(/\s+$/, ""));
       else emit(out, "text", held);
