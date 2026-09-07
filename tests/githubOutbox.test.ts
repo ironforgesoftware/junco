@@ -440,6 +440,7 @@ describe("flushOutbox", () => {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     };
     const cfg = makeConfig(seams);
     const inbox = join(root, "inbox");
@@ -1393,6 +1394,7 @@ describe("flushOutbox → sweepDependencies: closes the offline PR dependency wi
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     };
     const cfg = makeConfig(seams);
     const inbox = join(root, "inbox");

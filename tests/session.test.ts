@@ -924,6 +924,7 @@ describe("models.json file path — SDK resolution", () => {
           supervisorEnabled: false,
           healthEnabled: false,
           removeWorktreeOnSuccess: true,
+          chatEnabled: true,
         },
         {
           model: {

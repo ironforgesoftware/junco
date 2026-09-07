@@ -31,6 +31,7 @@ function cfgWith(harnessDirs: string[]) {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     { skills: { harnessDirs } },
   );

@@ -20,13 +20,58 @@
  * synchronously — a real structural difference, not duplication.
  */
 import type { AgentEvent, AgentSessionLike, ChatSessionLike } from "../../src/agent/session.js";
+// Type-only: the SDK never loads here (CLAUDE.md — the runtime import lives in
+// src/agent/session.ts alone). These are the shapes the fakes are checked against.
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 /** A factory as the flow `deps.sessionFactoryFor` seam returns one. */
 export type FakeSessionFactory = () => Promise<AgentSessionLike>;
 
-/** Fake SDK events are hand-rolled shapes, not full `AgentEvent` unions. */
+// ---------------------------------------------------------------------------
+// Fixture shapes (#514). A fake event is the SDK's own event with its bulky
+// message payloads loosened: `partial`/`message`/`messages`/`toolResults`
+// become optional deep-partials (the full `AssistantMessage` carries api,
+// provider, model, timestamp, a complete `Usage` — none of which the code
+// under test reads), while every OTHER field keeps the SDK's exact type. So a
+// `text_delta` without `contentIndex`, or an event type the SDK does not
+// emit, is a type error here rather than a runtime surprise in liveTurn.ts.
+// The SDK unions come from pi-coding-agent's .d.ts (`AgentSessionEvent`, and
+// pi-ai's `AssistantMessageEvent` reached through the message_update member —
+// the index does not re-export it).
+// ---------------------------------------------------------------------------
+type DeepPartial<T> = T extends (infer U)[]
+  ? DeepPartial<U>[]
+  : T extends object
+    ? { [K in keyof T]?: DeepPartial<T[K]> }
+    : T;
+/** Distributes over a union: drop the bulky keys `K`, re-add them optional and deep-partial. */
+type Loosen<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K> & { [P in Extract<keyof T, K>]?: DeepPartial<T[P]> }
+  : never;
+type SdkAssistantMessageEvent = Extract<
+  AgentSessionEvent,
+  { type: "message_update" }
+>["assistantMessageEvent"];
+/** pi-ai's `AssistantMessageEvent` minus the running `partial` snapshot. */
+export type FakeAssistantMessageEvent = Loosen<
+  SdkAssistantMessageEvent,
+  "partial" | "message" | "error"
+>;
+/** `AgentSessionEvent` with the message payloads loosened (see above). */
+export type FakeSessionEvent =
+  | Loosen<
+      Exclude<AgentSessionEvent, { type: "message_update" }>,
+      "message" | "messages" | "toolResults" | "entry"
+    >
+  | {
+      type: "message_update";
+      assistantMessageEvent: FakeAssistantMessageEvent;
+      message?: DeepPartial<Extract<AgentSessionEvent, { type: "message_update" }>["message"]>;
+    };
+
 type Emit = (event: AgentEvent) => void;
-const emit = (l: Emit, event: unknown): void => l(event as AgentEvent);
+/** The one cast: a fixture-shaped event crosses into the `AgentEvent` seam. */
+const emit = (l: Emit, event: FakeSessionEvent): void => l(event as AgentEvent);
 
 /**
  * Builds a session whose subscribe() queues `events` (built lazily so each
@@ -66,7 +111,7 @@ export function fakeSession(finalText: string, costUsd = 0, promptDelayMs = 1): 
   return makeSession((l) => {
     emit(l, {
       type: "message_update",
-      assistantMessageEvent: { type: "text_delta", delta: finalText },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: finalText },
     });
     emit(l, {
       type: "turn_end",
@@ -74,6 +119,7 @@ export function fakeSession(finalText: string, costUsd = 0, promptDelayMs = 1): 
         stopReason: "stop",
         usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2, cost: { total: costUsd } },
       },
+      toolResults: [],
     });
     emit(l, { type: "agent_end", messages: [], willRetry: false });
   }, promptDelayMs);
@@ -88,7 +134,10 @@ export function fakeMultiMessageSession(messages: string[], promptDelayMs = 1): 
   return makeSession((l) => {
     for (const m of messages) {
       emit(l, { type: "message_start", message: { role: "assistant" } });
-      emit(l, { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: m } });
+      emit(l, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: m },
+      });
     }
     emit(l, {
       type: "turn_end",
@@ -96,6 +145,7 @@ export function fakeMultiMessageSession(messages: string[], promptDelayMs = 1): 
         stopReason: "stop",
         usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2 },
       },
+      toolResults: [],
     });
     emit(l, { type: "agent_end", messages: [], willRetry: false });
   }, promptDelayMs);
@@ -117,7 +167,9 @@ export function throwingSession(message = "fetch failed: ECONNREFUSED"): FakeSes
 
 /** One prompt()'s worth of scripted events (chat seam, spec 2026-09-01). */
 export interface ChatScript {
-  events: unknown[];
+  /** Fixture-shaped SDK events (see `FakeSessionEvent`) — typed, so a
+   *  hand-rolled script in a test is held to the .d.ts shapes too. */
+  events: FakeSessionEvent[];
   /** prompt() resolves after this many ms (default 1) unless aborted. */
   delayMs?: number;
   /** prompt() rejects with this message instead of emitting. */
@@ -163,11 +215,11 @@ export interface FakeChatSession extends ChatSessionLike {
 export function chatScriptText(text: string, costUsd = 0): ChatScript {
   return {
     events: [
-      { type: "message_start", message: { role: "assistant" } },
+      { type: "message_start", message: { role: "assistant" } } satisfies FakeSessionEvent,
       {
         type: "message_update",
         assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text },
-      },
+      } satisfies FakeSessionEvent,
       {
         type: "turn_end",
         message: {
@@ -177,9 +229,9 @@ export function chatScriptText(text: string, costUsd = 0): ChatScript {
           usage: { input: 1, output: 1, cacheRead: 0, totalTokens: 2, cost: { total: costUsd } },
         },
         toolResults: [],
-      },
-      { type: "agent_end", messages: [], willRetry: false },
-      { type: "agent_settled" },
+      } satisfies FakeSessionEvent,
+      { type: "agent_end", messages: [], willRetry: false } satisfies FakeSessionEvent,
+      { type: "agent_settled" } satisfies FakeSessionEvent,
     ],
   };
 }
@@ -196,12 +248,15 @@ export function chatScriptThinking(thinking: string, text: string, costUsd = 0):
       {
         type: "message_update",
         assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: thinking },
-      },
-      { type: "message_update", assistantMessageEvent: { type: "thinking_end", contentIndex: 0 } },
+      } satisfies FakeSessionEvent,
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: thinking },
+      } satisfies FakeSessionEvent,
       {
         type: "message_update",
         assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: text },
-      },
+      } satisfies FakeSessionEvent,
       ...base.events.slice(2),
     ],
   };

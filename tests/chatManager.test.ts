@@ -60,6 +60,7 @@ function setup(over: Partial<ChatManagerDeps> = {}, scripts = [chatScriptText("h
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: true,
+    chatEnabled: true,
   });
   const gate = fakeGate();
   const spend = fakeSpend();
@@ -556,6 +557,7 @@ describe("ChatManager.decide (spec 2026-09-03 §3.3)", () => {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     });
     writeChatDraft(cfg, {
       id: "acme__api-1",

@@ -1628,6 +1628,7 @@ const DISPATCH_CONFIG_BASE: Omit<Config, "dataDir" | "queueRoot"> = makeConfig(
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: true,
+    chatEnabled: true,
   },
   {
     github: {

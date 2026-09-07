@@ -40,6 +40,7 @@ const cfgSeams: ConfigSeams = {
   supervisorEnabled: false,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
+  chatEnabled: true,
 };
 const cfg = makeConfig(cfgSeams);
 

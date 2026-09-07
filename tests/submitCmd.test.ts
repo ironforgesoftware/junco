@@ -36,6 +36,7 @@ function freshQueue(): { cfg: Config; root: string; inbox: string } {
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: false,
+    chatEnabled: true,
   });
   return { cfg, root, inbox: join(root, "queue", "inbox") };
 }

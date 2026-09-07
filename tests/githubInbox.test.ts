@@ -52,6 +52,7 @@ const seams: ConfigSeams = {
   supervisorEnabled: false,
   healthEnabled: false,
   removeWorktreeOnSuccess: false,
+  chatEnabled: true,
 };
 
 // A full Config, not an `as Config` partial (#366): pollGithubInbox is a real
@@ -1602,6 +1603,7 @@ tasks:
           supervisorEnabled: false,
           healthEnabled: false,
           removeWorktreeOnSuccess: false,
+          chatEnabled: true,
         },
         {
           github: {

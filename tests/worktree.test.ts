@@ -70,6 +70,7 @@ function makeConfig(work: string, wtsRoot: string): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       planLintBlockOnError: true,

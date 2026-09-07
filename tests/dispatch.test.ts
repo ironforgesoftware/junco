@@ -38,6 +38,7 @@ const CONFIG_DEFAULTS: Omit<Config, "dataDir" | "queueRoot"> = baseConfig(
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: true,
+    chatEnabled: true,
   },
   {
     github: {

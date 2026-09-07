@@ -32,6 +32,7 @@ function cfgAt(root: string) {
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: true,
+    chatEnabled: true,
   });
 }
 const draft = (id: string, slug = "acme__api", over: Partial<PendingDraft> = {}): PendingDraft => ({

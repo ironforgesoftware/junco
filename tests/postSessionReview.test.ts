@@ -56,6 +56,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: false,
+      chatEnabled: true,
     },
     { verifySandboxed: false, ...overrides },
   );

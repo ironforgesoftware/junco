@@ -46,6 +46,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       supervisorEnabled: false,
       healthEnabled: true,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       dataLayout: "flat", // every fixture below is a pre-existing (pre-flip) tree

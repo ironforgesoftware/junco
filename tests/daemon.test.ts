@@ -165,6 +165,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       dataLayout: "flat", // every dataTreePaths-derived path assertion below is flat-shaped

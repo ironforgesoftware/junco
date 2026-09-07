@@ -101,6 +101,7 @@ function makeConfig(h: Harness, overrides: Partial<Config> = {}): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: false, // preserve so we can assert on commits
+      chatEnabled: true,
     },
     {
       dataLayout: "flat", // transcripts/outbox/etc. assertions below are root-relative

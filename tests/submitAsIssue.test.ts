@@ -89,6 +89,7 @@ function baseCfg(overrides: Partial<Config> = {}): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: false,
+      chatEnabled: true,
     },
     {
       github: DEFAULT_GITHUB,

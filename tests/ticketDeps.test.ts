@@ -33,6 +33,7 @@ beforeEach(() => {
     supervisorEnabled: false,
     healthEnabled: false,
     removeWorktreeOnSuccess: true,
+    chatEnabled: true,
   };
   cfg = makeConfig(seams);
 });

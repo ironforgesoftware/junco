@@ -77,6 +77,7 @@ describe("dispatchPlanSet", () => {
         supervisorEnabled: false,
         healthEnabled: false,
         removeWorktreeOnSuccess: false,
+        chatEnabled: true,
       },
       { planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 } },
     );
@@ -345,6 +346,7 @@ describe("maintainPlanSets", () => {
         supervisorEnabled: false,
         healthEnabled: false,
         removeWorktreeOnSuccess: false,
+        chatEnabled: true,
       },
       { ghBin, planSets: { enabled: true, mergePollSeconds: 60, maxTasks: 10 } },
     );

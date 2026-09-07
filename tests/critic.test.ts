@@ -40,6 +40,7 @@ function makeCfg(overrides: Partial<Config> = {}): Config {
       supervisorEnabled: false,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       planLintBlockOnError: true,

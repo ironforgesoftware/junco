@@ -30,6 +30,7 @@ function cfg(root: string): Config {
       supervisorEnabled: true,
       healthEnabled: false,
       removeWorktreeOnSuccess: true,
+      chatEnabled: true,
     },
     {
       defaultTimeoutMinutes: 1, // short so timeout paths are reachable in-test

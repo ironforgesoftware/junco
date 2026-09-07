@@ -16,6 +16,7 @@ const seams = {
   supervisorEnabled: false,
   healthEnabled: false,
   removeWorktreeOnSuccess: true,
+  chatEnabled: true,
 };
 
 describe("resolveHarnessArg", () => {
