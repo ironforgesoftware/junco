@@ -7,13 +7,15 @@ import {
   anchorIds,
   commandAnchor,
   extendSummary,
-  summarizeTranscript,
+  SummaryBuilder,
+  thinkingAnchor,
   type SummaryState,
   type TranscriptSummary,
 } from "../../transcriptSummary.js";
 import { parseTranscriptLine, type JuncoRecord } from "../../agent/transcriptSchema.js";
 import {
   applyLiveRecord,
+  isLiveThinkingAnchor,
   liveAnchorIds,
   startLiveTurn,
   type LiveTurnState,
@@ -54,8 +56,8 @@ export interface ChatState {
    *  shows while it streams and folds when done; pinned keeps it open and
    *  expands the finished turns' thinking rows the way `showThinking` did. */
   thinking: { pinned: boolean };
-  /** Bumps once per applied flush — the memo key for the live rows. */
-  frame: number;
+  /** Tool-call ids whose card body is open, and (#511) finished thinking
+   *  anchors (`thinkingAnchor(run, turn)`) whose block `t` opened on its own. */
   expanded: ReadonlySet<string>;
   lastOffset: number | null;
   error: string | null; // last POST failure (toast-worthy)
@@ -92,6 +94,10 @@ export interface ChatApi {
    *  (enter/space). A live card toggles `live.expanded`, a finished one the
    *  `expanded` set — the id is the same tool-call id on both sides. */
   toggleExpanded(id?: string): void;
+  /** `t` (spec §4.3, #511): with the cursor engaged (not following) on a
+   *  thinking header, toggle THAT block — a live one in `live.expanded`, a
+   *  finished one in `expanded`, the tool cards' mechanism; anywhere else
+   *  flip the global pin. */
   toggleThinking(): void;
   setFollow(on: boolean): void;
   reloadDrafts(): Promise<void>;
@@ -102,12 +108,13 @@ export interface ChatApi {
 
 /**
  * The chat view's cursor space (spec 2026-09-06 §4.4): the finished anchors
- * (tool ids ∪ draft/command cards, transcriptSummary.ts's `anchorIds`) and
- * then the live turn's tool cards, so the cursor can land on a card that is
- * still running. A live id the summary already holds is not repeated — the
- * card keeps ONE index across the turn end. ChatView (the body's `anchors`),
- * useChatInput (the anchor under the cursor) and the clamps below all read
- * this one function.
+ * (thinking headers ∪ tool ids ∪ draft/command cards, transcriptSummary.ts's
+ * `anchorIds`) and then the live turn's thinking headers and tool cards
+ * (liveBlocks.ts's `liveAnchorIds`), so the cursor can land on a card that is
+ * still running or a block still streaming (#511). A live id the summary
+ * already holds is not repeated — the card keeps ONE index across the turn
+ * end. ChatView (the body's `anchors`), useChatInput (the anchor under the
+ * cursor) and the clamps below all read this one function.
  */
 export function chatAnchorIds(
   summary: TranscriptSummary | null,
@@ -122,6 +129,55 @@ export function mergeAnchorIds(finished: string[], live: string[]): string[] {
   if (live.length === 0) return finished;
   const seen = new Set(finished);
   return [...finished, ...live.filter((id) => !seen.has(id))];
+}
+
+/** `set` with `id` added or removed — the expand toggle tool cards and (#511)
+ * thinking blocks share, on both the live and the finished set. */
+function toggleIn(set: ReadonlySet<string>, id: string): Set<string> {
+  const next = new Set(set);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
+}
+
+/**
+ * `expanded` after a turn end (spec 2026-09-06 §4.4): a card the operator
+ * opened stays open past the turn end — the finished turn's card has the same
+ * tool-call id, so the live set folds into the finished one. A live thinking
+ * block they opened (#511) folds onto the finished turn's ONE thinking anchor
+ * (`summary` already holds the turn that just closed: the last run's last
+ * turn); its `think:live:*` id names nothing once the turn is over.
+ */
+function foldLiveExpanded(s: ChatState, summary: TranscriptSummary): ReadonlySet<string> {
+  if (s.live === null || s.live.expanded.size === 0) return s.expanded;
+  const next = new Set(s.expanded);
+  let openThinking = false;
+  for (const id of s.live.expanded) {
+    if (isLiveThinkingAnchor(id)) openThinking = true;
+    else next.add(id);
+  }
+  const runIdx = summary.runs.length - 1;
+  const turn = summary.runs[runIdx]?.turns.at(-1);
+  if (openThinking && turn !== undefined) next.add(thinkingAnchor(runIdx, turn.index));
+  return next;
+}
+
+/**
+ * `t` (spec §4.3, #511): per-block only while the cursor is engaged —
+ * following means the operator has not walked to anything (tab drops
+ * follow), and index 0 of a fresh chat is often a thinking header, where `t`
+ * must still be the global pin it has always been. On a live header the
+ * block's anchor toggles in `live.expanded`, on a finished one in `expanded`.
+ */
+function toggleThinkingState(s: ChatState): ChatState {
+  const id = s.follow ? undefined : chatAnchorIds(s.summary, s.live)[s.cursor];
+  if (id === undefined || !id.startsWith("think:"))
+    return { ...s, thinking: { pinned: !s.thinking.pinned } };
+  if (isLiveThinkingAnchor(id))
+    return s.live === null
+      ? s
+      : { ...s, live: { ...s.live, expanded: toggleIn(s.live.expanded, id) } };
+  return { ...s, expanded: toggleIn(s.expanded, id) };
 }
 
 const freshState = (key: string): ChatState => ({
@@ -142,7 +198,6 @@ const freshState = (key: string): ChatState => ({
   follow: true,
   reveal: false,
   thinking: { pinned: false },
-  frame: 0,
   expanded: new Set(),
   lastOffset: null,
   error: null,
@@ -159,20 +214,38 @@ const LIVE_TYPES: ReadonlySet<string> = new Set([
 ]);
 const isLiveRecord = (rec: JuncoRecord): boolean => LIVE_TYPES.has((rec as { type: string }).type);
 
+/** Lines an overflow splice drops at once (#510): a tenth of the ring, at least one. */
+export const overflowBatch = (ringSize: number): number => Math.max(1, Math.floor(ringSize / 10));
+
+/** `summarizeTranscript(ring)` that hands back the builder instead of only its
+ *  result, so it survives as the carried state after a splice: the next
+ *  `batch - 1` pushes extend it rather than start from an empty one. */
+function rebuildSummary(ring: readonly string[]): SummaryState {
+  const b = new SummaryBuilder();
+  for (const line of ring) b.push(line);
+  return b;
+}
+
 /**
  * chat-view domain (spec 2026-09-01 §8.5). The record ring lives in a ref
  * (`ringSize` persisted lines, default CHAT_RING); the summary is extended
  * one record at a time (`extendSummary`, spec 2026-09-06 §3.3) with the
- * builder state kept in a ref, and recomputed from the whole ring when the
+ * builder state kept in a ref, and rebuilt from the whole ring when the
  * ring overflows — so the invariant is: `summaryState` is null exactly when
- * the ring is empty or has just been spliced, and a whole-ring recompute
- * follows every splice (once the ring is full, every push is one).
+ * the ring is empty, and otherwise is the builder that has seen exactly the
+ * ring's lines (a whole-ring rebuild follows every splice). An overflow splices `overflowBatch(ringSize)`
+ * (`max(1, floor(ringSize / 10))`) oldest lines in one go, not one (#510):
+ * the ring then holds between `ringSize - batch + 1` and `ringSize` lines and
+ * the O(ring) recompute runs once per `batch` records instead of on every
+ * push once the ring is full. `overflowed` is sticky once set and the header
+ * still reads "showing last <ringSize>" (an upper bound, as before).
  *
  * The live turn (spec 2026-09-06 §3.2, §3.4): bus-only records fold into a
  * pending `LiveTurnState` synchronously in the SSE callback (a string
- * append) and a `setImmediate` flush publishes it in ONE setState per frame,
- * bumping `frame`; Ink's `maxFps` then bounds the paint rate. The old 50 ms
- * trailing timer is gone.
+ * append) and a `setImmediate` flush publishes it in ONE setState per frame
+ * — a NEW `live` object each time, which is what the live rows memo keys on
+ * (#511 dropped the separate frame counter); Ink's `maxFps` then bounds the
+ * paint rate. The old 50 ms trailing timer is gone.
  *
  * Ruling R21: `subscribeChat` (src/tui/chatClient.ts) treats `event: end` as
  * terminal and never reconnects on its own — daemon facts: `/chat/new` ends
@@ -194,11 +267,17 @@ export function useChat({
   aliveRef,
   ringSize = CHAT_RING,
   resubscribeMs = CHAT_RESUBSCRIBE_MS,
+  onSummaryRebuild,
 }: {
   client: DashboardClient;
   aliveRef: MutableRefObject<boolean>;
   ringSize?: number;
   resubscribeMs?: number;
+  /** Test-only seam (#510): called with the ring's length each time an
+   *  overflow splice triggers the whole-ring `summarizeTranscript` recompute,
+   *  so a test can count rebuilds and bound the ring without reaching into
+   *  the hook's refs. Production callers leave it unset. */
+  onSummaryRebuild?: (ringLength: number) => void;
 }): ChatApi {
   const [chat, setChat] = useState<ChatState | null>(null);
   const ring = useRef<string[]>([]);
@@ -246,7 +325,6 @@ export function useChat({
               live !== null && s.live !== null && s.live.turn === live.turn
                 ? { ...live, expanded: s.live.expanded }
                 : live,
-            frame: s.frame + 1,
           },
     );
   }, [aliveRef]);
@@ -281,10 +359,13 @@ export function useChat({
       let summary: TranscriptSummary;
       ring.current.push(line);
       if (ring.current.length > ringSize) {
-        ring.current.splice(0, ring.current.length - ringSize);
+        // One splice of a batch, so the next `batch - 1` pushes stay
+        // incremental (see the invariant above; #510).
+        ring.current.splice(0, ring.current.length - ringSize + overflowBatch(ringSize) - 1);
         overflowed = true;
-        summaryState.current = null;
-        summary = summarizeTranscript(ring.current);
+        summaryState.current = rebuildSummary(ring.current);
+        summary = summaryState.current.result();
+        onSummaryRebuild?.(ring.current.length);
       } else {
         // The builder is authoritative (`_prev` is documented as unread).
         const r = extendSummary(null, summaryState.current, line);
@@ -340,14 +421,7 @@ export function useChat({
         if (rec?.type === "junco_chat_turn_start")
           next = { ...next, live: null, blocked: null, endReason: null };
         if (rec?.type === "junco_chat_turn_end" || rec?.type === "junco_chat_turn_aborted") {
-          // Spec 2026-09-06 §4.4: a card the operator opened stays open past
-          // the turn end — the finished turn's card has the same tool-call
-          // id, so the live set folds into the finished one.
-          const expanded =
-            s.live === null || s.live.expanded.size === 0
-              ? s.expanded
-              : new Set([...s.expanded, ...s.live.expanded]);
-          next = { ...next, live: null, expanded };
+          next = { ...next, live: null, expanded: foldLiveExpanded(s, summary) };
         }
         const n = chatAnchorIds(summary, next.live).length;
         next = { ...next, cursor: Math.min(s.cursor, Math.max(0, n - 1)) };
@@ -404,7 +478,7 @@ export function useChat({
       });
       if (draftsChanged || settledCommand) void reloadDrafts();
     },
-    [scheduleFlush, ringSize, reloadDrafts],
+    [scheduleFlush, ringSize, reloadDrafts, onSummaryRebuild],
   );
 
   // Ruling R21: one subscription attempt. Wraps the raw record/status/end
@@ -637,23 +711,16 @@ export function useChat({
         const id = target ?? chatAnchorIds(s.summary, s.live)[s.cursor];
         // A draft card has no body to show; a `cmd:` card has the CLI output.
         if (id === undefined || id.startsWith("draft:")) return s;
-        const toggled = (set: ReadonlySet<string>): Set<string> => {
-          const next = new Set(set);
-          if (next.has(id)) next.delete(id);
-          else next.add(id);
-          return next;
-        };
         // A live card (spec 2026-09-06 §4.4) toggles the live turn's set; the
         // turn end folds it into `expanded` under the same id.
         if (s.live !== null && s.live.blocks.some((b) => b.kind === "tool" && b.id === id))
-          return { ...s, live: { ...s.live, expanded: toggled(s.live.expanded) } };
-        return { ...s, expanded: toggled(s.expanded) };
+          return { ...s, live: { ...s.live, expanded: toggleIn(s.live.expanded, id) } };
+        return { ...s, expanded: toggleIn(s.expanded, id) };
       }),
     [],
   );
   const toggleThinking = useCallback(
-    (): void =>
-      setChat((s) => (s === null ? s : { ...s, thinking: { pinned: !s.thinking.pinned } })),
+    (): void => setChat((s) => (s === null ? s : toggleThinkingState(s))),
     [],
   );
   const setFollow = useCallback(

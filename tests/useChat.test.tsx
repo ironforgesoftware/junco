@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { Text } from "ink";
-import { useChat, CHAT_RING } from "../src/tui/hooks/useChat.js";
+import { useChat, CHAT_RING, chatAnchorIds, overflowBatch } from "../src/tui/hooks/useChat.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
 import { anchorIds, commandAnchor, summarizeTranscript } from "../src/transcriptSummary.js";
@@ -117,14 +117,16 @@ function Probe({
   onReady,
   ringSize,
   resubscribeMs,
+  onSummaryRebuild,
 }: {
   client: DashboardClient;
   onReady: (api: ReturnType<typeof useChat>) => void;
   ringSize?: number;
   resubscribeMs?: number;
+  onSummaryRebuild?: (ringLength: number) => void;
 }) {
   const aliveRef = React.useRef(true);
-  const api = useChat({ client, aliveRef, ringSize, resubscribeMs });
+  const api = useChat({ client, aliveRef, ringSize, resubscribeMs, onSummaryRebuild });
   onReady(api);
   // The live turn as one line: text/thinking blocks by their text, tool
   // blocks by `[name]`, in block order — the shape spec 2026-09-06 §3.1 keeps.
@@ -154,8 +156,12 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     await until(() => r.lastFrame()!.includes("live:streaming:because"));
     expect(api.chat!.live!.turn).toBe("t1");
     expect(api.chat!.live!.seq).toBe(2);
-    // A flush bumps `frame` — the memo key the live rows re-render on.
-    expect(api.chat!.frame).toBeGreaterThan(0);
+    // #511: a flush publishes a NEW `live` object — its identity is the memo
+    // key the live rows re-render on (there is no frame counter any more).
+    const firstLive = api.chat!.live;
+    c.push(null, chatDelta({ turn: "t1", seq: 3, delta: "!" }));
+    await until(() => r.lastFrame()!.includes("live:streaming:because!"));
+    expect(api.chat!.live).not.toBe(firstLive);
     expect(api.chat!.summary!.runs[0]!.prompt).toBe("why is the build slow?");
     c.push(
       40,
@@ -546,6 +552,92 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
       await until(() => api.chat!.thinking.pinned === false);
     });
 
+    // #511: thinking headers are cursor stops. The live block's anchor is
+    // `think:live:<contentIndex>`, the finished one's `thinkingAnchor(run,
+    // turn)`; `t` on either toggles THAT block (live: `live.expanded`,
+    // finished: `expanded` — the tool cards' mechanism), `t` elsewhere pins.
+    describe("thinking anchors (#511)", () => {
+      it("chatAnchorIds lists the live thinking header before the turn's tool card", async () => {
+        const c = makeClient();
+        let api!: ReturnType<typeof useChat>;
+        const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+        api.openChat("acme/api");
+        await until(() => api.chat?.connection === "live");
+        c.push(10, chatTurnStart({ turn: "t1" }));
+        c.push(null, chatDelta({ turn: "t1", seq: 1, kind: "thinking", delta: "hmm" }));
+        c.push(null, chatTool({ turn: "t1", seq: 2, id: "c1", phase: "start", name: "grep" }));
+        await until(() => r.lastFrame()!.includes(":hmm|[grep]"));
+        expect(chatAnchorIds(api.chat!.summary, api.chat!.live)).toEqual(["think:live:0", "c1"]);
+      });
+
+      it("t on a live thinking header toggles live.expanded for that anchor; t while following pins", async () => {
+        const c = makeClient();
+        let api!: ReturnType<typeof useChat>;
+        const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+        api.openChat("acme/api");
+        await until(() => api.chat?.connection === "live");
+        c.push(10, chatTurnStart({ turn: "t1" }));
+        c.push(null, chatDelta({ turn: "t1", seq: 1, kind: "thinking", delta: "hmm" }));
+        c.push(null, chatDelta({ turn: "t1", seq: 2, kind: "text", delta: "so" }));
+        await until(() => r.lastFrame()!.includes(":hmm|so"));
+        // Following: the cursor is not engaged, so `t` is the global pin even
+        // though index 0 happens to be the thinking header.
+        expect(api.chat!.follow).toBe(true);
+        api.toggleThinking();
+        await until(() => api.chat!.thinking.pinned === true);
+        expect(api.chat!.live!.expanded.size).toBe(0);
+        api.toggleThinking();
+        await until(() => api.chat!.thinking.pinned === false);
+        // Walk onto the header (drops follow), then `t` is per-block.
+        api.moveCursor(-1);
+        await until(() => api.chat!.follow === false);
+        expect(chatAnchorIds(api.chat!.summary, api.chat!.live)[api.chat!.cursor]).toBe(
+          "think:live:0",
+        );
+        api.toggleThinking();
+        await until(() => api.chat!.live!.expanded.has("think:live:0"));
+        expect(api.chat!.thinking.pinned).toBe(false);
+        expect(api.chat!.expanded.size).toBe(0);
+        // A later flush carries the toggle over (same turn).
+        c.push(null, chatDelta({ turn: "t1", seq: 3, kind: "text", delta: "!" }));
+        await until(() => r.lastFrame()!.includes(":hmm|so!"));
+        expect(api.chat!.live!.expanded.has("think:live:0")).toBe(true);
+        api.toggleThinking();
+        await until(() => !api.chat!.live!.expanded.has("think:live:0"));
+        expect(api.chat!.thinking.pinned).toBe(false);
+      });
+
+      it("a live thinking block opened by t stays open past the turn end under the finished anchor", async () => {
+        const c = makeClient();
+        let api!: ReturnType<typeof useChat>;
+        const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+        api.openChat("acme/api");
+        await until(() => api.chat?.connection === "live");
+        c.push(10, metaLine());
+        c.push(20, chatPrompt());
+        c.push(30, chatTurnStart({ turn: "t1" }));
+        c.push(null, chatDelta({ turn: "t1", seq: 1, kind: "thinking", delta: "hmm" }));
+        await until(() => r.lastFrame()!.includes(":hmm"));
+        api.moveCursor(-1);
+        await until(() => api.chat!.follow === false);
+        api.toggleThinking();
+        await until(() => api.chat!.live!.expanded.has("think:live:0"));
+        c.push(40, turnEndFull({ thinking: "hmm", text: "so", calls: [] }));
+        c.push(50, chatTurnEnd());
+        await until(() => api.chat!.live === null);
+        expect(chatAnchorIds(api.chat!.summary, null)).toEqual(["think:0:0"]);
+        expect(api.chat!.expanded.has("think:0:0")).toBe(true);
+        expect([...api.chat!.expanded].some((id) => id.startsWith("think:live:"))).toBe(false);
+        // …and `t` on the finished header folds it again, leaving the pin alone.
+        expect(api.chat!.cursor).toBe(0);
+        api.toggleThinking();
+        await until(() => !api.chat!.expanded.has("think:0:0"));
+        expect(api.chat!.thinking.pinned).toBe(false);
+        api.toggleThinking();
+        await until(() => api.chat!.expanded.has("think:0:0"));
+      });
+    });
+
     it("session_reset clears the live turn along with the summary", async () => {
       const { client, subscribeCalls, handlersLog } = makeResubClient();
       let api!: ReturnType<typeof useChat>;
@@ -620,15 +712,34 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
   // Spec 2026-09-06 §3.3: the summary is extended one record at a time, and
   // a ring overflow recomputes from the ring — either way the result must be
   // what a whole-ring recompute gives, before, at, and after the overflow.
+  // #510: an overflow splices `overflowBatch(ringSize)` oldest lines at once
+  // (2 for a ring of 20), so the ring the summary covers is modelled here the
+  // same way and checked against the hook's `onSummaryRebuild` seam.
   it("the incremental summary equals a whole-ring recompute across an overflow", async () => {
     const c = makeClient();
     let api!: ReturnType<typeof useChat>;
-    render(<Probe client={c.client} onReady={(a) => (api = a)} ringSize={20} />);
+    const ringSize = 20;
+    const batch = overflowBatch(ringSize);
+    expect(batch).toBe(2);
+    const rebuilds: number[] = [];
+    render(
+      <Probe
+        client={c.client}
+        onReady={(a) => (api = a)}
+        ringSize={ringSize}
+        onSummaryRebuild={(n) => rebuilds.push(n)}
+      />,
+    );
     api.openChat("acme/api");
     await until(() => api.chat?.connection === "live");
     const lines: string[] = [];
+    // The ring as the hook keeps it: one splice of `batch` when it overflows.
+    const ring: string[] = [];
     const push = (line: string): void => {
       lines.push(line);
+      ring.push(line);
+      if (ring.length > ringSize) ring.splice(0, ring.length - ringSize + batch - 1);
+      expect(ring.length).toBeLessThanOrEqual(ringSize);
       c.push(lines.length, line);
     };
     push(metaLine());
@@ -640,21 +751,49 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     }
     await until(() => api.chat!.lastOffset === lines.length);
     expect(api.chat!.overflowed).toBe(false);
-    expect(api.chat!.summary).toEqual(summarizeTranscript(lines.slice(-20)));
+    expect(api.chat!.summary).toEqual(summarizeTranscript(ring));
+    expect(rebuilds).toEqual([]);
     // Line 20 fills the ring exactly — still incremental, not yet an overflow.
     push(chatTurnEnd());
     await until(() => api.chat!.lastOffset === lines.length);
     expect(lines.length).toBe(20);
     expect(api.chat!.overflowed).toBe(false);
-    expect(api.chat!.summary).toEqual(summarizeTranscript(lines.slice(-20)));
-    // Line 21 splices the head off: a whole-ring recompute, then more pushes.
+    expect(api.chat!.summary).toEqual(summarizeTranscript(ring));
+    expect(rebuilds).toEqual([]);
+    // Line 21 splices `batch` lines off the head: ONE whole-ring recompute,
+    // leaving the ring `batch - 1` short of full.
     push(chatPrompt({ text: "again" }));
     await until(() => api.chat!.overflowed === true);
+    expect(rebuilds).toEqual([ringSize - batch + 1]);
+    expect(api.chat!.summary).toEqual(summarizeTranscript(ring));
+    // Line 22 refills the ring incrementally — no rebuild; line 23 overflows
+    // again. Two more records, one rebuild — not one per record.
     push(chatTurnStart());
+    await until(() => api.chat!.lastOffset === lines.length);
+    expect(rebuilds).toEqual([ringSize - batch + 1]);
+    expect(api.chat!.summary).toEqual(summarizeTranscript(ring));
     push(toolStartId("c99", "grep", { q: "x" }));
     await until(() => api.chat!.lastOffset === lines.length);
-    expect(api.chat!.summary).toEqual(summarizeTranscript(lines.slice(-20)));
+    expect(rebuilds).toEqual([ringSize - batch + 1, ringSize - batch + 1]);
+    expect(api.chat!.summary).toEqual(summarizeTranscript(ring));
     expect(api.chat!.streaming).toBe(true);
+    // Steady state: `batch` pushes per rebuild, the summary always the ring's,
+    // `overflowed` sticky, `lastOffset` tracking the newest record.
+    for (let i = 0; i < 3 * batch; i++) {
+      push(toolEndId(`c99-${i}`, "grep", "ok"));
+      await until(() => api.chat!.lastOffset === lines.length);
+      expect(api.chat!.summary).toEqual(summarizeTranscript(ring));
+      expect(api.chat!.overflowed).toBe(true);
+    }
+    expect(rebuilds).toHaveLength(2 + 3);
+    expect(rebuilds.every((n) => n === ringSize - batch + 1)).toBe(true);
+  });
+
+  it("overflowBatch is a tenth of the ring, at least one", () => {
+    expect(overflowBatch(CHAT_RING)).toBe(200);
+    expect(overflowBatch(20)).toBe(2);
+    expect(overflowBatch(19)).toBe(1);
+    expect(overflowBatch(1)).toBe(1);
   });
 
   // Spec 2026-09-03 §4.1: a proposed junco_submit IS the operator's card — it

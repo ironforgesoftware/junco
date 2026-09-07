@@ -1,8 +1,10 @@
 /**
  * Rows for the in-flight chat turn (spec 2026-09-06 §4.1): built from
- * `live.blocks` alone, keyed on the flush counter `frame`, so the cost per
- * frame is O(bytes in the live turn) and the finished history (FinishedTurns
- * .tsx) is never touched.
+ * `live.blocks` alone, keyed on `live`'s identity (useChat.ts publishes a new
+ * object per flush and `applyLiveRecord` returns a new one per record — #511
+ * dropped the redundant frame counter), so the cost per frame is O(bytes in
+ * the live turn) and the finished history (FinishedTurns.tsx) is never
+ * touched.
  *
  * Text blocks render exactly as the finished answer will (transcriptRender
  * .ts's `chatAnswerRows` — markdown, `junco: ` label on the first row in
@@ -19,9 +21,11 @@
  * <elapsed>s` ticks off `startedAt` against a 1 s clock and the body follows
  * in tone `thinking`, plain-wrapped (reasoning is not prose to typeset); once
  * `done` it folds to `▸ thinking · <dur>s` — or stays open under `▾` when
- * the operator pinned it (`t`). The header is the SAME string
- * transcriptRender.ts prints for the finished turn, so the row does not
- * change shape at turn end.
+ * the operator pinned it (`t`) or, #511, expanded this block alone (`t` on
+ * its header: the row carries `liveThinkingAnchor(contentIndex)`, a cursor
+ * stop, and the id lives in `live.expanded` like a tool card's). The header
+ * is the SAME string transcriptRender.ts prints for the finished turn, so
+ * the row does not change shape at turn end.
  *
  * `dur` is `doneAt - startedAt` when the block carries a `doneAt` (the daemon
  * or the reducer stamps one whenever it marks a block done, #511), else the
@@ -30,7 +34,8 @@
  * — the map is dropped with the turn so a later turn's block 0 never inherits it.
  */
 import { useMemo, useRef } from "react";
-import type { LiveTurnState } from "../../chat/liveBlocks.js";
+import { liveThinkingAnchor, type LiveTurnState } from "../../chat/liveBlocks.js";
+import { bumpRender } from "../renderCount.js";
 import { useClock } from "../hooks/useClock.js";
 import {
   chatAnswerRows,
@@ -49,7 +54,6 @@ function elapsedMs(startedAt: string, now: number): number {
 
 export function useLiveRows(
   live: LiveTurnState | null,
-  frame: number,
   width: number,
   pinned: boolean,
   highlight: HighlightFn | null,
@@ -90,9 +94,9 @@ export function useLiveRows(
         );
       }
   return useMemo(() => {
-    // `frame` bumps once per applied flush (useChat.ts) and is the memo key
-    // the spec names; `live` is what the body reads.
-    void frame;
+    // Counted so tests can prove the memo re-runs on a new `live` and holds
+    // on an unchanged one.
+    bumpRender("LiveTurn");
     const out: TranscriptRow[] = [];
     if (live === null) return out;
     let text = "";
@@ -105,9 +109,11 @@ export function useLiveRows(
           const ms = b.done
             ? (folded.current.ms.get(b.contentIndex) ?? 0)
             : elapsedMs(b.startedAt, now);
-          const state = !b.done ? "streaming" : pinned ? "pinned" : "collapsed";
+          const anchor = liveThinkingAnchor(b.contentIndex);
+          const open = pinned || live.expanded.has(anchor);
+          const state = !b.done ? "streaming" : open ? "pinned" : "collapsed";
           // No tone, like the finished header and the tool rows.
-          out.push({ text: `  ${fmtThinkingHeader(state, ms)}` });
+          out.push({ text: `  ${fmtThinkingHeader(state, ms)}`, anchor });
           if (state !== "collapsed")
             for (const l of proseLines(b.text, width - 4))
               out.push({ text: l === "" ? "" : `    ${l}`, tone: "thinking" });
@@ -122,5 +128,5 @@ export function useLiveRows(
     return out;
     // `now` moves once a second only while a block streams (see `ticking`);
     // `spinnerFrame` ten times a second only while a tool runs.
-  }, [live, frame, width, pinned, now, highlight, spinnerFrame]);
+  }, [live, width, pinned, now, highlight, spinnerFrame]);
 }

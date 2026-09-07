@@ -7,8 +7,9 @@
  * anchors), but the windowing and paint logic below don't care which.
  */
 import React, { useEffect } from "react";
-import { Box, Text } from "ink";
+import { Box, Text, Transform } from "ink";
 import { theme } from "../theme.js";
+import { linkifyLine } from "../links.js";
 import { bumpRender } from "../renderCount.js";
 import { ClickableBox } from "../ClickableBox.js";
 import { Scrollbar } from "./primitives/Scrollbar.js";
@@ -176,25 +177,44 @@ export const TranscriptBody = React.memo(function TranscriptBody(
           const row = p.rows.at(start + i);
           const isAnchor = row.anchor !== undefined && row.anchor === anchorId;
           const idx = row.anchor === undefined ? -1 : p.anchors.indexOf(row.anchor);
-          // Only a row in the cursor's index space is pressable: a thinking
-          // header (transcriptRender.ts's thinkingAnchor) names its row but is
-          // not a cursor stop, and pressing it with idx -1 would move the
-          // cursor to the first anchor instead.
+          // Only a row in the cursor's index space is pressable: in a ticket
+          // transcript (`anchors` = toolCallIds) a thinking header names its
+          // row but is not a cursor stop, and pressing it with idx -1 would
+          // move the cursor to the first anchor instead. In the chat view the
+          // header IS a stop (#511), so a press lands the cursor on it.
           const pressable = idx >= 0;
+          const tone = toneProps(row.tone);
+          const text = (
+            <Text
+              wrap="truncate-end"
+              backgroundColor={isAnchor && p.focused ? theme.selectionBg : undefined}
+              {...tone}
+            >
+              <Text color={theme.accent}>{isAnchor ? "▌" : " "}</Text>
+              {row.text || " "}
+            </Text>
+          );
+          // A markdown link row (F3, #512) is painted through <Transform>, the
+          // ↗ line's pattern: `linkifyLine` runs post-layout on the wrapped
+          // line, so the OSC 8 and the dim `(url)` are invisible to the width
+          // math. The dim is skipped on a bold or dim row — SGR 22 would end
+          // the row's own intensity mid-line. The Transform's node wraps
+          // rather than truncates, which a link row never needs: it is prose,
+          // already wrapped to the text width.
+          const links = row.links;
           return (
             <ClickableBox
               key={start + i}
               hoverBg={pressable ? theme.hoverBg : undefined}
               onPress={pressable && p.onRowPress ? () => p.onRowPress!(idx) : undefined}
             >
-              <Text
-                wrap="truncate-end"
-                backgroundColor={isAnchor && p.focused ? theme.selectionBg : undefined}
-                {...toneProps(row.tone)}
-              >
-                <Text color={theme.accent}>{isAnchor ? "▌" : " "}</Text>
-                {row.text || " "}
-              </Text>
+              {links === undefined ? (
+                text
+              ) : (
+                <Transform transform={(s) => linkifyLine(s, links, !tone.bold && !tone.dimColor)}>
+                  {text}
+                </Transform>
+              )}
             </ClickableBox>
           );
         })}

@@ -801,14 +801,20 @@ export async function listCatalogProviders(): Promise<CatalogEntry[]> {
  * watcher is an fs.watch on a custom theme file that would keep the process
  * alive). Side effect: one process-global slot
  * (`globalThis[Symbol.for("@earendil-works/pi-coding-agent:theme")]`) set to
- * the SDK's built-in dark/light theme, picked from the terminal env
- * (COLORFGBG; theme.js:630). It is only ever set when still empty, so an SDK
- * path that initialised its own theme first is left alone.
+ * the SDK's built-in `dark` or `light` theme (the two built-ins: theme.d.ts:42
+ * `TerminalTheme`, theme.js `getBuiltinThemes`) — `chat.theme` names one, or
+ * `auto` lets the SDK pick from the terminal env (COLORFGBG; theme.js:630,
+ * #512). `auto` only fills the slot when still empty, so an SDK path that
+ * initialised its own theme first is left alone; a named theme is the
+ * operator's word and always applies.
  */
-export async function loadHighlighter(): Promise<HighlightFn> {
+export async function loadHighlighter(
+  theme: Config["chat"]["theme"] = "auto",
+): Promise<HighlightFn> {
   const { highlightCode, initTheme } = await import("@earendil-works/pi-coding-agent");
   const slot = Symbol.for("@earendil-works/pi-coding-agent:theme");
-  if ((globalThis as unknown as Record<symbol, unknown>)[slot] === undefined)
+  if (theme !== "auto") initTheme(theme, false);
+  else if ((globalThis as unknown as Record<symbol, unknown>)[slot] === undefined)
     initTheme(undefined, false);
   return (code, lang) => {
     try {

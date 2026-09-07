@@ -8,6 +8,7 @@ import {
   bodyWindow,
   concatRows,
 } from "../src/tui/components/TranscriptBody.js";
+import { useFinishedRows } from "../src/tui/components/FinishedTurns.js";
 import { renderCounts, resetRenderCounts } from "../src/tui/renderCount.js";
 import type { ChatState } from "../src/tui/hooks/useChat.js";
 import type { TranscriptRow } from "../src/transcriptRender.js";
@@ -43,7 +44,6 @@ const base = (over: Partial<ChatState> = {}): ChatState => ({
   follow: true,
   reveal: false,
   thinking: { pinned: false },
-  frame: 0,
   expanded: new Set(),
   lastOffset: null,
   error: null,
@@ -475,7 +475,7 @@ describe("ChatView", () => {
       const r = render(
         <ChatView
           {...props}
-          state={base({ summary, expanded, streaming: true, live: live("first", 1), frame: 1 })}
+          state={base({ summary, expanded, streaming: true, live: live("first", 1) })}
         />,
       );
       await until(() => r.lastFrame()!.includes("junco: first"));
@@ -490,7 +490,6 @@ describe("ChatView", () => {
             expanded,
             streaming: true,
             live: live("first and then some more", 2),
-            frame: 2,
           })}
         />,
       );
@@ -498,6 +497,66 @@ describe("ChatView", () => {
       expect(renderCounts().TranscriptBody).toBeGreaterThan(bodyBefore);
       expect(renderCounts().FinishedTurns).toBe(1);
       expect(r.lastFrame()).toContain("junco: done"); // the history is still there
+    });
+
+    // #511: `ChatState.frame` is gone — the live rows memo is keyed on `live`'s
+    // identity (useChat publishes a new object per flush). A rerender with the
+    // SAME `live` object (a composer keystroke, say) must not rebuild them.
+    it("the live rows re-run on a new `live` object and not on an unchanged one", async () => {
+      process.env.JUNCO_RENDER_COUNT = "1";
+      resetRenderCounts();
+      const summary = summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart()]);
+      const live = (text: string, seq: number) => ({
+        turn: "t1",
+        seq,
+        blocks: [{ kind: "text" as const, contentIndex: 0, text }],
+        expanded: new Set<string>(),
+        dropped: 0,
+      });
+      const props = {
+        modelId: "m",
+        chatTodayUsd: null,
+        scroll: 0,
+        height: 20,
+        width: 80,
+        focused: true,
+        highlight: null,
+        onComposerChange: () => {},
+        onComposerSubmit: () => {},
+      };
+      const first = live("first", 1);
+      const r = render(
+        <ChatView {...props} state={base({ summary, streaming: true, live: first })} />,
+      );
+      await until(() => r.lastFrame()!.includes("junco: first"));
+      const after1 = renderCounts().LiveTurn ?? 0;
+      expect(after1).toBeGreaterThan(0);
+      // Same `live`, another field changed: the memo holds.
+      r.rerender(
+        <ChatView
+          {...props}
+          state={base({ summary, streaming: true, live: first, composer: "typing" })}
+        />,
+      );
+      await until(() => r.lastFrame()!.includes("typing"));
+      expect(renderCounts().LiveTurn).toBe(after1);
+      // A flush's new object: the memo re-runs.
+      r.rerender(
+        <ChatView
+          {...props}
+          state={base({ summary, streaming: true, live: live("first more", 2) })}
+        />,
+      );
+      await until(() => r.lastFrame()!.includes("junco: first more"));
+      expect(renderCounts().LiveTurn).toBe(after1 + 1);
+      r.rerender(
+        <ChatView
+          {...props}
+          state={base({ summary, streaming: true, live: live("first more!", 3) })}
+        />,
+      );
+      await until(() => r.lastFrame()!.includes("junco: first more!"));
+      expect(renderCounts().LiveTurn).toBe(after1 + 2);
     });
 
     it("a streaming thinking block and a tool block render their header rows", async () => {
@@ -753,6 +812,61 @@ describe("ChatView", () => {
       expect(f).toContain("  let me see");
     });
 
+    // #511: the live header carries `think:live:<contentIndex>` and is open
+    // when pinned OR that anchor is in `live.expanded` (`t` on the header).
+    it("done, unpinned, but expanded by its live anchor: `▾ thinking` with the body", async () => {
+      const l = liveWith([think(true), answer]);
+      const r = view(
+        base({
+          summary: summary(),
+          streaming: true,
+          live: { ...l, expanded: new Set(["think:live:0"]) },
+        }),
+      );
+      await until(() => r.lastFrame()!.includes("junco: so far"));
+      const f = r.lastFrame()!;
+      expect(f).toMatch(/▾ thinking · [34]s/);
+      expect(f).toContain("  let me see");
+    });
+
+    it("the cursor lands on a live thinking header (it is in `anchors`)", async () => {
+      // cursor 0 with no tool cards: the header is the only anchor. Blurred
+      // composer so the body paints the selection bar.
+      const r = view(
+        base({
+          summary: summary(),
+          streaming: true,
+          composerFocused: false,
+          follow: false,
+          cursor: 0,
+          live: liveWith([think(true), answer]),
+        }),
+      );
+      await until(() => r.lastFrame()!.includes("junco: so far"));
+      const row = r
+        .lastFrame()!
+        .split("\n")
+        .find((l) => l.includes("▸ thinking"))!;
+      expect(row).toContain("▌");
+    });
+
+    it("a finished thinking block opens by its own anchor in `expanded` (#511)", async () => {
+      const done = summarizeTranscript([
+        metaLine(),
+        chatPrompt(),
+        chatTurnStart(),
+        agentStart(),
+        turnEndFull({ thinking: "weighing it", text: "The answer", calls: [] }),
+        agentEnd(),
+        chatTurnEnd(),
+      ]);
+      const r = view(base({ summary: done, expanded: new Set(["think:0:0"]) }));
+      await until(() => r.lastFrame()!.includes("weighing it"));
+      const f = r.lastFrame()!;
+      expect(f).toContain("▾ thinking");
+      expect(f).toContain("junco: The answer");
+    });
+
     it("no thinking block: no header at all (D2)", async () => {
       const r = view(
         base({
@@ -790,6 +904,49 @@ describe("ChatView", () => {
       expect(f).toContain("▾ thinking");
       expect(f).toContain("junco: The answer");
     });
+  });
+});
+
+// F3 (#512): the finished turns' per-turn markdown caches belong to one chat.
+describe("useFinishedRows", () => {
+  const EXPANDED = new Set<string>();
+  // The bullet list is a CLOSED block (a paragraph follows): renderMarkdown
+  // caches closed blocks only, so a hit hands back the same row objects.
+  const MD = "Intro\n\n- a\n- b\n\nOutro";
+  const finished = () =>
+    summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: null, text: MD, calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+  function Probe(p: {
+    chatKey: string;
+    summary: ReturnType<typeof finished>;
+    out: { rows?: TranscriptRow[] };
+  }): null {
+    p.out.rows = useFinishedRows(p.summary, false, EXPANDED, 80, null, p.chatKey);
+    return null;
+  }
+  const bullet = (rows: TranscriptRow[] | undefined) => rows?.find((r) => r.text === "  • a");
+
+  it("keeps the markdown cache across summaries of one chat and drops it when the key changes", async () => {
+    const out: { rows?: TranscriptRow[] } = {};
+    const r = render(<Probe chatKey="acme/api" summary={finished()} out={out} />);
+    await until(() => bullet(out.rows) !== undefined);
+    const first = bullet(out.rows)!;
+    out.rows = undefined;
+    r.rerender(<Probe chatKey="acme/api" summary={finished()} out={out} />);
+    await until(() => out.rows !== undefined && bullet(out.rows) === first);
+    expect(bullet(out.rows)).toBe(first);
+    out.rows = undefined;
+    r.rerender(<Probe chatKey="acme/web" summary={finished()} out={out} />);
+    await until(() => bullet(out.rows) !== undefined && bullet(out.rows) !== first);
+    expect(bullet(out.rows)).toEqual(first);
+    expect(bullet(out.rows)).not.toBe(first);
   });
 });
 
@@ -973,12 +1130,34 @@ describe("ChatView markdown answers (spec 2026-09-06 §4.2)", () => {
     expect(f).toContain("• b");
   });
 
+  // F3 (#512): a link row is painted through an Ink <Transform> that wraps the
+  // link text in OSC 8 post-layout; ink-testing-library keeps the escapes.
+  it("a link row carries an OSC 8 hyperlink around the link text", async () => {
+    const summary = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: null, text: "see [the docs](https://x.test/d) now", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const r = render(<ChatView {...props} state={base({ summary })} />);
+    const visible = (s: string) => strip(s).replace(/\u001b\]8;;[^\u0007]*\u0007/g, "");
+    await until(() => visible(r.lastFrame() ?? "").includes("the docs (https://x.test/d)"));
+    const f = r.lastFrame()!;
+    expect(f).toContain("\u001b]8;;https://x.test/d\u0007the docs\u001b]8;;\u0007");
+    expect(f).toContain("\u001b[2m(https://x.test/d)\u001b[22m");
+    // Zero-width: the visible text is what the plain renderer produced.
+    expect(visible(f)).toContain("see the docs (https://x.test/d) now");
+  });
+
   it("a live text block renders the same way, and a null highlighter shows the raw fence", async () => {
     const summary = summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart()]);
     const r = render(
       <ChatView
         {...props}
-        state={base({ summary, streaming: true, live: live(MD, 1), frame: 1 })}
+        state={base({ summary, streaming: true, live: live(MD, 1) })}
         highlight={fake}
       />,
     );
@@ -990,7 +1169,7 @@ describe("ChatView markdown answers (spec 2026-09-06 §4.2)", () => {
     const plain = render(
       <ChatView
         {...props}
-        state={base({ summary, streaming: true, live: live(MD, 1), frame: 1 })}
+        state={base({ summary, streaming: true, live: live(MD, 1) })}
         highlight={null}
       />,
     );
@@ -1019,7 +1198,6 @@ describe("ChatView markdown answers (spec 2026-09-06 §4.2)", () => {
             expanded,
             streaming: true,
             live: live("# Live\n\nfirst", 1),
-            frame: 1,
           })}
           highlight={fake}
         />,
@@ -1034,7 +1212,6 @@ describe("ChatView markdown answers (spec 2026-09-06 §4.2)", () => {
             expanded,
             streaming: true,
             live: live("# Live\n\nfirst and then\n\n```ts\nlet y;\n```", 2),
-            frame: 2,
           })}
           highlight={fake}
         />,

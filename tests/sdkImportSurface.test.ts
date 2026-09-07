@@ -86,4 +86,17 @@ describe("Pi SDK import surface (chat markdown highlighter depends on these)", (
     ]);
     expect(highlight("plain", null)).toBeNull();
   });
+
+  // F3 (#512): `chat.theme` reaches initTheme. The SDK's built-in themes are
+  // exactly "dark" and "light" (theme.d.ts:42 `TerminalTheme`; theme.js
+  // getBuiltinThemes reads dark.json/light.json) — both must load without
+  // throwing and still highlight line-for-line.
+  for (const theme of ["dark", "light"] as const) {
+    it(`loadHighlighter("${theme}") initialises that built-in theme and highlights`, async () => {
+      const highlight = await loadHighlighter(theme);
+      const lines = highlight("const x = 1;", "ts");
+      expect(lines).not.toBeNull();
+      expect(lines!.map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))).toEqual(["const x = 1;"]);
+    });
+  }
 });

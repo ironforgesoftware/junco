@@ -353,6 +353,19 @@ describe("runDashboard highlighter wiring", () => {
     expect(highlight).toBe(fake);
   });
 
+  it("passes chat.theme to the highlighter loader (#512)", async () => {
+    const seen: unknown[] = [];
+    await runDashboard({ ...cfg, chat: { ...cfg.chat, theme: "light" } }, "/x/config.json", {
+      isTTY: true,
+      loadHighlighterFn: async (theme) => {
+        seen.push(theme);
+        return (code: string) => code.split("\n");
+      },
+      renderFn: () => ({ waitUntilExit: async () => {} }),
+    });
+    expect(seen).toEqual(["light"]);
+  });
+
   it("a highlighter that fails to load leaves highlight null and still renders", async () => {
     let highlight: unknown = undefined;
     const code = await runDashboard(cfg, "/x/config.json", {

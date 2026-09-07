@@ -132,30 +132,27 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
   const textWidth = Math.max(MIN_WIDTH, p.width - 6);
   // Spec 2026-09-06 §4.1: two memo boundaries. The finished rows are keyed on
   // the summary (plus pinned/expanded/width) and never re-run on a flush; the
-  // live rows are keyed on the flush counter; the body sees them joined
-  // lazily, so a frame copies nothing but the live turn's own rows.
+  // live rows are keyed on `live`'s identity (a new object per flush); the
+  // body sees them joined lazily, so a frame copies nothing but the live
+  // turn's own rows.
   const finished = useFinishedRows(
     state.summary,
     state.thinking.pinned,
     state.expanded,
     textWidth,
     p.highlight,
+    state.key,
   );
-  const liveRows = useLiveRows(
-    state.live,
-    state.frame,
-    textWidth,
-    state.thinking.pinned,
-    p.highlight,
-  );
+  const liveRows = useLiveRows(state.live, textWidth, state.thinking.pinned, p.highlight);
   const rows = useMemo(() => concatRows(finished, liveRows), [finished, liveRows]);
   // Memoized: a fresh array every render would defeat TranscriptBody's
   // React.memo on almost every ChatView re-render (e.g. a composer
   // keystroke, which touches state.composer but not state.summary).
-  // The finished anchors plus the live turn's tool cards (spec 2026-09-06
-  // §4.4) — useChat's `chatAnchorIds`, the list the cursor is clamped
-  // against, memoized in two halves: a flush that adds no card keeps the
-  // array's identity (the live ids are keyed as a string for that).
+  // The finished anchors plus the live turn's thinking headers and tool
+  // cards (spec 2026-09-06 §4.4, #511) — useChat's `chatAnchorIds`, the list
+  // the cursor is clamped against, memoized in two halves: a flush that adds
+  // no anchor keeps the array's identity (the live ids are keyed as a string
+  // for that).
   const finishedAnchors = useMemo(
     () => (state.summary === null ? [] : anchorIds(state.summary)),
     [state.summary],

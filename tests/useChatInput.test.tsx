@@ -67,7 +67,6 @@ const chatState = (over: Partial<ChatState> = {}): ChatState => ({
   follow: false,
   reveal: false,
   thinking: { pinned: false },
-  frame: 0,
   expanded: new Set(),
   lastOffset: null,
   error: null,

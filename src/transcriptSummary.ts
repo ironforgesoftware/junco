@@ -15,6 +15,7 @@
  * duplicates turn_end and would double-count.
  */
 import type { Usage } from "./types.js";
+import { splitThinkingText } from "./chat/thinkSplitter.js";
 import {
   parseTranscriptLine,
   type ChatCommandRecord,
@@ -519,16 +520,36 @@ export function toolCallIds(s: TranscriptSummary): string[] {
 
 export const draftAnchor = (draftId: string): string => `draft:${draftId}`;
 export const commandAnchor = (commandId: string): string => `cmd:${commandId}`;
+/** Anchor of the thinking header of turn `turnIdx` (TurnSummary.index) in the
+ * summary's `runIdx`-th run (0-based position in `runs`). */
+export const thinkingAnchor = (runIdx: number, turnIdx: number): string =>
+  `think:${runIdx}:${turnIdx}`;
 
-/** Tool ids ∪ draft/command anchors in file order — the chat view's cursor space. */
+/** Whether transcriptRender.ts prints a thinking header for the turn: it has
+ * a thinking block, or its text still carries `<think>` tags that the renderer
+ * splits off at render time (spec 2026-09-06 §2.1 last paragraph). The two
+ * must agree, or the cursor space names a row that is not there. */
+function hasThinkingHeader(t: TurnSummary): boolean {
+  if (t.thinking !== null) return true;
+  return (
+    t.text !== null && t.text.includes("<think>") && splitThinkingText(t.text).thinking !== null
+  );
+}
+
+/** Thinking headers ∪ tool ids ∪ draft/command anchors in file order — the
+ * chat view's cursor space. A turn's thinking header (#511) comes before its
+ * tool cards, the order the rows render in. */
 export function anchorIds(s: TranscriptSummary): string[] {
   const out: string[] = [];
-  for (const r of s.runs) {
-    for (const t of r.turns) for (const c of t.toolCalls) out.push(c.id);
+  s.runs.forEach((r, i) => {
+    for (const t of r.turns) {
+      if (hasThinkingHeader(t)) out.push(thinkingAnchor(i, t.index));
+      for (const c of t.toolCalls) out.push(c.id);
+    }
     for (const n of r.notes) {
       if (n.kind === "draft") out.push(draftAnchor(n.draftId));
       else if (n.kind === "command") out.push(commandAnchor(n.commandId));
     }
-  }
+  });
   return out;
 }

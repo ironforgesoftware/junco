@@ -247,6 +247,7 @@ export function assembleConfig(
       confirmTimeoutMinutes: d.chat.confirmTimeoutMinutes,
       thinkTags: d.chat.thinkTags,
       maxFps: d.chat.maxFps,
+      theme: d.chat.theme,
     },
   };
 }

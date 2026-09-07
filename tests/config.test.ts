@@ -1258,6 +1258,7 @@ describe("chat section (spec 2026-09-01 §10)", () => {
       confirmTimeoutMinutes: 10,
       thinkTags: "auto",
       maxFps: 60,
+      theme: "auto",
     });
   });
   it("explicit values parse through", () => {
@@ -1272,6 +1273,7 @@ describe("chat section (spec 2026-09-01 §10)", () => {
           confirmTimeoutMinutes: 3,
           thinkTags: "off",
           maxFps: 30,
+          theme: "light",
         },
       }),
     );
@@ -1284,7 +1286,14 @@ describe("chat section (spec 2026-09-01 §10)", () => {
       confirmTimeoutMinutes: 3,
       thinkTags: "off",
       maxFps: 30,
+      theme: "light",
     });
+  });
+  it("theme: auto by default, dark|light explicit, anything else rejected (#512)", () => {
+    expect(loadConfig(writeJson({})).chat.theme).toBe("auto");
+    expect(loadConfig(writeJson({ chat: { theme: "dark" } })).chat.theme).toBe("dark");
+    expect(loadConfig(writeJson({ chat: { theme: "light" } })).chat.theme).toBe("light");
+    expect(() => loadConfig(writeJson({ chat: { theme: "solarized" } }))).toThrow();
   });
   it("streaming knobs: thinkTags defaults auto, maxFps defaults 60 and is bounded (spec 2026-09-06 §5)", () => {
     const cfg = loadConfig(writeJson({}));

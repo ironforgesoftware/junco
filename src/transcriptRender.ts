@@ -9,22 +9,37 @@
  * can render rows with `wrap="truncate-end"` and lose nothing.
  */
 import type { ChatCommandRecord, GuardDecisionRecord } from "./agent/transcriptSchema.js";
-import { commandAnchor, draftAnchor } from "./transcriptSummary.js";
+import { commandAnchor, draftAnchor, thinkingAnchor } from "./transcriptSummary.js";
 import type { RunSummary, ToolResultSummary, TranscriptSummary } from "./transcriptSummary.js";
 import { splitThinkingText } from "./chat/thinkSplitter.js";
 import { parseBlocks } from "./tui/markdown/blocks.js";
-import { renderMarkdown, type HighlightFn, type MdCache } from "./tui/markdown/render.js";
+import {
+  createMdCache,
+  renderMarkdown,
+  type HighlightFn,
+  type MdCache,
+} from "./tui/markdown/render.js";
 
 /** `thinking`: the model's reasoning body (spec 2026-09-06 §4.3 — dim italic). */
 export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success" | "thinking";
 
+/** A markdown link the row's text carries as `text (url)` (F3, #512):
+ * TranscriptBody wraps `text` in an OSC 8 hyperlink post-layout. */
+export interface RowLink {
+  text: string;
+  url: string;
+}
+
 export interface TranscriptRow {
   text: string;
   tone?: RowTone;
+  /** Links whose `text` appears in this row (markdown/render.ts); absent on
+   * every other row so the plain paint path stays the common one. */
+  links?: readonly RowLink[];
   /** Set on a tool-call row: the toolCallId the cursor/expand key targets.
-   * A thinking header carries `thinkingAnchor(run, turn)` — not part of the
-   * cursor's index space (transcriptSummary.ts's anchorIds/toolCallIds), it
-   * only names the row. */
+   * A thinking header carries `thinkingAnchor(run, turn)` — a cursor stop in
+   * the chat view (transcriptSummary.ts's `anchorIds`, #511) but not in a
+   * ticket transcript's `toolCallIds`, where it only names the row. */
   anchor?: string;
 }
 
@@ -34,7 +49,9 @@ export interface RenderOpts {
   /** Spec 2026-09-06 §4.3: every finished turn's thinking block is a collapsed
    * `▸ thinking` header unless pinned (`t`), which opens them all. */
   pinned: boolean;
-  /** toolCallIds whose result body renders inline under the tool row. */
+  /** toolCallIds whose result body renders inline under the tool row — and
+   * (#511) thinking anchors whose block is open on its own: a block renders
+   * open when `pinned || expanded.has(thinkingAnchor(run, turn))`. */
   expanded: ReadonlySet<string>;
   /** Spec 2026-09-06 §4.2: typeset a chat answer (`flow: "chat"` runs ONLY —
    * ticket transcripts stay plain, spec Non-goals) as markdown via
@@ -94,7 +111,8 @@ export function chatAnswerRows(
   const out: TranscriptRow[] = [];
   if (!labelled) out.push({ text: CHAT_LABEL.trimEnd(), tone: "accent" });
   rows.forEach((r, i) => {
-    if (labelled && i === 0) out.push({ text: r.text, tone: "accent" });
+    if (labelled && i === 0)
+      out.push(r.links === undefined ? { text: r.text, tone: "accent" } : { ...r, tone: "accent" });
     else if (r.text === "") out.push(r);
     else out.push(indented(r));
   });
@@ -109,7 +127,7 @@ const INDENTED = new WeakMap<TranscriptRow, TranscriptRow>();
 function indented(r: TranscriptRow): TranscriptRow {
   let hit = INDENTED.get(r);
   if (hit === undefined) {
-    hit = r.tone === undefined ? { text: `  ${r.text}` } : { text: `  ${r.text}`, tone: r.tone };
+    hit = { ...r, text: `  ${r.text}` };
     INDENTED.set(r, hit);
   }
   return hit;
@@ -190,10 +208,9 @@ export function fmtDuration(ms: number): string {
   return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
 }
 
-/** Anchor of the thinking header of turn `turnIdx` (TurnSummary.index) in the
- * summary's `runIdx`-th run (0-based position in `runs`). */
-export const thinkingAnchor = (runIdx: number, turnIdx: number): string =>
-  `think:${runIdx}:${turnIdx}`;
+/** `thinkingAnchor` lives in transcriptSummary.ts since #511 (anchorIds
+ * emits it); re-exported so the renderer's callers keep one import. */
+export { thinkingAnchor };
 
 /**
  * The thinking block's header row (spec 2026-09-06 §4.3), shared by the live
@@ -464,12 +481,12 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
         // A turn has no duration of its own; the run's is the block's only
         // when the turn is the run's only turn.
         const ms = run.turns.length === 1 ? (run.end?.durationMs ?? null) : null;
-        push(
-          `  ${fmtThinkingHeader(o.pinned ? "pinned" : "collapsed", ms)}`,
-          undefined,
-          thinkingAnchor(i, turn.index),
-        );
-        if (o.pinned)
+        const anchor = thinkingAnchor(i, turn.index);
+        // Open when pinned (every block) or expanded by its own anchor (#511:
+        // `t` on the header) — the tool cards' mechanism.
+        const open = o.pinned || o.expanded.has(anchor);
+        push(`  ${fmtThinkingHeader(open ? "pinned" : "collapsed", ms)}`, undefined, anchor);
+        if (open)
           for (const l of proseLines(thinking, width - 4))
             push(l === "" ? "" : `    ${l}`, "thinking");
       }
@@ -487,7 +504,7 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
           // escapes as columns and could cut one in half).
           let cache = o.mdCache?.get(mdCacheKey(i, turn.index));
           if (o.mdCache && cache === undefined) {
-            cache = { width: 0, highlight: undefined, entries: [] };
+            cache = createMdCache();
             o.mdCache.set(mdCacheKey(i, turn.index), cache);
           }
           rows.push(...chatAnswerRows(text, width, { highlight: o.highlight ?? null, cache }));

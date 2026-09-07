@@ -69,8 +69,9 @@ export interface DashboardDeps {
   existsFn?: (p: string) => boolean;
   /** The chat's code-fence highlighter (spec 2026-09-06 §4.2). Default: Pi's,
    * through agent/session.ts's `loadHighlighter` — the one runtime SDK import
-   * seam; injected so tests never load the SDK. A rejection means raw fences. */
-  loadHighlighterFn?: () => Promise<HighlightFn>;
+   * seam; injected so tests never load the SDK. A rejection means raw fences.
+   * Receives `chat.theme` (#512; `auto` on the FTUE path with no config). */
+  loadHighlighterFn?: (theme: Config["chat"]["theme"]) => Promise<HighlightFn>;
 }
 
 /**
@@ -155,8 +156,8 @@ export async function runDashboard(
     // fences rather than blocking the dashboard.
     (
       deps.loadHighlighterFn ??
-      (() => import("./agent/session.js").then((m) => m.loadHighlighter()))
-    )().catch((): HighlightFn | null => null),
+      ((theme) => import("./agent/session.js").then((m) => m.loadHighlighter(theme)))
+    )(cfg?.chat.theme ?? "auto").catch((): HighlightFn | null => null),
   ]);
   // INK_RENDER_OPTIONS is the single source of truth for the host options
   // (exitOnCtrlC:false is load-bearing — see the constant's doc); a no-op when

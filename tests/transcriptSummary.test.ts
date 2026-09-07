@@ -4,6 +4,7 @@ import {
   commandAnchor,
   draftAnchor,
   summarizeTranscript,
+  thinkingAnchor,
   toolCallIds,
 } from "../src/transcriptSummary.js";
 import {
@@ -315,13 +316,37 @@ describe("chat records (spec 2026-09-01 §1.3)", () => {
     expect(s.runs[0]!.notes[0]).toMatchObject({ kind: "rejected" });
     expect(s.live).toBe(false);
   });
-  it("anchorIds is tool ids ∪ draft anchors in file order; ticket transcripts unchanged", () => {
+  it("anchorIds is thinking headers ∪ tool ids ∪ draft anchors in file order; toolCallIds (the ticket view's space) stays tool ids only", () => {
     const s = summarizeTranscript(chat());
     expect(anchorIds(s)).toEqual([draftAnchor("acme__api-20260901-120000-1")]);
     const v2run = summarizeTranscript(v2());
     expect(v2run.runs[0]!.prompt).toBeNull();
     expect(v2run.runs[0]!.notes).toEqual([]);
-    expect(anchorIds(v2run)).toEqual(toolCallIds(v2run));
+    // The v2 fixture's one turn thinks ("hmm") before its tool call.
+    expect(toolCallIds(v2run)).toEqual(["c1"]);
+    expect(anchorIds(v2run)).toEqual([thinkingAnchor(0, 0), ...toolCallIds(v2run)]);
+  });
+  // #511: a turn's thinking header is a cursor stop too, listed before the
+  // turn's tool cards (the order the rows render in). A turn whose text still
+  // carries `<think>` tags renders a header (transcriptRender.ts splits it at
+  // render time), so it anchors the same way; a turn without thinking does not.
+  it("anchorIds lists a thinking header ahead of its turn's tool cards", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({
+        thinking: "deep",
+        text: "a",
+        calls: [{ id: "c1", name: "read", args: {}, result: "ok" }],
+      }),
+      turnEndFull({ thinking: null, text: "<think>hmm</think>\nb", calls: [] }),
+      turnEndFull({ thinking: null, text: "plain", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    expect(anchorIds(s)).toEqual([thinkingAnchor(0, 0), "c1", thinkingAnchor(0, 1)]);
   });
   it("a steer prompt while a run is open is dropped, not reframed as the next run's prompt", () => {
     const s = summarizeTranscript([
