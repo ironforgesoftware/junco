@@ -112,12 +112,16 @@ unchanged.
   contentIndex: number, delta: string }
 
 // Tool lifecycle, compact. `args` is the SDK's parsed args object; `output` is the
-// streamed bash output (bash_execution_update) or a tool_execution_update partial;
-// `result` is the final text, truncated by the daemon to CHAT_TOOL_RESULT_CAP bytes
-// with `truncated: true` so a 40 KB `cat` never crosses the wire.
+// streamed bash output (bash_execution_update) or a tool_execution_update partial —
+// a delta to append, or with `replace: true` (output phase only) the whole output so
+// far, which the client overwrites its block with: sent when a cumulative snapshot
+// does not extend the previous one (#507). `result` is the final text, truncated by
+// the daemon to CHAT_TOOL_RESULT_CAP UTF-16 code units (§2.3) with `truncated: true`
+// so a 40 KB `cat` never crosses the wire.
 { type: "junco_chat_tool", turn: string, seq: number, id: string,
   phase: "start" | "output" | "end", name?: string, args?: unknown,
-  output?: string, result?: string, isError?: boolean, truncated?: boolean }
+  output?: string, replace?: true, result?: string, isError?: boolean,
+  truncated?: boolean }
 
 // The in-flight turn as of subscribe time (D7). Sent first, before any live frame,
 // only while a turn is streaming. `blocks` is the same shape the client keeps, so
@@ -125,12 +129,22 @@ unchanged.
 { type: "junco_chat_partial", turn: string, seq: number, blocks: LiveBlock[] }
 ```
 
-`LiveBlock` (shared type in `src/chat/liveBlocks.ts`, pure, no I/O):
+`LiveBlock` (shared type in `src/chat/liveBlocks.ts`, pure, no I/O). A thinking block's
+`doneAt` (ISO) is stamped by whoever marks it `done` — the daemon on `thinking_end`, the
+first text delta, or turn finish; the client reducer when it closes a block itself — so
+the fold duration (§4.3) survives a reconnect that replays an already-done block (#511):
 
 ```ts
 type LiveBlock =
   | { kind: "text"; contentIndex: number; text: string }
-  | { kind: "thinking"; contentIndex: number; text: string; done: boolean; startedAt: string }
+  | {
+      kind: "thinking";
+      contentIndex: number;
+      text: string;
+      done: boolean;
+      startedAt: string;
+      doneAt?: string;
+    }
   | {
       kind: "tool";
       id: string;
@@ -249,9 +263,20 @@ thinking — <think> tags are split by junco; move reasoning into reasoning_cont
 
 ### 2.3 Result cap
 
-`CHAT_TOOL_RESULT_CAP = 8_192` bytes on `junco_chat_tool.end.result` and a
+`CHAT_TOOL_RESULT_CAP = 8_192` on `junco_chat_tool.end.result` and a
 `CHAT_TOOL_OUTPUT_CAP = 32_768` rolling cap on accumulated `output` in `LiveTurn` (the card
 shows the tail). The SDK's own tool result is untouched; only the wire copy is capped.
+
+Both caps are **UTF-16 code units** (`.length` / `.slice`), not bytes — on the daemon
+(`liveTurn.ts`) and in the client reducer (`applyLiveRecord`) alike (#508). Slicing a byte
+count would cut a multi-byte character in half and put a lone surrogate or an invalid UTF-8
+sequence on the wire; a code-unit slice always yields a string that re-encodes cleanly. The
+cost is that the cap is a ceiling on characters, not on wire size: one code unit encodes to
+at most three UTF-8 bytes (a surrogate pair is two units for four bytes, i.e. two per unit),
+so a capped `result` is at most ~24 KB (8 192 × 3) and a full `output` window at most ~96 KB
+in the SSE body — still below the 40 KB `cat` the 8 KiB figure in §1.1 was chosen against,
+and the ASCII common case is exactly 8 KiB. A byte-accurate cap that backs off to a character
+boundary is not worth the second code path.
 
 ## 3. Client state (`src/tui/hooks/useChat.ts`, `src/tui/chatLiveModel.ts`)
 
@@ -423,9 +448,9 @@ chat: {
 }
 ```
 
-Both are hot-reloadable in the sense the rest of `chat` is: `thinkTags` is read per turn,
-`maxFps` per dashboard launch. Add to `tests/helpers/config.ts` (the one full `Config`
-literal) and document under `docs/configuration.md` § Chat.
+Neither is live: `thinkTags` is read once when a chat session is built (a running session keeps
+its value — lever `reload: "restart"`, #515), `maxFps` once per dashboard launch. Add to
+`tests/helpers/config.ts` (the one full `Config` literal) and document under `docs/configuration.md` § Chat.
 
 ## 6. Error handling
 
@@ -492,24 +517,35 @@ Before the first rendering task lands, and again at the end, on the Pi 5 and on 
 maintainer's Mac, with the synthetic stream from `tests/tuiChatPerf.test.tsx` driven through
 a real `junco dashboard` (`JUNCO_RENDER_COUNT=1`):
 
-| Metric                                          | Today (measure) | Target            | Measured (Pi 5, synthetic) |
-| ----------------------------------------------- | --------------- | ----------------- | -------------------------- |
-| Character-visible latency (delta → paint), p95  |                 | ≤ 20 ms at 60 fps | — (manual)                 |
-| Event-loop lag at 300 events/s, p95             |                 | ≤ 10 ms           | 16.4 ms (max 19.3)         |
-| `ChatView` renders per second at 300 events/s   |                 | ≤ maxFps          | 45 (maxFps 60)             |
-| `FinishedTurns` renders during a streaming turn |                 | 0                 | 0                          |
-| Daemon CPU per 1k deltas (bus + SSE write)      |                 | ≤ 25% of today's  | — (manual)                 |
-| Bytes on the wire per 1k characters             |                 | ≤ 5% of today's   | — (manual)                 |
+| Metric                                          | Today (measure) | Target            | Measured (Pi 5, synthetic)              |
+| ----------------------------------------------- | --------------- | ----------------- | --------------------------------------- |
+| Character-visible latency (delta → paint), p95  |                 | ≤ 20 ms at 60 fps | — (manual; decided without the Mac run) |
+| Event-loop lag at 300 events/s, p95             |                 | ≤ 10 ms           | 16.4 ms (max 19.3)                      |
+| `ChatView` renders per second at 300 events/s   |                 | ≤ maxFps          | 45 (maxFps 60)                          |
+| `FinishedTurns` renders during a streaming turn |                 | 0                 | 0                                       |
+| Daemon CPU per 1k deltas (bus + SSE write)      |                 | ≤ 25% of today's  | — (manual; decided without the Mac run) |
+| Bytes on the wire per 1k characters             |                 | ≤ 5% of today's   | — (manual; decided without the Mac run) |
 
 The "measured" column is `tests/tuiChatPerf.test.tsx` on the Pi 5 (Raspberry Pi 5 Model B, 4
 cores, `--reporter=verbose` prints the line): a 200-turn history, 600 `junco_chat_delta` records
 wall-clock paced at 300/s for 2 s through `useChat` → `ChatView` under ink-testing-library, no
 terminal writes. The manual real-dashboard measurement (a real `junco dashboard` on the Pi 5 and
 the Mac with `JUNCO_RENDER_COUNT=1`, before and after, plus the daemon-side CPU and bytes-on-wire
-columns) is still pending; the `maxFps` 30 fallback under D8 is decided by that run, not this one.
+columns) was not run; the `maxFps` decision below was taken on the synthetic numbers alone.
 
 If the Pi 5 cannot hold 60 fps under the budget, the default `chat.maxFps` ships at 30 and
 the spec is amended with the numbers; D8 authorizes that fallback.
+
+**Decision (2026-09-07, #516): `chat.maxFps` stays at 60.** On the synthetic Pi 5 run the
+event-loop lag p95 is 16.7 ms (16.4 in the tabled run; over the 10 ms target, but a frame at
+60 fps is 16.7 ms, so the loop keeps up with the paint rate), `ChatView` renders ~45 times a
+second under the 60 cap, and `FinishedTurns` re-renders 0 times during the stream — the two
+properties that matter for feel (a delta is on screen within a frame; history never re-renders) hold at 60. The Mac
+measurement was not run and the rows marked "decided without the Mac run" stay empty; the D8
+fallback is not taken because the knob already exists for anyone who needs to drop back
+(`chat.maxFps: 30` in `docs/configuration.md` § Chat), and a default that penalizes the
+faster machine to spare the slower one is the wrong side of that trade. Revisit only if a real
+`junco dashboard` on the Pi 5 shows visible stutter that the synthetic run does not.
 
 ## Implementation notes
 

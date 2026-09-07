@@ -43,10 +43,10 @@ const THINKING = "consider";
 const MARKDOWN = "# Done\n\n```sh\nls\n```";
 const ANSWER = `<think>${THINKING}</think>\n${MARKDOWN}`;
 /** What the text deltas add up to: everything outside the tags. The splitter
- * trims whitespace only INSIDE a thinking block (thinkSplitter.ts), so the
- * newline after `</think>` is ordinary text — rendering strips it, the wire
- * does not. */
-const TEXT = `\n${MARKDOWN}`;
+ * (thinkSplitter.ts, #509) swallows exactly one newline directly after the
+ * close tag, so the wire carries the bare markdown — no `"\n"` text delta
+ * precedes the answer and no partial snapshot has a `"\n"`-only text block. */
+const TEXT = MARKDOWN;
 
 /** One parsed SSE frame: `id:` is present only on persisted lines. */
 interface Frame {

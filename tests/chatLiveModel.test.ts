@@ -88,9 +88,66 @@ describe("applyLiveRecord: text and thinking deltas (spec 2026-09-06 §3.2)", ()
       ),
     );
     expect(s.blocks).toEqual([
-      { kind: "thinking", contentIndex: 0, text: "plan", done: true, startedAt: NOW() },
+      {
+        kind: "thinking",
+        contentIndex: 0,
+        text: "plan",
+        done: true,
+        startedAt: NOW(),
+        doneAt: NOW(),
+      },
       { kind: "text", contentIndex: 1, text: "answer" },
     ]);
+  });
+  it("marking a block done stamps doneAt from the injected clock, never overwriting one (#511)", () => {
+    const LATER = "2026-09-06T10:00:05.000Z";
+    let clock = NOW();
+    const tick = () => clock;
+    let s = applyLiveRecord(
+      startLiveTurn("t1"),
+      rec(chatDelta({ seq: 1, kind: "thinking", contentIndex: 0, delta: "plan" })),
+      tick,
+    );
+    expect(nonNull(s).blocks[0]).not.toHaveProperty("doneAt");
+    clock = LATER;
+    s = applyLiveRecord(
+      s,
+      rec(chatDelta({ seq: 2, kind: "text", contentIndex: 1, delta: "a" })),
+      tick,
+    );
+    expect(nonNull(s).blocks[0]).toMatchObject({ done: true, startedAt: NOW(), doneAt: LATER });
+    // A second text delta leaves the already-done block (and its doneAt) alone.
+    clock = "2026-09-06T10:00:09.000Z";
+    s = applyLiveRecord(
+      s,
+      rec(chatDelta({ seq: 3, kind: "text", contentIndex: 1, delta: "b" })),
+      tick,
+    );
+    expect(nonNull(s).blocks[0]).toMatchObject({ done: true, doneAt: LATER });
+    // A block already done by the daemon (done + doneAt in a partial) keeps its stamp.
+    const fromDaemon = nonNull(
+      apply(
+        null,
+        chatPartial({
+          turn: "t2",
+          seq: 1,
+          blocks: [
+            { kind: "thinking", contentIndex: 0, text: "p", done: false, startedAt: NOW() },
+            {
+              kind: "thinking",
+              contentIndex: 1,
+              text: "q",
+              done: true,
+              startedAt: NOW(),
+              doneAt: LATER,
+            },
+          ],
+        }),
+        chatDelta({ turn: "t2", seq: 2, kind: "text", contentIndex: 2, delta: "x" }),
+      ),
+    );
+    expect(fromDaemon.blocks[0]).toMatchObject({ done: true, doneAt: NOW() });
+    expect(fromDaemon.blocks[1]).toMatchObject({ done: true, doneAt: LATER });
   });
   it("a thinking delta does not close an open thinking block", () => {
     const s = nonNull(
@@ -147,7 +204,14 @@ describe("applyLiveRecord: seq dedupe and turn scoping", () => {
 
 describe("applyLiveRecord: junco_chat_partial replaces wholesale", () => {
   const blocks: LiveBlock[] = [
-    { kind: "thinking", contentIndex: 0, text: "p", done: true, startedAt: NOW() },
+    {
+      kind: "thinking",
+      contentIndex: 0,
+      text: "p",
+      done: true,
+      startedAt: NOW(),
+      doneAt: "2026-09-06T10:00:02.000Z",
+    },
     { kind: "text", contentIndex: 1, text: "snap" },
   ];
   it("replaces blocks and seq when the turn matches, keeping expanded and dropped", () => {
@@ -207,6 +271,35 @@ describe("applyLiveRecord: junco_chat_tool phases", () => {
       ),
     );
     expect(s.blocks[0]).toMatchObject({ kind: "tool", output: "line1\nline2\n", done: false });
+  });
+  it("output with `replace: true` overwrites the block's output instead of appending (#507)", () => {
+    const s = nonNull(
+      apply(
+        startLiveTurn("t1"),
+        chatTool({ seq: 1, phase: "start" }),
+        chatTool({ seq: 2, phase: "output", output: "aaa\nbbb\n" }),
+        chatTool({ seq: 3, phase: "output", output: "bbb\nccc\n", replace: true }),
+      ),
+    );
+    expect(s.blocks[0]).toMatchObject({ kind: "tool", output: "bbb\nccc\n", truncated: false });
+    // Appending resumes from the replaced text.
+    const s2 = nonNull(apply(s, chatTool({ seq: 4, phase: "output", output: "ddd\n" })));
+    expect(s2.blocks[0]).toMatchObject({ output: "bbb\nccc\nddd\n" });
+  });
+  it("a replacing output over the cap keeps its tail and flags truncated", () => {
+    const big = "R".repeat(CHAT_TOOL_OUTPUT_CAP + 3);
+    const s = nonNull(
+      apply(
+        startLiveTurn("t1"),
+        chatTool({ seq: 1, phase: "start" }),
+        chatTool({ seq: 2, phase: "output", output: "old" }),
+        chatTool({ seq: 3, phase: "output", output: big, replace: true }),
+      ),
+    );
+    const b = s.blocks[0];
+    if (b?.kind !== "tool") throw new Error("expected a tool block");
+    expect(b.output).toBe(big.slice(3));
+    expect(b.truncated).toBe(true);
   });
   it("output is a rolling cap: drops from the head at CHAT_TOOL_OUTPUT_CAP and flags truncated", () => {
     const head = "H".repeat(CHAT_TOOL_OUTPUT_CAP - 10);

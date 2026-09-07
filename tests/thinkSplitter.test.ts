@@ -74,6 +74,89 @@ describe("thinkSplitter (spec 2026-09-06 §2.1)", () => {
     s.push("<think>");
     expect(s.sawTag).toBe(true);
   });
+  describe("the newline after a close tag (#509)", () => {
+    it("swallows exactly one `\\n` directly after a close tag", () => {
+      expect(run(["a<think>b</think>\nc"])).toEqual([
+        { kind: "text", delta: "a" },
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "c" },
+      ]);
+    });
+    it("swallows exactly one `\\r\\n` directly after a close tag", () => {
+      expect(run(["a<think>b</think>\r\nc"])).toEqual([
+        { kind: "text", delta: "a" },
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "c" },
+      ]);
+    });
+    it("two newlines keep one", () => {
+      expect(run(["<think>b</think>\n\nc"])).toEqual([
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "\nc" },
+      ]);
+      expect(run(["<think>b</think>\r\n\r\nc"])).toEqual([
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "\r\nc" },
+      ]);
+    });
+    it("no newline: the text after the tag is unchanged", () => {
+      expect(run(["<think>b</think> c"])).toEqual([
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: " c" },
+      ]);
+    });
+    it("is chunk-invariant: every 2/3/4-way cut of a tag-then-newline string agrees", () => {
+      for (const s of ["a<think>b</think>\nc", "a<think>b</think>\r\nc"]) {
+        const want = run([s]);
+        expect(want).toEqual([
+          { kind: "text", delta: "a" },
+          { kind: "thinking", delta: "b" },
+          { kind: "text", delta: "c" },
+        ]);
+        for (const n of [2, 3, 4]) for (const c of cuts(s, n)) expect(run(c)).toEqual(want);
+      }
+    });
+    it("holds across a chunk ending exactly at the close tag", () => {
+      expect(run(["<think>b</think>", "\nc"])).toEqual([
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "c" },
+      ]);
+      expect(run(["<think>b</think>", "\r", "\nc"])).toEqual([
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "c" },
+      ]);
+      // A lone `\r` that turns out not to be `\r\n` is released as text.
+      expect(run(["<think>b</think>", "\r", "c"])).toEqual([
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "\rc" },
+      ]);
+    });
+    it("end() releases nothing for the held position", () => {
+      expect(run(["<think>b</think>"])).toEqual([{ kind: "thinking", delta: "b" }]);
+      expect(run(["<think>b</think>", "\n"])).toEqual([{ kind: "thinking", delta: "b" }]);
+      expect(run(["<think>b</think>", "\r"])).toEqual([
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "\r" },
+      ]);
+    });
+    it("swallows only directly after a close tag, never elsewhere", () => {
+      expect(run(["a\n<think>b</think>c\n"])).toEqual([
+        { kind: "text", delta: "a\n" },
+        { kind: "thinking", delta: "b" },
+        { kind: "text", delta: "c\n" },
+      ]);
+      // A bare close tag is text, so its newline is text too.
+      expect(run(["a</think>\nb"])).toEqual([{ kind: "text", delta: "a</think>\nb" }]);
+      expect(run(["\n"])).toEqual([{ kind: "text", delta: "\n" }]);
+    });
+    it("release of the swallowed newline does not leak into a following tag pair", () => {
+      expect(run(["<think>a</think>\n<think>b</think>\nc"])).toEqual([
+        { kind: "thinking", delta: "ab" },
+        { kind: "text", delta: "c" },
+      ]);
+    });
+  });
+
   it("honours custom tags", () => {
     const s = makeThinkSplitter({ open: "<reasoning>", close: "</reasoning>" });
     const got = join([...s.push("<reasoning>r</reasoning>t<think>x</think>"), ...s.end()]);
@@ -88,8 +171,14 @@ describe("splitThinkingText (non-streaming, Task 12)", () => {
   it("splits a finished turn's text into thinking and text", () => {
     expect(splitThinkingText("<think>\nplan\n</think>\nanswer")).toEqual({
       thinking: "plan",
-      text: "\nanswer",
+      text: "answer",
     });
+  });
+  it("inherits the one-newline swallow after the close tag (#509)", () => {
+    expect(splitThinkingText("<think>p</think>\r\nanswer").text).toBe("answer");
+    expect(splitThinkingText("<think>p</think>\n\nanswer").text).toBe("\nanswer");
+    expect(splitThinkingText("<think>p</think>answer").text).toBe("answer");
+    expect(splitThinkingText("<think>p</think>").text).toBe("");
   });
   it("returns null thinking when there is no tag", () => {
     expect(splitThinkingText("plain a</think>b")).toEqual({

@@ -109,11 +109,41 @@ describe("liveTurn (spec 2026-09-06 §1.2, §2.3)", () => {
         text: "plan more",
         done: true,
         startedAt: "2026-09-06T12:00:00.000Z",
+        doneAt: "2026-09-06T12:00:00.000Z",
       },
       { kind: "text", contentIndex: 0, text: "answer" },
     ]);
     // Tags never reach the wire.
     for (const d of deltas(all)) expect(d.delta).not.toMatch(/<\/?think>/);
+  });
+
+  it("tag turn: the newline after `</think>` never reaches the wire, even across chunks (#509)", () => {
+    const lt = makeLiveTurn(opts({ thinkTags: "on" }));
+    const all: ChatBusRecord[] = [];
+    // The chunk ends exactly at the close tag: nothing is emitted for the
+    // position after it until the next chunk says whether a newline follows.
+    all.push(...lt.observe(text("<think>plan</think>", 0)));
+    expect(lt.partial().blocks).toEqual([
+      expect.objectContaining({ kind: "thinking", contentIndex: 0, text: "plan" }),
+    ]);
+    all.push(...lt.observe(text("\n# Done", 0)));
+    all.push(...lt.finish());
+    expect(joined(all)).toEqual([
+      { kind: "thinking", contentIndex: 0, delta: "plan" },
+      { kind: "text", contentIndex: 0, delta: "# Done" },
+    ]);
+    expect(lt.partial().blocks[1]).toEqual({ kind: "text", contentIndex: 0, text: "# Done" });
+
+    const crlf = makeLiveTurn(opts({ thinkTags: "on" }));
+    const recs = [
+      ...crlf.observe(text("<think>plan</think>\r", 0)),
+      ...crlf.observe(text("\nans", 0)),
+      ...crlf.finish(),
+    ];
+    expect(joined(recs)).toEqual([
+      { kind: "thinking", contentIndex: 0, delta: "plan" },
+      { kind: "text", contentIndex: 0, delta: "ans" },
+    ]);
   });
 
   it("finish() flushes the splitter's held tail", () => {
@@ -208,6 +238,54 @@ describe("liveTurn (spec 2026-09-06 §1.2, §2.3)", () => {
     ]);
   });
 
+  it("doneAt is stamped from `now` when a thinking block is marked done, on all three paths (#511)", () => {
+    const t0 = Date.UTC(2026, 8, 6, 12, 0, 0);
+    let t = t0;
+    // thinking_end
+    const a = makeLiveTurn(opts({ thinkTags: "auto", now: () => t }));
+    a.observe(think("r", 0));
+    expect(a.partial().blocks[0]).not.toHaveProperty("doneAt");
+    t = t0 + 1500;
+    a.observe(thinkEnd(0));
+    expect(a.partial().blocks[0]).toEqual({
+      kind: "thinking",
+      contentIndex: 0,
+      text: "r",
+      done: true,
+      startedAt: "2026-09-06T12:00:00.000Z",
+      doneAt: "2026-09-06T12:00:01.500Z",
+    });
+    // A later close does not move it.
+    t = t0 + 9000;
+    a.observe(text("x", 1));
+    a.finish();
+    expect(a.partial().blocks[0]).toMatchObject({ doneAt: "2026-09-06T12:00:01.500Z" });
+
+    // first text delta
+    t = t0;
+    const b = makeLiveTurn(opts({ thinkTags: "auto", now: () => t }));
+    b.observe(think("r", 0));
+    t = t0 + 2000;
+    b.observe(text("t", 1));
+    expect(b.partial().blocks[0]).toMatchObject({
+      done: true,
+      startedAt: "2026-09-06T12:00:00.000Z",
+      doneAt: "2026-09-06T12:00:02.000Z",
+    });
+
+    // finish()
+    t = t0;
+    const c = makeLiveTurn(opts({ thinkTags: "on", now: () => t }));
+    c.observe(text("<think>cut off", 0));
+    t = t0 + 3000;
+    c.finish();
+    expect(c.partial().blocks[0]).toMatchObject({
+      kind: "thinking",
+      done: true,
+      doneAt: "2026-09-06T12:00:03.000Z",
+    });
+  });
+
   it("tool lifecycle: start / cumulative partialResult → delta output / end with result", () => {
     const lt = makeLiveTurn(opts());
     const s = lt.observe(ev(toolStartId("c1", "bash", { command: "ls" })));
@@ -283,6 +361,52 @@ describe("liveTurn (spec 2026-09-06 §1.2, §2.3)", () => {
       isError: true,
     });
     expect(lt.partial().blocks[0]).toMatchObject({ isError: true, done: true });
+  });
+
+  it("a snapshot that does not extend the last one is re-sent whole with `replace: true` (#507)", () => {
+    const lt = makeLiveTurn(opts());
+    lt.observe(ev(toolStartId("c1", "bash", { command: "yes" })));
+    expect(lt.observe(toolUpdate("c1", "bash", "aaa\nbbb\n"))).toEqual([
+      {
+        type: "junco_chat_tool",
+        turn: "t1",
+        seq: 2,
+        id: "c1",
+        phase: "output",
+        output: "aaa\nbbb\n",
+      },
+    ]);
+    // The tool's own head-truncation kicked in: the new snapshot lost its head.
+    expect(lt.observe(toolUpdate("c1", "bash", "bbb\nccc\n"))).toEqual([
+      {
+        type: "junco_chat_tool",
+        turn: "t1",
+        seq: 3,
+        id: "c1",
+        phase: "output",
+        output: "bbb\nccc\n",
+        replace: true,
+      },
+    ]);
+    // The accumulator's rolling output is replaced too, not appended to.
+    expect(lt.partial().blocks[0]).toMatchObject({ output: "bbb\nccc\n", truncated: false });
+    // Extending again from the replaced snapshot is a plain suffix delta.
+    expect(lt.observe(toolUpdate("c1", "bash", "bbb\nccc\nddd\n"))).toEqual([
+      { type: "junco_chat_tool", turn: "t1", seq: 4, id: "c1", phase: "output", output: "ddd\n" },
+    ]);
+    expect(lt.partial().blocks[0]).toMatchObject({ output: "bbb\nccc\nddd\n" });
+    // Identical snapshot still emits nothing.
+    expect(lt.observe(toolUpdate("c1", "bash", "bbb\nccc\nddd\n"))).toEqual([]);
+  });
+
+  it("a replacing snapshot over the output cap keeps its tail and flags truncated", () => {
+    const lt = makeLiveTurn(opts({ outputCap: 5 }));
+    lt.observe(ev(toolStartId("c1", "bash", {})));
+    lt.observe(toolUpdate("c1", "bash", "01234"));
+    expect(lt.partial().blocks[0]).toMatchObject({ output: "01234", truncated: false });
+    const r = lt.observe(toolUpdate("c1", "bash", "abcdefgh"));
+    expect(tools(r)[0]).toMatchObject({ phase: "output", output: "abcdefgh", replace: true });
+    expect(lt.partial().blocks[0]).toMatchObject({ output: "defgh", truncated: true });
   });
 
   it("bash_execution_update: `delta` appends to the running tool by id, else the open tool", () => {

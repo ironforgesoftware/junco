@@ -23,13 +23,24 @@
  *   `AgentToolResult` (`types.d.ts:317-334`) and the bash tool sends the
  *   CUMULATIVE output snapshot in it, not a delta (pi-coding-agent
  *   `dist/core/tools/bash.js:252-263`), so the accumulator diffs against the
- *   last snapshot to keep the wire record delta-only.
+ *   last snapshot to keep the wire record delta-only. A snapshot that does
+ *   not extend the last one (the tool's own head-truncation kicked in) goes
+ *   out whole with `replace: true` and replaces the rolling output here too
+ *   (#507); an identical snapshot emits nothing.
  * - `bash_execution_update { id?: string; delta: string }` (pi-coding-agent
- *   `dist/core/agent-session.d.ts:102-105`) — emitted by `executeBash`
- *   (operator `!` commands, `agent-session.js:2368`); `id` is the caller's
- *   optional tag, not a `toolCallId`. It is routed to the tool block with that
- *   id when one exists, else to the most recent still-running tool block, and
- *   dropped when no tool is running.
+ *   `dist/core/agent-session.d.ts:102-105`) — emitted only by
+ *   `AgentSession.executeBash` (operator `!` commands, `agent-session.js:2368`),
+ *   which the chat session never calls (`chatSession.ts` drives `prompt()`
+ *   only), so in chat this event should never fire. The routing is
+ *   DEFENSIVE: `id` is the caller's optional tag, not a `toolCallId`; the
+ *   delta goes to the tool block with that id when one exists, else to the
+ *   most recent still-running tool block, and is dropped when no tool is
+ *   running — a stray delta lands somewhere visible rather than vanishing.
+ *
+ * A thinking block is marked `done` on `thinking_end`, on the first text
+ * delta (§1.2 row 3), and by `finish()`; whichever comes first stamps
+ * `doneAt` from `now` so a late subscriber's `partial()` carries the fold
+ * duration (#511).
  */
 import {
   CHAT_TOOL_OUTPUT_CAP,
@@ -44,7 +55,7 @@ import { makeThinkSplitter, type SplitPiece, type ThinkSplitter } from "./thinkS
 
 export interface LiveTurnOpts {
   turn: string;
-  /** ms epoch; stamps `startedAt` on thinking blocks. */
+  /** ms epoch; stamps `startedAt` / `doneAt` on thinking blocks. */
   now: () => number;
   thinkTags: "auto" | "on" | "off";
   /** Chars of a tool's final `result` put on the wire (default CHAT_TOOL_RESULT_CAP). */
@@ -77,6 +88,7 @@ interface ThinkingState {
   chunks: string[];
   done: boolean;
   startedAt: string;
+  doneAt?: string;
 }
 interface ToolState {
   kind: "tool";
@@ -175,24 +187,25 @@ export function makeLiveTurn(opts: LiveTurnOpts): LiveTurn {
     }
     return b;
   };
+  const iso = (): string => new Date(now()).toISOString();
   const thinkingBlock = (contentIndex: number): ThinkingState => {
     const key = `thinking:${contentIndex}`;
     let b = blocks.get(key) as ThinkingState | undefined;
     if (!b) {
-      b = {
-        kind: "thinking",
-        contentIndex,
-        chunks: [],
-        done: false,
-        startedAt: new Date(now()).toISOString(),
-      };
+      b = { kind: "thinking", contentIndex, chunks: [], done: false, startedAt: iso() };
       blocks.set(key, b);
     }
     return b;
   };
+  /** Marks a thinking block done once; the first close owns `doneAt`. */
+  const markDone = (b: ThinkingState): void => {
+    if (b.done) return;
+    b.done = true;
+    b.doneAt = iso();
+  };
   /** A text delta closes every open thinking block (spec §1.2 row 3). */
   const closeThinking = (): void => {
-    for (const b of blocks.values()) if (b.kind === "thinking") b.done = true;
+    for (const b of blocks.values()) if (b.kind === "thinking") markDone(b);
   };
 
   const pieceRecords = (pieces: SplitPiece[], contentIndex: number): ChatBusRecord[] => {
@@ -260,7 +273,7 @@ export function makeLiveTurn(opts: LiveTurnOpts): LiveTurn {
       }
       case "thinking_end": {
         const b = blocks.get(`thinking:${contentIndex}`);
-        if (b && b.kind === "thinking") b.done = true;
+        if (b && b.kind === "thinking") markDone(b);
         return [];
       }
       default:
@@ -292,11 +305,8 @@ export function makeLiveTurn(opts: LiveTurnOpts): LiveTurn {
     return b;
   };
 
-  /** Append a delta to the rolling output, dropping from the head past `outputCap`. */
-  const appendOutput = (b: ToolState, delta: string): ChatBusRecord[] => {
-    if (delta === "") return [];
-    b.chunks.push(delta);
-    b.outputLen += delta.length;
+  /** Drop from the head of the rolling output until it fits `outputCap`. */
+  const trimOutput = (b: ToolState): void => {
     while (b.outputLen > outputCap) {
       const over = b.outputLen - outputCap;
       const head = b.chunks[0]!;
@@ -309,7 +319,26 @@ export function makeLiveTurn(opts: LiveTurnOpts): LiveTurn {
         b.outputLen -= over;
       }
     }
+  };
+
+  /** Append a delta to the rolling output, dropping from the head past `outputCap`. */
+  const appendOutput = (b: ToolState, delta: string): ChatBusRecord[] => {
+    if (delta === "") return [];
+    b.chunks.push(delta);
+    b.outputLen += delta.length;
+    trimOutput(b);
     return [toolRec({ id: b.id, phase: "output", output: delta })];
+  };
+
+  /** Replace the rolling output with a whole snapshot (#507); the wire record
+   * says `replace: true` so the client overwrites instead of appending. The
+   * snapshot is the new head, so `truncated` restarts from it. */
+  const replaceOutput = (b: ToolState, snapshot: string): ChatBusRecord[] => {
+    b.chunks = [snapshot];
+    b.outputLen = snapshot.length;
+    b.truncated = false;
+    trimOutput(b);
+    return [toolRec({ id: b.id, phase: "output", output: snapshot, replace: true })];
   };
 
   const lastOpenTool = (): ToolState | null => {
@@ -333,13 +362,14 @@ export function makeLiveTurn(opts: LiveTurnOpts): LiveTurn {
     if (id === null || !isRecord(e.partialResult)) return [];
     const b = toolBlock(id, str(e.toolName), e.args);
     const snapshot = contentText(e.partialResult.content);
-    // Cumulative snapshot → suffix delta. A snapshot that does not extend the
-    // last one (the tool's own head-truncation kicked in) is sent whole.
-    const delta = snapshot.startsWith(b.lastSnapshot)
-      ? snapshot.slice(b.lastSnapshot.length)
-      : snapshot;
+    // Cumulative snapshot → suffix delta (an identical one is an empty delta,
+    // nothing emitted). One that does not extend the last (the tool's own
+    // head-truncation kicked in) replaces, so the client never doubles the
+    // prefix (#507).
+    const extends_ = snapshot.startsWith(b.lastSnapshot);
+    const last = b.lastSnapshot;
     b.lastSnapshot = snapshot;
-    return appendOutput(b, delta);
+    return extends_ ? appendOutput(b, snapshot.slice(last.length)) : replaceOutput(b, snapshot);
   };
 
   const onBashUpdate = (e: Record<string, unknown>): ChatBusRecord[] => {
@@ -415,6 +445,7 @@ export function makeLiveTurn(opts: LiveTurnOpts): LiveTurn {
             text: b.chunks.join(""),
             done: b.done,
             startedAt: b.startedAt,
+            ...(b.doneAt === undefined ? {} : { doneAt: b.doneAt }),
           });
           break;
         case "tool":

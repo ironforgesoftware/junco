@@ -15,13 +15,27 @@
  *
  * Pure: types, constants, and the client reducer (`applyLiveRecord`, spec
  * §3.2) — no I/O. The only clock is the injectable `now` (a thinking block's
- * `startedAt` when the client creates it from a delta).
+ * `startedAt` when the client creates it from a delta, its `doneAt` when the
+ * client closes it).
  */
 
-/** One block of the in-flight turn, in content order. */
+/**
+ * One block of the in-flight turn, in content order. A thinking block's
+ * `doneAt` (ISO) is stamped by whoever marks it `done` — the daemon on
+ * thinking_end / first text delta / turn finish, or the reducer itself when
+ * it closes a block on a text delta — so a fold duration survives a
+ * reconnect that replays an already-done block (#511).
+ */
 export type LiveBlock =
   | { kind: "text"; contentIndex: number; text: string }
-  | { kind: "thinking"; contentIndex: number; text: string; done: boolean; startedAt: string }
+  | {
+      kind: "thinking";
+      contentIndex: number;
+      text: string;
+      done: boolean;
+      startedAt: string;
+      doneAt?: string;
+    }
   | {
       kind: "tool";
       id: string;
@@ -50,8 +64,11 @@ export interface ChatDeltaRecord {
 
 /**
  * Tool lifecycle, compact. `args` is the SDK's parsed args object; `output`
- * is the streamed partial output; `result` is the final text, truncated by
- * the daemon to `CHAT_TOOL_RESULT_CAP` bytes with `truncated: true`.
+ * is the streamed partial output — a delta to append, or with `replace: true`
+ * the whole output so far, which the client overwrites its block with (the
+ * daemon sends that when a cumulative snapshot does not extend the previous
+ * one, #507); `result` is the final text, truncated by the daemon to
+ * `CHAT_TOOL_RESULT_CAP` UTF-16 code units with `truncated: true`.
  */
 export interface ChatToolRecord {
   type: "junco_chat_tool";
@@ -62,6 +79,8 @@ export interface ChatToolRecord {
   name?: string;
   args?: unknown;
   output?: string;
+  /** Only meaningful on `phase: "output"`: `output` replaces, not appends. */
+  replace?: true;
   result?: string;
   isError?: boolean;
   truncated?: boolean;
@@ -82,9 +101,9 @@ export interface ChatPartialRecord {
 /** The bus-only records: typed, but not writable through `writeRecord`. */
 export type ChatBusRecord = ChatDeltaRecord | ChatToolRecord | ChatPartialRecord;
 
-/** Bytes of a tool's final `result` the daemon puts on the wire (spec §2.3). */
+/** UTF-16 code units of a tool's final `result` the daemon puts on the wire (spec §2.3). */
 export const CHAT_TOOL_RESULT_CAP = 8_192;
-/** Bytes of streamed tool `output` the daemon keeps per tool block (spec §2.3). */
+/** UTF-16 code units of streamed tool `output` the daemon keeps per tool block (spec §2.3). */
 export const CHAT_TOOL_OUTPUT_CAP = 32_768;
 
 /**
@@ -128,15 +147,17 @@ export function startLiveTurn(turn: string): LiveTurnState {
  * - `junco_chat_delta` drops on turn mismatch or `seq <= state.seq`; else
  *   appends to the `(kind, contentIndex)` block, creating it in `contentIndex`
  *   order (thinking before text at an equal index, always after any tool block
- *   already present). A text delta marks every open thinking block `done`.
+ *   already present). A text delta marks every open thinking block `done`,
+ *   stamping `doneAt` from `now` on any that has none.
  * - `junco_chat_tool` per phase: `start` appends a block; `output` appends
- *   with a rolling `CHAT_TOOL_OUTPUT_CAP` (head dropped, `truncated`); `end`
- *   sets `result` (capped at `CHAT_TOOL_RESULT_CAP`), `isError`, `done`.
+ *   (or with `replace: true` overwrites) under a rolling `CHAT_TOOL_OUTPUT_CAP`
+ *   (head dropped, `truncated`); `end` sets `result` (capped at
+ *   `CHAT_TOOL_RESULT_CAP`), `isError`, `done`.
  * - Malformed (or a phase for an unknown tool id) → `dropped + 1` on a new
  *   object, everything else unchanged. Turn start/end are the caller's.
  *
- * Caps are in UTF-16 code units, the same unit the daemon's wire copy is
- * measured in for the client's purposes — a safety net, not the byte cap.
+ * Caps are in UTF-16 code units, the same unit the daemon measures its wire
+ * copy in (spec §2.3) — here a safety net, since the daemon already capped.
  */
 export function applyLiveRecord(
   state: LiveTurnState | null,
@@ -171,7 +192,13 @@ function isLiveBlock(v: unknown): v is LiveBlock {
     case "text":
       return isNum(v.contentIndex) && isStr(v.text);
     case "thinking":
-      return isNum(v.contentIndex) && isStr(v.text) && isBool(v.done) && isStr(v.startedAt);
+      return (
+        isNum(v.contentIndex) &&
+        isStr(v.text) &&
+        isBool(v.done) &&
+        isStr(v.startedAt) &&
+        (v.doneAt === undefined || isStr(v.doneAt))
+      );
     case "tool":
       return (
         isStr(v.id) &&
@@ -227,8 +254,11 @@ function applyDelta(
 
   let blocks: LiveBlock[] = state.blocks;
   if (kind === "text") {
-    // Belt and braces against a missing thinking_end (spec §3.2).
-    blocks = blocks.map((b) => (b.kind === "thinking" && !b.done ? { ...b, done: true } : b));
+    // Belt and braces against a missing thinking_end (spec §3.2). Stamped
+    // here so a block the daemon never closed still has a fold duration.
+    blocks = blocks.map((b) =>
+      b.kind === "thinking" && !b.done ? { ...b, done: true, doneAt: b.doneAt ?? now() } : b,
+    );
   }
   const at = blocks.findIndex((b) => b.kind === kind && b.contentIndex === contentIndex);
   if (at >= 0) {
@@ -288,12 +318,15 @@ function applyTool(state: LiveTurnState, rec: Record<string, unknown>): LiveTurn
   let next: LiveBlock;
   if (phase === "output") {
     if (!isStr(rec.output)) return dropped(state);
-    const joined = cur.output + rec.output;
+    // `replace` carries the whole output so far (#507): the block's own
+    // rolling copy is discarded, and so is its `truncated` — the daemon's
+    // snapshot is the new head.
+    const joined = rec.replace === true ? rec.output : cur.output + rec.output;
     const over = joined.length - CHAT_TOOL_OUTPUT_CAP;
     next =
       over > 0
         ? { ...cur, output: joined.slice(over), truncated: true }
-        : { ...cur, output: joined };
+        : { ...cur, output: joined, truncated: rec.replace === true ? false : cur.truncated };
   } else {
     if (rec.result !== undefined && !isStr(rec.result)) return dropped(state);
     const raw = rec.result ?? null;
