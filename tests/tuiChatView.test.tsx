@@ -723,6 +723,21 @@ describe("ChatView", () => {
       expect(f).not.toContain("· thinking ·");
     });
 
+    it("done with a `doneAt`: the fold duration is doneAt - startedAt, not the wall clock (#511)", async () => {
+      // A block that finished 45 s after it started but is only seen now
+      // (3 s after start by the clock) — a replayed partial after a reconnect.
+      const t = think(true);
+      const block = {
+        ...t,
+        doneAt: new Date(new Date(t.startedAt).getTime() + 45_000).toISOString(),
+      };
+      const r = view(
+        base({ summary: summary(), streaming: true, live: liveWith([block, answer]) }),
+      );
+      await until(() => r.lastFrame()!.includes("junco: so far"));
+      expect(r.lastFrame()!).toMatch(/▸ thinking · 45s/);
+    });
+
     it("done and pinned: `▾ thinking · <dur>s` with the body kept", async () => {
       const r = view(
         base({

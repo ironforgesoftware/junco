@@ -23,10 +23,11 @@
  * transcriptRender.ts prints for the finished turn, so the row does not
  * change shape at turn end.
  *
- * `dur` is the elapsed at the moment the block was first seen done: the bus
- * record carries no `doneAt`, so it is measured here on that first frame and
- * kept in a ref keyed by `<turn>:<contentIndex>` — the map is dropped with
- * the turn so a later turn's block 0 never inherits it.
+ * `dur` is `doneAt - startedAt` when the block carries a `doneAt` (the daemon
+ * or the reducer stamps one whenever it marks a block done, #511), else the
+ * elapsed at the moment the block was first seen done, measured on that
+ * first frame; either way it is kept in a ref keyed by `<turn>:<contentIndex>`
+ * — the map is dropped with the turn so a later turn's block 0 never inherits it.
  */
 import { useMemo, useRef } from "react";
 import type { LiveTurnState } from "../../chat/liveBlocks.js";
@@ -81,8 +82,13 @@ export function useLiveRows(
   }
   if (live !== null)
     for (const b of live.blocks)
-      if (b.kind === "thinking" && b.done && !folded.current.ms.has(b.contentIndex))
-        folded.current.ms.set(b.contentIndex, elapsedMs(b.startedAt, now));
+      if (b.kind === "thinking" && b.done && !folded.current.ms.has(b.contentIndex)) {
+        const doneAt = b.doneAt === undefined ? NaN : new Date(b.doneAt).getTime();
+        folded.current.ms.set(
+          b.contentIndex,
+          elapsedMs(b.startedAt, Number.isNaN(doneAt) ? now : doneAt),
+        );
+      }
   return useMemo(() => {
     // `frame` bumps once per applied flush (useChat.ts) and is the memo key
     // the spec names; `live` is what the body reads.

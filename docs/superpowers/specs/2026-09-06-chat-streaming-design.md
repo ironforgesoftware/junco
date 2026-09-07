@@ -112,12 +112,16 @@ unchanged.
   contentIndex: number, delta: string }
 
 // Tool lifecycle, compact. `args` is the SDK's parsed args object; `output` is the
-// streamed bash output (bash_execution_update) or a tool_execution_update partial;
-// `result` is the final text, truncated by the daemon to CHAT_TOOL_RESULT_CAP bytes
-// with `truncated: true` so a 40 KB `cat` never crosses the wire.
+// streamed bash output (bash_execution_update) or a tool_execution_update partial —
+// a delta to append, or with `replace: true` (output phase only) the whole output so
+// far, which the client overwrites its block with: sent when a cumulative snapshot
+// does not extend the previous one (#507). `result` is the final text, truncated by
+// the daemon to CHAT_TOOL_RESULT_CAP UTF-16 code units (§2.3) with `truncated: true`
+// so a 40 KB `cat` never crosses the wire.
 { type: "junco_chat_tool", turn: string, seq: number, id: string,
   phase: "start" | "output" | "end", name?: string, args?: unknown,
-  output?: string, result?: string, isError?: boolean, truncated?: boolean }
+  output?: string, replace?: true, result?: string, isError?: boolean,
+  truncated?: boolean }
 
 // The in-flight turn as of subscribe time (D7). Sent first, before any live frame,
 // only while a turn is streaming. `blocks` is the same shape the client keeps, so
@@ -125,12 +129,22 @@ unchanged.
 { type: "junco_chat_partial", turn: string, seq: number, blocks: LiveBlock[] }
 ```
 
-`LiveBlock` (shared type in `src/chat/liveBlocks.ts`, pure, no I/O):
+`LiveBlock` (shared type in `src/chat/liveBlocks.ts`, pure, no I/O). A thinking block's
+`doneAt` (ISO) is stamped by whoever marks it `done` — the daemon on `thinking_end`, the
+first text delta, or turn finish; the client reducer when it closes a block itself — so
+the fold duration (§4.3) survives a reconnect that replays an already-done block (#511):
 
 ```ts
 type LiveBlock =
   | { kind: "text"; contentIndex: number; text: string }
-  | { kind: "thinking"; contentIndex: number; text: string; done: boolean; startedAt: string }
+  | {
+      kind: "thinking";
+      contentIndex: number;
+      text: string;
+      done: boolean;
+      startedAt: string;
+      doneAt?: string;
+    }
   | {
       kind: "tool";
       id: string;
