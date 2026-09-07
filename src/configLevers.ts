@@ -877,9 +877,9 @@ export const LEVERS: Lever[] = [
     enumValues: ["auto", "on", "off"],
     default: "auto",
     editable: true,
-    reload: "live",
+    reload: "restart",
     description:
-      "Split inline <think>…</think> spans from the answer into the thinking block; auto skips a turn that already streams native thinking.",
+      "Split inline <think>…</think> spans from the answer into the thinking block; auto skips a turn that already streams native thinking. A running chat session keeps the value it started with (restart, or /new in the chat, to apply).",
   },
   {
     path: "chat.maxFps",
