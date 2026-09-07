@@ -19,7 +19,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 
 export type Turn =
-  | { kind: "text"; text: string }
+  /**
+   * `delayMs` (opt-in, default 0): pause this long between the streamed SSE
+   * chunks of the answer — one chunk per word — so a scenario can observe the
+   * daemon MID-TURN (e.g. attach a second `/chat/events` subscriber and read
+   * its `junco_chat_partial`). Ignored for a `stream: false` request.
+   */
+  | { kind: "text"; text: string; delayMs?: number }
   | { kind: "tool"; calls: Array<{ name: string; args: Record<string, unknown> }> }
   /**
    * Answer `status` with an error body. `times` = how many consecutive
@@ -216,7 +222,11 @@ export async function startStubModel(script: Turn[]): Promise<StubModel> {
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
-    for (const f of encodeTurn(turn, opts)) res.write(f);
+    const delayMs = turn.kind === "text" ? (turn.delayMs ?? 0) : 0;
+    for (const f of encodeTurn(turn, opts)) {
+      res.write(f);
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    }
     res.end();
   }
 

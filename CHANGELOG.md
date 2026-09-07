@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The dashboard chat streams the model's reasoning as a live **thinking block** (spec `docs/superpowers/specs/2026-09-06-chat-streaming-design.md`): a `· thinking · 3s` header ticking while it streams, the reasoning dim beneath, folding to a single `▸ thinking · 3s` row when the answer starts. `t` pins thinking open — the live block and every finished turn's `▸ thinking` header — and folds it back; the header is the same string live and finished, so the row never changes shape at turn end.
+- Live **tool cards** in the chat: `▸ bash npm test  ⠋` with a spinner and the last 6 lines of streamed output while a call runs, `▸ bash npm test  ✓` over a `→ N lines` summary once it finishes, `✗` with the body open by default on an error. `x` (also `⏎`/space) toggles the card under the cursor, and `tab` walks running cards too — a card keeps one cursor index across the turn end. The same `renderToolCard` draws the ticket transcript and `junco transcript`, so the three surfaces cannot drift.
+- Chat answers are typeset as **markdown** — headings, lists, quotes, rules, tables, and code fences highlighted by the agent's own highlighter (raw fences when it cannot be loaded) — while they stream: a junco-owned block parser with a prefix-stable open tail, so a frame re-renders only the block still growing and the finished turns above never re-run.
+- `chat.thinkTags` (`auto` | `on` | `off`, default `auto`, live): literal `<think>…</think>` spans an OpenAI-compatible endpoint streams inside the answer are split into the thinking block on the fly by a total, never-dropping splitter; `auto` steps aside for a turn that already streams native reasoning.
+- `chat.maxFps` (10–120, default 60): the dashboard's paint-rate ceiling while a chat turn streams — lower it on a slow terminal, a small board, or over SSH.
+- `junco doctor` gains an advisory `ℹ` verdict (exit code unaffected) and its first use, `chat thinking`: when the chat's model resolves inline to an OpenAI-compatible endpoint, the hint names the server-side flag that moves reasoning out of the text — llama.cpp `--reasoning-format deepseek`, LM Studio's "Reasoning → separate field" — recognized from the endpoint's port, with no extra network probe.
+- A dashboard that opens or reconnects mid-turn gets the turn so far: `GET /chat/events` sends one `junco_chat_partial` snapshot (thinking, tool cards, text) after the transcript replay and before any live frame, so a reconnect never shows a half-turn missing its beginning.
+
+### Changed
+
+- **Chat wire format:** the `/chat/events` stream no longer carries the SDK's raw `message_update` events. Each turn is accumulated in the daemon and put on the bus as three slim, bus-only records — `junco_chat_delta` (one text/thinking chunk, tagged with the content index and a per-turn `seq`), `junco_chat_tool` (`start`/`output`/`end`, output delta-only, the final result capped at 8 KiB), and `junco_chat_partial` — none of which is written to the transcript or carries an SSE `id`, so `Last-Event-ID` always names a persisted line. The record bus stops re-serializing the whole assistant message per chunk. A pre-upgrade dashboard against an upgraded daemon degrades to the answer appearing at turn end; upgrade both together for streaming. `junco_chat_turn_start` gains a `turn` id (additive) the live records reference.
+- The `/chat/events` response socket is `setNoDelay`, so a delta reaches the dashboard the moment it is written instead of waiting on the previous frame's ACK.
+- The dashboard renders at up to 60 fps (Ink `maxFps`, was Ink's default 30): the chat's per-frame flush leans on Ink's own throttle instead of a trailing 50 ms timer, so a delta is on screen within one frame; `chat.maxFps` drops it back where needed.
+- The dashboard chat view keeps the finished turns and the streaming turn in two memoized halves: a streaming flush costs O(the live turn) and never re-renders the history, however long the conversation (`tests/tuiChatPerf.test.tsx` pins it — 200 turns, 300 deltas/s).
+- `junco transcript` and the dashboard's ticket transcript print each tool call as a header row (`▸ read game.js  ✓`, `✗` on an error, `…` while it has no result) over a `→ 214 lines` summary row instead of one combined line; an errored call's body is open by default.
+
 ### Fixed
 
 - The dashboard's repo-detail overlay no longer answers a raw `o` with the browser: the derived keymap's `b` already ran ahead of it, so `o` was an undocumented alias that contradicted the key table; `docs/dashboard.md`'s three remaining `o`-opens-the-browser paragraphs now say `b` (#492, #501).

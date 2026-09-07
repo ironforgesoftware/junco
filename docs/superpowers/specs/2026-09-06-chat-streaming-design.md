@@ -492,14 +492,21 @@ Before the first rendering task lands, and again at the end, on the Pi 5 and on 
 maintainer's Mac, with the synthetic stream from `tests/tuiChatPerf.test.tsx` driven through
 a real `junco dashboard` (`JUNCO_RENDER_COUNT=1`):
 
-| Metric                                          | Today (measure) | Target            |
-| ----------------------------------------------- | --------------- | ----------------- |
-| Character-visible latency (delta → paint), p95  |                 | ≤ 20 ms at 60 fps |
-| Event-loop lag at 300 events/s, p95             |                 | ≤ 10 ms           |
-| `ChatView` renders per second at 300 events/s   |                 | ≤ maxFps          |
-| `FinishedTurns` renders during a streaming turn |                 | 0                 |
-| Daemon CPU per 1k deltas (bus + SSE write)      |                 | ≤ 25% of today's  |
-| Bytes on the wire per 1k characters             |                 | ≤ 5% of today's   |
+| Metric                                          | Today (measure) | Target            | Measured (Pi 5, synthetic) |
+| ----------------------------------------------- | --------------- | ----------------- | -------------------------- |
+| Character-visible latency (delta → paint), p95  |                 | ≤ 20 ms at 60 fps | — (manual)                 |
+| Event-loop lag at 300 events/s, p95             |                 | ≤ 10 ms           | 16.4 ms (max 19.3)         |
+| `ChatView` renders per second at 300 events/s   |                 | ≤ maxFps          | 45 (maxFps 60)             |
+| `FinishedTurns` renders during a streaming turn |                 | 0                 | 0                          |
+| Daemon CPU per 1k deltas (bus + SSE write)      |                 | ≤ 25% of today's  | — (manual)                 |
+| Bytes on the wire per 1k characters             |                 | ≤ 5% of today's   | — (manual)                 |
+
+The "measured" column is `tests/tuiChatPerf.test.tsx` on the Pi 5 (Raspberry Pi 5 Model B, 4
+cores, `--reporter=verbose` prints the line): a 200-turn history, 600 `junco_chat_delta` records
+wall-clock paced at 300/s for 2 s through `useChat` → `ChatView` under ink-testing-library, no
+terminal writes. The manual real-dashboard measurement (a real `junco dashboard` on the Pi 5 and
+the Mac with `JUNCO_RENDER_COUNT=1`, before and after, plus the daemon-side CPU and bytes-on-wire
+columns) is still pending; the `maxFps` 30 fallback under D8 is decided by that run, not this one.
 
 If the Pi 5 cannot hold 60 fps under the budget, the default `chat.maxFps` ships at 30 and
 the spec is amended with the numbers; D8 authorizes that fallback.
