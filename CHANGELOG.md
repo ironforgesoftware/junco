@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-06
+
 ### Added
 
 - The dashboard chat streams the model's reasoning as a live **thinking block** (spec `docs/superpowers/specs/2026-09-06-chat-streaming-design.md`): a `· thinking · 3s` header ticking while it streams, the reasoning dim beneath, folding to a single `▸ thinking · 3s` row when the answer starts. `t` pins thinking open — the live block and every finished turn's `▸ thinking` header — and folds it back; the header is the same string live and finished, so the row never changes shape at turn end.
@@ -572,7 +574,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Harness-agnostic `junco-dispatch` Claude Code skill for scaffolding plan-lint-clean tickets from natural-language prompts.
 - Service rendering for launchd (macOS) and systemd (Linux) via `junco service`.
 
-[Unreleased]: https://github.com/ironforgesoftware/junco/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/ironforgesoftware/junco/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/ironforgesoftware/junco/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/ironforgesoftware/junco/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/ironforgesoftware/junco/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/ironforgesoftware/junco/compare/v0.10.0...v0.11.0
