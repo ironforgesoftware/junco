@@ -393,12 +393,47 @@ describe("useChatInput — the verbs (spec §8.6)", () => {
     expect(h.calls).toEqual(["submit:d1", "edit:d1", "route:d1", "discard:d1"]);
   });
 
-  it("every draft verb with no card under the cursor toasts instead", () => {
+  it("every draft verb with no card under the cursor and nothing parked toasts instead", () => {
     for (const id of ["submit", "edit", "route", "discard"]) {
       const h = mount({ draft: null });
       h.api.chatHandlers[id]!();
       expect(h.calls, id).toEqual(["toast:info:no draft under the cursor"]);
     }
+  });
+
+  // #525: the cursor starts on no anchor, so `esc` then `s` used to toast and
+  // the operator had to know about the `tab` in between. With exactly ONE
+  // parked draft there is nothing for the cursor to disambiguate, so every
+  // verb takes it — the same rule `/submit` already resolves by
+  // (draftStore.resolveDraftRef).
+  it("with exactly one parked draft the verbs act on it with the cursor on no card", () => {
+    const only = draftFixture("d9", "add-cache.md");
+    for (const id of ["submit", "edit", "route", "discard"]) {
+      const h = mount({ draft: null, chat: chatState({ drafts: [only] }) });
+      h.api.chatHandlers[id]!();
+      expect(h.calls, id).toEqual([`${id}:d9`]);
+    }
+  });
+
+  // Two or more and the cursor is the only thing that says which — today's
+  // toast stands, and now carries real information.
+  it("with two parked drafts the cursor still decides", () => {
+    const drafts = [draftFixture("d1", "a.md"), draftFixture("d2", "b.md")];
+    for (const id of ["submit", "edit", "route", "discard"]) {
+      const h = mount({ draft: null, chat: chatState({ drafts }) });
+      h.api.chatHandlers[id]!();
+      expect(h.calls, id).toEqual(["toast:info:no draft under the cursor"]);
+    }
+  });
+
+  // The card under the cursor always wins over the fallback.
+  it("the card under the cursor wins when several are parked", () => {
+    const h = mount({
+      draft: DRAFT,
+      chat: chatState({ drafts: [DRAFT, draftFixture("d2", "b.md")] }),
+    });
+    h.api.chatHandlers.submit!();
+    expect(h.calls).toEqual(["submit:d1"]);
   });
 
   it("a POST failure on the chat state is toasted once and then cleared (R32)", async () => {

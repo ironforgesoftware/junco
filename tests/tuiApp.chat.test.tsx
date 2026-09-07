@@ -276,10 +276,15 @@ describe("dashboard chat wiring (spec 2026-09-01 §8)", () => {
     expect(footerActions()).toContain("y submit");
     expect(r.lastFrame()).not.toContain("esc  blur/abort"); // composer blurred
     // The draft verbs are OFF the keymap while the daemon holds this draft:
-    // `s` must not submit the parked draft a second time. The proposal parked
-    // the cursor on the COMMAND card, where `s` would only ever toast "no
-    // draft under the cursor" — so step back onto the draft card first (the
-    // `▌` gutter is the cursor) and press `s` with a live target under it.
+    // `s` must not submit the parked draft a second time. Twice over, because
+    // #525 gave the verbs a target without the cursor: this chat has exactly
+    // ONE parked draft, so from the COMMAND card — where the proposal parked
+    // the cursor — `s` now resolves that draft and the EMPTY KEYMAP is the
+    // only thing standing between it and a second submit.
+    r.stdin.write("s");
+    await tick();
+    // Then again with the cursor on the draft card itself (the `▌` gutter),
+    // where the verb has a live target under it by either route.
     await fireUntil(r.stdin, "\x1b[Z", () => /▌.*draft parked/.test(r.lastFrame() ?? ""));
     r.stdin.write("s");
     await tick();
