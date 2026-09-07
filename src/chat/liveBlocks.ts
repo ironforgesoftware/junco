@@ -109,8 +109,8 @@ export const CHAT_TOOL_OUTPUT_CAP = 32_768;
 /**
  * The client's view of the in-flight turn (spec §3.2). `seq` is the highest
  * applied record seq (dedupe after a `junco_chat_partial` snapshot);
- * `expanded` holds the tool-card ids the operator opened; `dropped` counts
- * malformed records so the UI can show it.
+ * `expanded` holds the tool-card ids (and, #511, the `liveThinkingAnchor`s)
+ * the operator opened; `dropped` counts malformed records so the UI can show it.
  */
 export interface LiveTurnState {
   turn: string;
@@ -120,12 +120,23 @@ export interface LiveTurnState {
   dropped: number;
 }
 
-/** The live turn's tool-call ids in block order — the cursor anchors the
- * in-flight turn adds after the finished ones (spec 2026-09-06 §4.4). */
+/** Anchor of the live turn's thinking block at `contentIndex` (#511): the row
+ * LiveTurn.tsx's `useLiveRows` emits for its header, and the id `t` on it
+ * toggles in `live.expanded`. Distinct from the finished `think:<run>:<turn>`
+ * (transcriptSummary.ts's `thinkingAnchor`): the turn end swaps one for the
+ * other (useChat.ts folds an expanded live block onto the finished anchor). */
+export const liveThinkingAnchor = (contentIndex: number): string => `think:live:${contentIndex}`;
+export const isLiveThinkingAnchor = (id: string): boolean => id.startsWith("think:live:");
+
+/** The live turn's cursor anchors in block order — thinking headers (#511)
+ * and tool-call ids — added after the finished ones (spec 2026-09-06 §4.4). */
 export function liveAnchorIds(live: LiveTurnState | null): string[] {
   if (live === null) return [];
   const out: string[] = [];
-  for (const b of live.blocks) if (b.kind === "tool") out.push(b.id);
+  for (const b of live.blocks) {
+    if (b.kind === "tool") out.push(b.id);
+    else if (b.kind === "thinking") out.push(liveThinkingAnchor(b.contentIndex));
+  }
   return out;
 }
 

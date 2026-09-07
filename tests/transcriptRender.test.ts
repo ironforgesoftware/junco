@@ -172,7 +172,8 @@ describe("renderTranscriptRows", () => {
     expect(rows[at]).toEqual({ text: "  ▸ read game.js  ✓", anchor: "c1" });
     expect(rows[at + 1]).toEqual({ text: "    → 3 lines", tone: "dim" });
     // Two anchored rows: the tool call and the thinking header (spec
-    // 2026-09-06 §4.3) — the latter is not in toolCallIds' cursor space.
+    // 2026-09-06 §4.3) — the latter is in the chat's `anchorIds` cursor space
+    // (#511) but not in a ticket transcript's `toolCallIds`.
     expect(rows.filter((r) => r.anchor !== undefined).map((r) => r.anchor)).toEqual([
       "think:0:0",
       "c1",
@@ -220,6 +221,28 @@ describe("renderTranscriptRows", () => {
     expect(rows[ti].text).toBe("  ▾ thinking · 11m07s");
     expect(rows[ti + 1]).toEqual({ text: "    deep thoughts", tone: "thinking" });
     expect(rows.findIndex((r) => r.text === "  Assessment complete.")).toBeGreaterThan(ti + 1);
+  });
+
+  // #511: a block is open when pinned OR its own anchor is in `expanded` —
+  // `t` on the header expands that block alone, the way `x` opens one card.
+  it("unpinned but expanded by its anchor: that block opens, another turn's stays folded", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: "first", text: "a", calls: [] }),
+      turnEndFull({ thinking: "second", text: "b", calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    const rows = renderTranscriptRows(s, opts({ expanded: new Set(["think:0:1"]) }));
+    const t0 = rows.findIndex((r) => r.anchor === "think:0:0");
+    const t1 = rows.findIndex((r) => r.anchor === "think:0:1");
+    expect(rows[t0].text).toBe("  ▸ thinking");
+    expect(rows.some((r) => r.text.includes("first"))).toBe(false);
+    expect(rows[t1].text).toBe("  ▾ thinking");
+    expect(rows[t1 + 1]).toEqual({ text: "    second", tone: "thinking" });
   });
 
   it("the duration is omitted when the run has more than one turn or no end", () => {

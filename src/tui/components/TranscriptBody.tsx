@@ -177,10 +177,11 @@ export const TranscriptBody = React.memo(function TranscriptBody(
           const row = p.rows.at(start + i);
           const isAnchor = row.anchor !== undefined && row.anchor === anchorId;
           const idx = row.anchor === undefined ? -1 : p.anchors.indexOf(row.anchor);
-          // Only a row in the cursor's index space is pressable: a thinking
-          // header (transcriptRender.ts's thinkingAnchor) names its row but is
-          // not a cursor stop, and pressing it with idx -1 would move the
-          // cursor to the first anchor instead.
+          // Only a row in the cursor's index space is pressable: in a ticket
+          // transcript (`anchors` = toolCallIds) a thinking header names its
+          // row but is not a cursor stop, and pressing it with idx -1 would
+          // move the cursor to the first anchor instead. In the chat view the
+          // header IS a stop (#511), so a press lands the cursor on it.
           const pressable = idx >= 0;
           const tone = toneProps(row.tone);
           const text = (

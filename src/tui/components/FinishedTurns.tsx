@@ -1,9 +1,9 @@
 /**
  * Rows for the finished turns of a chat (spec 2026-09-06 §4.1): the summary
  * rendered through `renderTranscriptRows`, memoized on exactly
- * `[summary, pinned, expanded, width]`. The live turn (`state.live`) and the
- * flush counter (`state.frame`) are deliberately NOT inputs — a streaming
- * flush must never re-run the history's renderer. `useLiveRows`
+ * `[summary, pinned, expanded, width]`. The live turn (`state.live`) is
+ * deliberately NOT an input — a streaming flush must never re-run the
+ * history's renderer. `useLiveRows`
  * (LiveTurn.tsx) builds the trailing rows; `concatRows` (TranscriptBody.tsx)
  * joins the two halves without copying.
  *

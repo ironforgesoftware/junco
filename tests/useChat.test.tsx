@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { Text } from "ink";
-import { useChat, CHAT_RING, overflowBatch } from "../src/tui/hooks/useChat.js";
+import { useChat, CHAT_RING, chatAnchorIds, overflowBatch } from "../src/tui/hooks/useChat.js";
 import type { DashboardClient } from "../src/tui/ghClient.js";
 import type { ChatSubscribeHandlers } from "../src/tui/chatClient.js";
 import { anchorIds, commandAnchor, summarizeTranscript } from "../src/transcriptSummary.js";
@@ -156,8 +156,12 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
     await until(() => r.lastFrame()!.includes("live:streaming:because"));
     expect(api.chat!.live!.turn).toBe("t1");
     expect(api.chat!.live!.seq).toBe(2);
-    // A flush bumps `frame` — the memo key the live rows re-render on.
-    expect(api.chat!.frame).toBeGreaterThan(0);
+    // #511: a flush publishes a NEW `live` object — its identity is the memo
+    // key the live rows re-render on (there is no frame counter any more).
+    const firstLive = api.chat!.live;
+    c.push(null, chatDelta({ turn: "t1", seq: 3, delta: "!" }));
+    await until(() => r.lastFrame()!.includes("live:streaming:because!"));
+    expect(api.chat!.live).not.toBe(firstLive);
     expect(api.chat!.summary!.runs[0]!.prompt).toBe("why is the build slow?");
     c.push(
       40,
@@ -546,6 +550,92 @@ describe("useChat (spec 2026-09-01 §8.5)", () => {
       await until(() => api.chat!.thinking.pinned === true);
       api.toggleThinking();
       await until(() => api.chat!.thinking.pinned === false);
+    });
+
+    // #511: thinking headers are cursor stops. The live block's anchor is
+    // `think:live:<contentIndex>`, the finished one's `thinkingAnchor(run,
+    // turn)`; `t` on either toggles THAT block (live: `live.expanded`,
+    // finished: `expanded` — the tool cards' mechanism), `t` elsewhere pins.
+    describe("thinking anchors (#511)", () => {
+      it("chatAnchorIds lists the live thinking header before the turn's tool card", async () => {
+        const c = makeClient();
+        let api!: ReturnType<typeof useChat>;
+        const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+        api.openChat("acme/api");
+        await until(() => api.chat?.connection === "live");
+        c.push(10, chatTurnStart({ turn: "t1" }));
+        c.push(null, chatDelta({ turn: "t1", seq: 1, kind: "thinking", delta: "hmm" }));
+        c.push(null, chatTool({ turn: "t1", seq: 2, id: "c1", phase: "start", name: "grep" }));
+        await until(() => r.lastFrame()!.includes(":hmm|[grep]"));
+        expect(chatAnchorIds(api.chat!.summary, api.chat!.live)).toEqual(["think:live:0", "c1"]);
+      });
+
+      it("t on a live thinking header toggles live.expanded for that anchor; t while following pins", async () => {
+        const c = makeClient();
+        let api!: ReturnType<typeof useChat>;
+        const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+        api.openChat("acme/api");
+        await until(() => api.chat?.connection === "live");
+        c.push(10, chatTurnStart({ turn: "t1" }));
+        c.push(null, chatDelta({ turn: "t1", seq: 1, kind: "thinking", delta: "hmm" }));
+        c.push(null, chatDelta({ turn: "t1", seq: 2, kind: "text", delta: "so" }));
+        await until(() => r.lastFrame()!.includes(":hmm|so"));
+        // Following: the cursor is not engaged, so `t` is the global pin even
+        // though index 0 happens to be the thinking header.
+        expect(api.chat!.follow).toBe(true);
+        api.toggleThinking();
+        await until(() => api.chat!.thinking.pinned === true);
+        expect(api.chat!.live!.expanded.size).toBe(0);
+        api.toggleThinking();
+        await until(() => api.chat!.thinking.pinned === false);
+        // Walk onto the header (drops follow), then `t` is per-block.
+        api.moveCursor(-1);
+        await until(() => api.chat!.follow === false);
+        expect(chatAnchorIds(api.chat!.summary, api.chat!.live)[api.chat!.cursor]).toBe(
+          "think:live:0",
+        );
+        api.toggleThinking();
+        await until(() => api.chat!.live!.expanded.has("think:live:0"));
+        expect(api.chat!.thinking.pinned).toBe(false);
+        expect(api.chat!.expanded.size).toBe(0);
+        // A later flush carries the toggle over (same turn).
+        c.push(null, chatDelta({ turn: "t1", seq: 3, kind: "text", delta: "!" }));
+        await until(() => r.lastFrame()!.includes(":hmm|so!"));
+        expect(api.chat!.live!.expanded.has("think:live:0")).toBe(true);
+        api.toggleThinking();
+        await until(() => !api.chat!.live!.expanded.has("think:live:0"));
+        expect(api.chat!.thinking.pinned).toBe(false);
+      });
+
+      it("a live thinking block opened by t stays open past the turn end under the finished anchor", async () => {
+        const c = makeClient();
+        let api!: ReturnType<typeof useChat>;
+        const r = render(<Probe client={c.client} onReady={(a) => (api = a)} />);
+        api.openChat("acme/api");
+        await until(() => api.chat?.connection === "live");
+        c.push(10, metaLine());
+        c.push(20, chatPrompt());
+        c.push(30, chatTurnStart({ turn: "t1" }));
+        c.push(null, chatDelta({ turn: "t1", seq: 1, kind: "thinking", delta: "hmm" }));
+        await until(() => r.lastFrame()!.includes(":hmm"));
+        api.moveCursor(-1);
+        await until(() => api.chat!.follow === false);
+        api.toggleThinking();
+        await until(() => api.chat!.live!.expanded.has("think:live:0"));
+        c.push(40, turnEndFull({ thinking: "hmm", text: "so", calls: [] }));
+        c.push(50, chatTurnEnd());
+        await until(() => api.chat!.live === null);
+        expect(chatAnchorIds(api.chat!.summary, null)).toEqual(["think:0:0"]);
+        expect(api.chat!.expanded.has("think:0:0")).toBe(true);
+        expect([...api.chat!.expanded].some((id) => id.startsWith("think:live:"))).toBe(false);
+        // …and `t` on the finished header folds it again, leaving the pin alone.
+        expect(api.chat!.cursor).toBe(0);
+        api.toggleThinking();
+        await until(() => !api.chat!.expanded.has("think:0:0"));
+        expect(api.chat!.thinking.pinned).toBe(false);
+        api.toggleThinking();
+        await until(() => api.chat!.expanded.has("think:0:0"));
+      });
     });
 
     it("session_reset clears the live turn along with the summary", async () => {
