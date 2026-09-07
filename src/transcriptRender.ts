@@ -12,6 +12,8 @@ import type { ChatCommandRecord, GuardDecisionRecord } from "./agent/transcriptS
 import { commandAnchor, draftAnchor } from "./transcriptSummary.js";
 import type { RunSummary, ToolResultSummary, TranscriptSummary } from "./transcriptSummary.js";
 import { splitThinkingText } from "./chat/thinkSplitter.js";
+import { parseBlocks } from "./tui/markdown/blocks.js";
+import { renderMarkdown, type HighlightFn, type MdCache } from "./tui/markdown/render.js";
 
 /** `thinking`: the model's reasoning body (spec 2026-09-06 §4.3 — dim italic). */
 export type RowTone = "dim" | "accent" | "error" | "warn" | "bold" | "success" | "thinking";
@@ -34,6 +36,83 @@ export interface RenderOpts {
   pinned: boolean;
   /** toolCallIds whose result body renders inline under the tool row. */
   expanded: ReadonlySet<string>;
+  /** Spec 2026-09-06 §4.2: typeset a chat answer (`flow: "chat"` runs ONLY —
+   * ticket transcripts stay plain, spec Non-goals) as markdown via
+   * `chatAnswerRows`. Off by default so `junco transcript` prints the prose
+   * as recorded; the dashboard's chat view (FinishedTurns.tsx) turns it on. */
+  markdown?: boolean;
+  /** Code-fence highlighter for `markdown`; null/absent shows raw fences. */
+  highlight?: HighlightFn | null;
+  /** Per-turn `MdCache`s keyed by `mdCacheKey(runIdx, turnIdx)`, owned by
+   * the caller across renders so an unchanged finished turn is not re-typeset
+   * on every call. Entries are dropped/revalidated by renderMarkdown itself
+   * (width/highlighter/source mismatch); a stale key is simply never read. */
+  mdCache?: Map<string, MdCache>;
+}
+
+/** The chat answer's label — the other side of the prompt's `you:`. */
+export const CHAT_LABEL = "junco: ";
+
+/** Key of a finished turn's markdown cache in `RenderOpts.mdCache`. */
+export const mdCacheKey = (runIdx: number, turnIdx: number): string => `md:${runIdx}:${turnIdx}`;
+
+/**
+ * A chat answer typeset as markdown (spec 2026-09-06 §4.2), shared by the
+ * finished turns (renderTranscriptRows, `markdown: true`) and the live turn
+ * (tui/components/LiveTurn.tsx) so nothing jumps when the turn ends.
+ *
+ * The label rides on the first row in tone accent, like the prompt's `you:`:
+ * when the answer opens with a paragraph the label is wrapped WITH it (the
+ * label becomes part of the markdown source, so the first row fits the width
+ * like every other — and the cache, keyed on source, stays stable); when it
+ * opens with a heading, list, fence, quote, rule or table the label stands
+ * alone on its row, since those rows carry their own shape. Every following
+ * row is indented two columns under the label. Fence rows arrive from the
+ * highlighter with ANSI and are never truncated here (TranscriptBody clips
+ * them with `wrap="truncate-end"`).
+ *
+ * `[]` for a whitespace-only answer: a tool-only turn carries "" and gets no
+ * bare label row.
+ */
+export function chatAnswerRows(
+  text: string,
+  width: number,
+  md: { highlight: HighlightFn | null; cache?: MdCache },
+): TranscriptRow[] {
+  const body = text.trim();
+  if (body === "") return [];
+  // The first block's kind is decided by its first line (blocks.ts has no
+  // setext headings), so the whole text need not be parsed twice per frame.
+  const head = parseBlocks(body.split("\n", 1)[0] ?? "");
+  const first = head.closed[0] ?? head.open;
+  const labelled = first?.kind === "paragraph";
+  const rows = renderMarkdown(labelled ? `${CHAT_LABEL}${body}` : body, {
+    width: Math.max(MIN_WIDTH, width) - 2,
+    highlight: md.highlight ?? undefined,
+    cache: md.cache,
+  });
+  const out: TranscriptRow[] = [];
+  if (!labelled) out.push({ text: CHAT_LABEL.trimEnd(), tone: "accent" });
+  rows.forEach((r, i) => {
+    if (labelled && i === 0) out.push({ text: r.text, tone: "accent" });
+    else if (r.text === "") out.push(r);
+    else out.push(indented(r));
+  });
+  return out;
+}
+
+/** A markdown row indented under the label — memoized on the row object, so
+ * a row the `MdCache` handed back unchanged maps to the SAME indented row and
+ * a memoized consumer sees the finished turn as unchanged. Weak: a row the
+ * cache dropped takes its indented twin with it. */
+const INDENTED = new WeakMap<TranscriptRow, TranscriptRow>();
+function indented(r: TranscriptRow): TranscriptRow {
+  let hit = INDENTED.get(r);
+  if (hit === undefined) {
+    hit = r.tone === undefined ? { text: `  ${r.text}` } : { text: `  ${r.text}`, tone: r.tone };
+    INDENTED.set(r, hit);
+  }
+  return hit;
 }
 
 export const TOOL_BODY_MAX_LINES = 400;
@@ -303,11 +382,23 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
         // no dialogue to label.
         // A tool-only turn carries "" (not null): no prose, so no label either.
         const chat = run.flow === "chat" && text.trim() !== "";
-        const lines = proseLines(chat ? `junco: ${text.trim()}` : text, width - 2);
-        lines.forEach((l, li) => {
-          if (chat && li === 0) push(l, "accent");
-          else push(l === "" ? "" : `  ${l}`);
-        });
+        if (chat && o.markdown) {
+          // Spec 2026-09-06 §4.2: the dashboard typesets the answer; the rows
+          // are pushed as built (fence rows carry ANSI — `truncate` counts
+          // escapes as columns and could cut one in half).
+          let cache = o.mdCache?.get(mdCacheKey(i, turn.index));
+          if (o.mdCache && cache === undefined) {
+            cache = { width: 0, highlight: undefined, entries: [] };
+            o.mdCache.set(mdCacheKey(i, turn.index), cache);
+          }
+          rows.push(...chatAnswerRows(text, width, { highlight: o.highlight ?? null, cache }));
+        } else {
+          const lines = proseLines(chat ? `${CHAT_LABEL}${text.trim()}` : text, width - 2);
+          lines.forEach((l, li) => {
+            if (chat && li === 0) push(l, "accent");
+            else push(l === "" ? "" : `  ${l}`);
+          });
+        }
       }
       for (const c of turn.toolCalls) {
         const suffix = fmtToolResult(c.result);

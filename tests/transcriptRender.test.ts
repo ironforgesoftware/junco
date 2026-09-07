@@ -696,3 +696,92 @@ describe("junco_chat_command rows", () => {
     expect(none[at(none) + 1]?.text ?? "").not.toContain("(no output)");
   });
 });
+
+// Task 14 (spec 2026-09-06 §4.2): a chat answer is typeset as markdown on the
+// dashboard (`markdown: true`); ticket transcripts and the `junco transcript`
+// CLI (no flag) keep the plain prose rows — spec Non-goals.
+describe("chat answers as markdown (spec 2026-09-06 §4.2)", () => {
+  const MD = "# Title\n\nSome **bold** text\n\n- a\n- b\n\n```ts\nconst x = 1;\n```";
+  const chatLines = (text: string) => [
+    metaLine({ ticketId: "acme__api" }),
+    chatPrompt(),
+    chatTurnStart(),
+    agentStart(),
+    turnEndFull({ thinking: null, text, calls: [] }),
+    agentEnd(),
+    chatTurnEnd(),
+  ];
+  const fake = (code: string, lang: string | null) =>
+    lang === null ? null : code.split("\n").map((l) => `<${lang}>${l}`);
+
+  it("a chat run renders headings bold, lists bulleted and fences through the highlighter, indented under a lone label", () => {
+    const rows = renderTranscriptRows(summarizeTranscript(chatLines(MD)), {
+      ...opts({ width: 80 }),
+      markdown: true,
+      highlight: fake,
+    });
+    const at = rows.findIndex((r) => r.text === "junco:");
+    expect(at).toBeGreaterThan(0);
+    expect(rows[at]).toEqual({ text: "junco:", tone: "accent" });
+    expect(rows[at + 1]).toEqual({ text: "  Title", tone: "bold" });
+    const texts = rows.map((r) => r.text);
+    expect(texts).toContain("  Some bold text");
+    expect(texts).toContain("  • a");
+    expect(texts).toContain("  • b");
+    expect(texts).toContain("  <ts>const x = 1;");
+    expect(texts.some((t) => t.includes("**"))).toBe(false);
+  });
+
+  it("a paragraph-first answer keeps the label on its first line, wrapped with it", () => {
+    const rows = renderTranscriptRows(
+      summarizeTranscript(chatLines("first line\n\nsecond paragraph")),
+      { ...opts({ width: 80 }), markdown: true, highlight: null },
+    );
+    const texts = rows.map((r) => r.text);
+    const at = texts.indexOf("junco: first line");
+    expect(rows[at]?.tone).toBe("accent");
+    expect(texts.slice(at, at + 3)).toEqual(["junco: first line", "", "  second paragraph"]);
+  });
+
+  it("without a highlighter a fence renders its raw lines", () => {
+    const rows = renderTranscriptRows(summarizeTranscript(chatLines(MD)), {
+      ...opts({ width: 80 }),
+      markdown: true,
+      highlight: null,
+    });
+    expect(rows.map((r) => r.text)).toContain("  const x = 1;");
+  });
+
+  it("the CLI path (no markdown flag) and a ticket run stay plain", () => {
+    const cli = renderTranscriptRows(summarizeTranscript(chatLines(MD)), opts({ width: 80 }));
+    expect(cli.map((r) => r.text)).toContain("junco: # Title");
+    expect(cli.map((r) => r.text)).toContain("  Some **bold** text");
+    const ticket = renderTranscriptRows(
+      summarizeTranscript([
+        metaLine(),
+        runStart(),
+        agentStart(),
+        turnEndFull({ thinking: null, text: MD, calls: [] }),
+        agentEnd(),
+        runEnd(),
+      ]),
+      { ...opts({ width: 80 }), markdown: true, highlight: fake },
+    );
+    const texts = ticket.map((r) => r.text);
+    expect(texts).toContain("  # Title");
+    expect(texts).toContain("  Some **bold** text");
+    expect(texts.some((t) => t.includes("<ts>"))).toBe(false);
+  });
+
+  it("the md cache hands back the same row objects for an unchanged turn", () => {
+    const s = summarizeTranscript(chatLines(MD));
+    const mdCache = new Map();
+    const a = renderTranscriptRows(s, { ...opts(), markdown: true, highlight: fake, mdCache });
+    const b = renderTranscriptRows(s, { ...opts(), markdown: true, highlight: fake, mdCache });
+    const ia = a.findIndex((r) => r.text === "  Title");
+    const ib = b.findIndex((r) => r.text === "  Title");
+    expect(ia).toBeGreaterThan(0);
+    expect(b[ib]).toBe(a[ia]);
+    expect(mdCache.size).toBe(1);
+  });
+});

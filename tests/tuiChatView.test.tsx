@@ -179,6 +179,7 @@ describe("ChatView", () => {
         height={24}
         width={80}
         focused
+        highlight={null}
         onComposerChange={() => {}}
         onComposerSubmit={() => {}}
       />,
@@ -232,6 +233,7 @@ describe("ChatView", () => {
           height={20}
           width={100}
           focused
+          highlight={null}
           onComposerChange={() => {}}
           onComposerSubmit={() => {}}
         />,
@@ -270,6 +272,7 @@ describe("ChatView", () => {
         height={20}
         width={100}
         focused
+        highlight={null}
         onComposerChange={() => {}}
         onComposerSubmit={() => {}}
       />,
@@ -290,6 +293,7 @@ describe("ChatView", () => {
         height={20}
         width={80}
         focused
+        highlight={null}
         onComposerChange={() => {}}
         onComposerSubmit={() => {}}
       />,
@@ -315,6 +319,7 @@ describe("ChatView", () => {
         height={20}
         width={80}
         focused
+        highlight={null}
         onComposerChange={() => {}}
         onComposerSubmit={() => {}}
       />,
@@ -344,6 +349,7 @@ describe("ChatView", () => {
         height={20}
         width={80}
         focused
+        highlight={null}
         onComposerChange={() => {}}
         onComposerSubmit={() => {}}
       />,
@@ -364,6 +370,7 @@ describe("ChatView", () => {
         height={20}
         width={80}
         focused
+        highlight={null}
         onComposerChange={() => {}}
         onComposerSubmit={() => {}}
       />,
@@ -382,6 +389,7 @@ describe("ChatView", () => {
         height={20}
         width={80}
         focused
+        highlight={null}
         onComposerChange={() => {}}
         onComposerSubmit={() => {}}
       />,
@@ -409,6 +417,7 @@ describe("ChatView", () => {
         height={20}
         width={80}
         focused
+        highlight={null}
         onComposerChange={() => {}}
         onComposerSubmit={() => {}}
       />,
@@ -459,6 +468,7 @@ describe("ChatView", () => {
         height: 20,
         width: 80,
         focused: true,
+        highlight: null,
         onComposerChange: () => {},
         onComposerSubmit: () => {},
       };
@@ -531,6 +541,7 @@ describe("ChatView", () => {
           height={20}
           width={80}
           focused
+          highlight={null}
           onComposerChange={() => {}}
           onComposerSubmit={() => {}}
         />,
@@ -553,6 +564,7 @@ describe("ChatView", () => {
       height: 20,
       width: 80,
       focused: true,
+      highlight: null,
       onComposerChange: () => {},
       onComposerSubmit: () => {},
     };
@@ -780,5 +792,131 @@ describe("TranscriptBody", () => {
     expect(w.start).toBe(21); // anchor row 30, window of 10 → 21..31
     expect(w.end).toBe(31);
     expect(w.anchorId).toBe("d9");
+  });
+});
+
+// Task 14 (spec 2026-09-06 §4.2): chat answers — finished and live — are
+// typeset as markdown, code fences through the injected highlighter. The
+// fake marks every line so the frame proves it ran; the ANSI it emits is
+// stripped before asserting (ink-testing-library's lastFrame keeps escapes).
+describe("ChatView markdown answers (spec 2026-09-06 §4.2)", () => {
+  const MD = "# Title\n\nSome **bold** text\n\n- a\n- b\n\n```ts\nconst x = 1;\n```";
+  const fake = (code: string, lang: string | null) =>
+    lang === null ? null : code.split("\n").map((l) => `\x1b[1m«${l}»\x1b[0m`);
+  const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const props = {
+    modelId: "m",
+    chatTodayUsd: null,
+    scroll: 0,
+    height: 30,
+    width: 80,
+    focused: true,
+    highlight: null,
+    onComposerChange: () => {},
+    onComposerSubmit: () => {},
+  };
+  const finished = () =>
+    summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      turnEndFull({ thinking: null, text: MD, calls: [] }),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+  const live = (text: string, seq: number) => ({
+    turn: "t1",
+    seq,
+    blocks: [{ kind: "text" as const, contentIndex: 0, text }],
+    expanded: new Set<string>(),
+    dropped: 0,
+  });
+
+  it("a finished turn: heading row, bullets, and fence lines through the highlighter", async () => {
+    const r = render(
+      <ChatView {...props} state={base({ summary: finished() })} highlight={fake} />,
+    );
+    await until(() => strip(r.lastFrame() ?? "").includes("«const x = 1;»"));
+    const f = strip(r.lastFrame()!);
+    expect(f).toContain("junco:");
+    expect(f).toContain("  Title");
+    expect(f).not.toContain("# Title");
+    expect(f).toContain("Some bold text");
+    expect(f).not.toContain("**");
+    expect(f).toContain("• a");
+    expect(f).toContain("• b");
+  });
+
+  it("a live text block renders the same way, and a null highlighter shows the raw fence", async () => {
+    const summary = summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart()]);
+    const r = render(
+      <ChatView
+        {...props}
+        state={base({ summary, streaming: true, live: live(MD, 1), frame: 1 })}
+        highlight={fake}
+      />,
+    );
+    await until(() => strip(r.lastFrame() ?? "").includes("«const x = 1;»"));
+    const f = strip(r.lastFrame()!);
+    expect(f).toContain("  Title");
+    expect(f).not.toContain("# Title");
+    expect(f).toContain("• a");
+    const plain = render(
+      <ChatView
+        {...props}
+        state={base({ summary, streaming: true, live: live(MD, 1), frame: 1 })}
+        highlight={null}
+      />,
+    );
+    await until(() => (plain.lastFrame() ?? "").includes("const x = 1;"));
+    expect(strip(plain.lastFrame()!)).not.toContain("«");
+  });
+
+  describe("with JUNCO_RENDER_COUNT=1", () => {
+    const ORIGINAL_FLAG = process.env.JUNCO_RENDER_COUNT;
+    afterEach(() => {
+      if (ORIGINAL_FLAG === undefined) delete process.env.JUNCO_RENDER_COUNT;
+      else process.env.JUNCO_RENDER_COUNT = ORIGINAL_FLAG;
+      resetRenderCounts();
+    });
+
+    it("FinishedTurns renders once across two live markdown frames", async () => {
+      process.env.JUNCO_RENDER_COUNT = "1";
+      resetRenderCounts();
+      const summary = finished();
+      const expanded = new Set<string>();
+      const r = render(
+        <ChatView
+          {...props}
+          state={base({
+            summary,
+            expanded,
+            streaming: true,
+            live: live("# Live\n\nfirst", 1),
+            frame: 1,
+          })}
+          highlight={fake}
+        />,
+      );
+      await until(() => strip(r.lastFrame() ?? "").includes("  first"));
+      expect(renderCounts().FinishedTurns).toBe(1);
+      r.rerender(
+        <ChatView
+          {...props}
+          state={base({
+            summary,
+            expanded,
+            streaming: true,
+            live: live("# Live\n\nfirst and then\n\n```ts\nlet y;\n```", 2),
+            frame: 2,
+          })}
+          highlight={fake}
+        />,
+      );
+      await until(() => strip(r.lastFrame() ?? "").includes("«let y;»"));
+      expect(strip(r.lastFrame()!)).toContain("first and then");
+      expect(renderCounts().FinishedTurns).toBe(1);
+    });
   });
 });

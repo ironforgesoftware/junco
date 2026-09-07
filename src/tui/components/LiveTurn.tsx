@@ -5,9 +5,12 @@
  * .tsx) is never touched.
  *
  * Text blocks render exactly as the finished answer will (transcriptRender
- * .ts's chat rows — `junco: ` label wrapped in with the text, first row
+ * .ts's `chatAnswerRows` — markdown, `junco: ` label on the first row in
  * accent, the rest indented) so nothing jumps when the turn ends and the
- * renderer takes over. Thinking blocks are spec §4.3's four states (below).
+ * renderer takes over. The turn's text blocks are joined into ONE answer, as
+ * the finished turn's `text` is, and typeset through a single `MdCache` held
+ * in a ref and dropped with the turn (spec §4.2): a frame re-renders only
+ * the open tail block. Thinking blocks are spec §4.3's four states (below).
  * Tool blocks are an interim one-row `▸ <name>` until Task 15 (ToolCard).
  *
  * Thinking (spec §4.3, D4): while a block streams, its header `· thinking ·
@@ -27,11 +30,12 @@ import { useMemo, useRef } from "react";
 import type { LiveTurnState } from "../../chat/liveBlocks.js";
 import { useClock } from "../hooks/useClock.js";
 import {
+  chatAnswerRows,
   fmtThinkingHeader,
   proseLines,
-  wrapText,
   type TranscriptRow,
 } from "../../transcriptRender.js";
+import { createMdCache, type HighlightFn, type MdCache } from "../markdown/render.js";
 
 /** Elapsed ms since an ISO stamp, never negative; 0 if the stamp is unparsable. */
 function elapsedMs(startedAt: string, now: number): number {
@@ -44,6 +48,7 @@ export function useLiveRows(
   frame: number,
   width: number,
   pinned: boolean,
+  highlight: HighlightFn | null,
 ): TranscriptRow[] {
   // The clock only needs to tick while a thinking block is still streaming
   // (that header is the one row that changes per second); otherwise it
@@ -60,6 +65,15 @@ export function useLiveRows(
   });
   if (folded.current.turn !== (live?.turn ?? null)) {
     folded.current = { turn: live?.turn ?? null, ms: new Map() };
+  }
+  // The answer's markdown cache, reset with the turn (same lifetime as
+  // `folded`); renderMarkdown drops it itself on a width/highlighter change.
+  const md = useRef<{ turn: string | null; cache: MdCache }>({
+    turn: null,
+    cache: createMdCache(),
+  });
+  if (md.current.turn !== (live?.turn ?? null)) {
+    md.current = { turn: live?.turn ?? null, cache: createMdCache() };
   }
   if (live !== null)
     for (const b of live.blocks)
@@ -94,11 +108,8 @@ export function useLiveRows(
           break;
       }
     }
-    if (text !== "")
-      wrapText(`junco: ${text.trimStart()}`, width - 2).forEach((l, i) =>
-        out.push(i === 0 ? { text: l, tone: "accent" } : { text: l === "" ? "" : `  ${l}` }),
-      );
+    out.push(...chatAnswerRows(text, width, { highlight, cache: md.current.cache }));
     return out;
     // `now` moves once a second only while a block streams (see `ticking`).
-  }, [live, frame, width, pinned, now]);
+  }, [live, frame, width, pinned, now, highlight]);
 }

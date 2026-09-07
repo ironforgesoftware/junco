@@ -12,6 +12,7 @@ import { bumpRender } from "../renderCount.js";
 import { MIN_WIDTH, type RowTone } from "../../transcriptRender.js";
 import { anchorIds } from "../../transcriptSummary.js";
 import type { ChatState } from "../hooks/useChat.js";
+import type { HighlightFn } from "../markdown/render.js";
 import { TranscriptBody, bodyWindow, concatRows, toneProps } from "./TranscriptBody.js";
 import { useFinishedRows } from "./FinishedTurns.js";
 import { useLiveRows } from "./LiveTurn.js";
@@ -95,6 +96,9 @@ export interface ChatViewProps {
    * can paint itself blurred (border, selection, composer) should it ever
    * share the screen. */
   focused: boolean;
+  /** Code-fence highlighter for the markdown answers (spec 2026-09-06 §4.2),
+   * Pi's through dashboardCmd's `loadHighlighter`; null renders raw fences. */
+  highlight: HighlightFn | null;
   onScrollMax?: (max: number) => void;
   onRowPress?: (anchorIdx: number) => void;
   /** Scrollbar click/drag (stable callback — this component is memoized). */
@@ -129,8 +133,20 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
   // the summary (plus pinned/expanded/width) and never re-run on a flush; the
   // live rows are keyed on the flush counter; the body sees them joined
   // lazily, so a frame copies nothing but the live turn's own rows.
-  const finished = useFinishedRows(state.summary, state.thinking.pinned, state.expanded, textWidth);
-  const liveRows = useLiveRows(state.live, state.frame, textWidth, state.thinking.pinned);
+  const finished = useFinishedRows(
+    state.summary,
+    state.thinking.pinned,
+    state.expanded,
+    textWidth,
+    p.highlight,
+  );
+  const liveRows = useLiveRows(
+    state.live,
+    state.frame,
+    textWidth,
+    state.thinking.pinned,
+    p.highlight,
+  );
   const rows = useMemo(() => concatRows(finished, liveRows), [finished, liveRows]);
   // Memoized: a fresh array every render would defeat TranscriptBody's
   // React.memo on almost every ChatView re-render (e.g. a composer

@@ -61,6 +61,7 @@ import { QueueView } from "./components/QueueView.js";
 import { ReviewView } from "./components/ReviewView.js";
 import { TranscriptView } from "./components/TranscriptView.js";
 import { ChatView, chatVisibleRows } from "./components/ChatView.js";
+import type { HighlightFn } from "./markdown/render.js";
 import { ConfigView } from "./components/ConfigView.js";
 import { PALETTE_COMMANDS, runCliCommand, type CliRunResult } from "./cliRunner.js";
 import type { QueueSnapshot } from "./queueSnapshot.js";
@@ -142,6 +143,10 @@ export interface AppProps {
   /** The chat's resolved model id (`chatCfgFor(cfg).model.id`), for the chat
    * header strip; null when it cannot be resolved. */
   chatModelId: string | null;
+  /** Code-fence highlighter for the chat's markdown answers (spec 2026-09-06
+   * §4.2) — Pi's, loaded by dashboardCmd through the session seam; null (or
+   * absent, as in tests) renders raw fences. */
+  highlight?: HighlightFn | null;
   /** Unified view-scoped refresh cadence (issues + PRs). Default 30_000;
    * tests pass large values. */
   refreshPollMs?: number;
@@ -2530,6 +2535,7 @@ export function App(props: AppProps): React.JSX.Element {
           <ChatView
             state={chatState}
             modelId={props.chatModelId}
+            highlight={props.highlight ?? null}
             chatTodayUsd={health?.chats?.chatTodayUsd ?? null}
             scroll={scroll}
             height={listHeight}

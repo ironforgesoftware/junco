@@ -18,6 +18,7 @@ import { openAppendLogSink } from "./logging.js";
 import { draftFilePath } from "./chat/draftStore.js";
 import { checkForUpdate } from "./updateCheck.js";
 import { resolveBotLogin } from "./botIdentity.js";
+import type { HighlightFn } from "./tui/markdown/render.js";
 import type React from "react";
 
 /**
@@ -66,6 +67,10 @@ export interface DashboardDeps {
   printOut?: (s: string) => void;
   /** Existence probe for the truthful cancel message (Amendment 1). Default: fs.existsSync. */
   existsFn?: (p: string) => boolean;
+  /** The chat's code-fence highlighter (spec 2026-09-06 §4.2). Default: Pi's,
+   * through agent/session.ts's `loadHighlighter` — the one runtime SDK import
+   * seam; injected so tests never load the SDK. A rejection means raw fences. */
+  loadHighlighterFn?: () => Promise<HighlightFn>;
 }
 
 /**
@@ -128,6 +133,7 @@ export async function runDashboard(
     { chatCfgFor },
     react,
     ink,
+    highlight,
   ] = await Promise.all([
     // App.js is pulled in transitively by Root.js — no separate value import.
     import("./tui/Root.js"),
@@ -144,6 +150,13 @@ export async function runDashboard(
     import("./chat/chatSession.js"),
     import("react"),
     import("ink"),
+    // Pi's highlighter for the chat's markdown fences — loaded with the rest
+    // of the UI, and a failure (no SDK, theme files missing) degrades to raw
+    // fences rather than blocking the dashboard.
+    (
+      deps.loadHighlighterFn ??
+      (() => import("./agent/session.js").then((m) => m.loadHighlighter()))
+    )().catch((): HighlightFn | null => null),
   ]);
   // INK_RENDER_OPTIONS is the single source of truth for the host options
   // (exitOnCtrlC:false is load-bearing — see the constant's doc); a no-op when
@@ -180,6 +193,8 @@ export async function runDashboard(
     // The chat's own model chain (chat.modelId → plannerModelId → model.id),
     // for the chat header strip.
     chatModelId: chatCfgFor(c).model.id,
+    // Spec 2026-09-06 §4.2: the chat's code-fence highlighter (null = raw).
+    highlight,
     queueFn: makeQueueSnapshotFn(c),
     // Per-repo assess history for the rail's audit-age indicator (#193).
     assessHistoryFn: () => Promise.resolve(listHistory(c)),
