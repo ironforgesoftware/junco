@@ -227,6 +227,17 @@ export function kickstartService(
     : execFn("systemctl", ["--user", "--no-block", "restart", svc.id]);
 }
 
+/**
+ * The plain START verb for a unit that is down — no `-k`, no `restart`. Used
+ * only in the recovery hint after a failed kick (#522): re-suggesting the verb
+ * that just raced would invite the same outcome.
+ */
+export function startCommand(svc: ServiceRef, deps: RestartDeps = {}): string {
+  return svc.platform === "launchd"
+    ? `launchctl kickstart gui/${deps.uid ?? process.getuid?.() ?? 0}/${svc.id}`
+    : `systemctl --user start ${svc.id}`;
+}
+
 /** Restart the discovered unit and verify the lock holder changed. */
 export async function runRestartCommand(
   configPath: string,
@@ -278,21 +289,41 @@ export async function runRestartCommand(
   const oldPid = lockHolderFn(lockPath);
 
   const kick = await kickstartService(svc, deps);
-  if (kick.code !== 0) {
-    print(`restart failed for ${svc.id}: ${kick.stderr.trim() || `exit ${kick.code}`}\n`);
-    return 1;
-  }
 
-  // Poll the lock for a NEW live holder (old null → any holder counts).
+  // A nonzero kick is NOT a verdict — the lock poll below is (the same rule the
+  // kickstartService docstring states for systemd's --no-block, #117). launchd
+  // adds its own case (#522): `kickstart -k` races its own kill against the
+  // relaunch, so the kill can land on the process it just started. Exit code 1,
+  // daemon freshly up. Poll first; judge after.
   const started = Date.now();
   for (;;) {
     const pid = lockHolderFn(lockPath);
     if (pid !== null && pid !== oldPid) {
+      if (kick.code !== 0) {
+        print(`note: ${svc.id} reported ${kick.stderr.trim() || `exit ${kick.code}`}\n`);
+      }
       print(`restarted: pid ${oldPid ?? "—"} → ${pid}\n`);
       return 0;
     }
     if (Date.now() - started >= timeoutMs) break;
     await sleepFn(500);
+  }
+
+  // Kick failed AND no new holder. Which of the two is it? Only the lock can
+  // say, and the difference is the whole point: a daemon that is DOWN stays
+  // down (launchd's KeepAlive.SuccessfulExit=false never respawns a clean
+  // exit), so the operator has to be told that and given the plain start verb
+  // — never `-k`, which is what raced in the first place.
+  if (kick.code !== 0) {
+    const holder = lockHolderFn(lockPath);
+    print(`restart failed for ${svc.id}: ${kick.stderr.trim() || `exit ${kick.code}`}\n`);
+    print(
+      holder === null
+        ? `the daemon is NOT running — the unit was stopped and did not come back.\n` +
+            `Bring it up with:\n  ${startCommand(svc, deps)}\n`
+        : `the daemon (pid ${holder}) is still running — nothing was restarted.\n`,
+    );
+    return 1;
   }
   // The second cause is #310 (final review F6): a unit that starts, finds a
   // shared-root claim held by a daemon that resolved a DIFFERENT config, and

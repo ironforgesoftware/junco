@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `junco restart` no longer reports a bare `exit 1` while leaving the daemon stopped. The kick command's exit code was treated as the verdict, so it returned before the lock poll that actually confirms a relaunch — even though that poll is the module's stated authority (systemd's `--no-block` can outlive the exec budget). On launchd `launchctl kickstart -k` can race its own kill against the relaunch and stop the process it just started; with `KeepAlive.SuccessfulExit=false` that leaves the daemon down for good, and the message said only `exit 1`. The poll now runs first: a unit that reports an error but comes up is a restart, a kick that fails with no lock holder says the daemon is **not** running and prints the plain start verb (never `-k`, which is what raced), and a kick that killed nothing says the old daemon is still holding the lock.
+
 ## [0.14.0] - 2026-09-06
 
 ### Added
