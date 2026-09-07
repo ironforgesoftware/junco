@@ -7,11 +7,10 @@ import {
   renderTranscriptRows,
   MIN_WIDTH,
   type RowTone,
-  type TranscriptRow,
 } from "../../transcriptRender.js";
 import { toolCallIds } from "../../transcriptSummary.js";
 import type { TranscriptState } from "../hooks/useTranscript.js";
-import { TranscriptBody, bodyWindow, toneProps } from "./TranscriptBody.js";
+import { TranscriptBody, arrayRows, bodyWindow, toneProps } from "./TranscriptBody.js";
 
 export interface TranscriptViewProps {
   state: TranscriptState;
@@ -62,15 +61,17 @@ export const TranscriptView = React.memo(function TranscriptView({
   // Memoized: the row list depends only on the summary and the render options,
   // but every scroll keystroke re-renders this component — re-rendering a
   // 3000-row transcript from scratch on each `]` is the one hot path here.
-  const rows: TranscriptRow[] = useMemo(
+  const rows = useMemo(
     () =>
-      state.summary === null
-        ? []
-        : renderTranscriptRows(state.summary, {
-            width: textWidth,
-            showThinking: state.showThinking,
-            expanded: state.expanded,
-          }),
+      arrayRows(
+        state.summary === null
+          ? []
+          : renderTranscriptRows(state.summary, {
+              width: textWidth,
+              showThinking: state.showThinking,
+              expanded: state.expanded,
+            }),
+      ),
     [state.summary, state.showThinking, state.expanded, textWidth],
   );
   // Ticket transcripts have no drafts, so the cursor space is tool calls

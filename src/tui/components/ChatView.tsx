@@ -1,23 +1,20 @@
 /**
  * The operator ↔ agent chat pane (spec 2026-09-01 §8.2): header strip +
- * TranscriptBody over the chat summary (with the in-flight live turn's text
- * appended as trailing rows) + Composer. Pure layout — every action arrives
- * as a prop; ChatView never touches useChat itself.
+ * TranscriptBody over the finished turns (FinishedTurns.tsx) with the
+ * in-flight live turn's rows (LiveTurn.tsx) appended lazily + Composer.
+ * Pure layout — every action arrives as a prop; ChatView never touches
+ * useChat itself.
  */
 import React, { useMemo } from "react";
 import { Box, Text } from "ink";
 import { theme } from "../theme.js";
 import { bumpRender } from "../renderCount.js";
-import {
-  renderTranscriptRows,
-  wrapText,
-  MIN_WIDTH,
-  type RowTone,
-  type TranscriptRow,
-} from "../../transcriptRender.js";
+import { MIN_WIDTH, type RowTone } from "../../transcriptRender.js";
 import { anchorIds } from "../../transcriptSummary.js";
 import type { ChatState } from "../hooks/useChat.js";
-import { TranscriptBody, bodyWindow, toneProps } from "./TranscriptBody.js";
+import { TranscriptBody, bodyWindow, concatRows, toneProps } from "./TranscriptBody.js";
+import { useFinishedRows } from "./FinishedTurns.js";
+import { useLiveRows } from "./LiveTurn.js";
 import { Composer } from "./Composer.js";
 import { CHAT_RING } from "../hooks/useChat.js";
 
@@ -128,32 +125,13 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
   bumpRender("ChatView");
   const { state } = p;
   const textWidth = Math.max(MIN_WIDTH, p.width - 6);
-  const rows: TranscriptRow[] = useMemo(() => {
-    const out =
-      state.summary === null
-        ? []
-        : renderTranscriptRows(state.summary, {
-            width: textWidth,
-            showThinking: state.thinking.pinned,
-            expanded: state.expanded,
-          });
-    // Streaming text is labelled exactly as the finished answer will be
-    // (transcriptRender.ts's chat rows): label wrapped in with the text, the
-    // first row accent, the rest indented — so nothing jumps when the turn
-    // ends and the renderer takes over. Interim (spec 2026-09-06 Task 11
-    // splits the live rows out): only the live turn's TEXT blocks render;
-    // thinking and tool blocks wait for their own components.
-    const liveText =
-      state.live?.blocks
-        .filter((b) => b.kind === "text")
-        .map((b) => b.text)
-        .join("") ?? "";
-    if (liveText !== "")
-      wrapText(`junco: ${liveText.trimStart()}`, textWidth - 2).forEach((l, i) =>
-        out.push(i === 0 ? { text: l, tone: "accent" } : { text: l === "" ? "" : `  ${l}` }),
-      );
-    return out;
-  }, [state.summary, state.thinking.pinned, state.expanded, state.live, textWidth]);
+  // Spec 2026-09-06 §4.1: two memo boundaries. The finished rows are keyed on
+  // the summary (plus pinned/expanded/width) and never re-run on a flush; the
+  // live rows are keyed on the flush counter; the body sees them joined
+  // lazily, so a frame copies nothing but the live turn's own rows.
+  const finished = useFinishedRows(state.summary, state.thinking.pinned, state.expanded, textWidth);
+  const liveRows = useLiveRows(state.live, state.frame, textWidth, state.thinking.pinned);
+  const rows = useMemo(() => concatRows(finished, liveRows), [finished, liveRows]);
   // Memoized: a fresh array every render would defeat TranscriptBody's
   // React.memo on almost every ChatView re-render (e.g. a composer
   // keystroke, which touches state.composer but not state.summary).

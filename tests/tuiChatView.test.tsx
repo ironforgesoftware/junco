@@ -1,8 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
 import { ChatView, chatHeaderStatus } from "../src/tui/components/ChatView.js";
-import { TranscriptBody, bodyWindow } from "../src/tui/components/TranscriptBody.js";
+import {
+  TranscriptBody,
+  arrayRows,
+  bodyWindow,
+  concatRows,
+} from "../src/tui/components/TranscriptBody.js";
+import { renderCounts, resetRenderCounts } from "../src/tui/renderCount.js";
 import type { ChatState } from "../src/tui/hooks/useChat.js";
 import type { TranscriptRow } from "../src/transcriptRender.js";
 import { maxScroll } from "../src/tui/window.js";
@@ -410,6 +416,131 @@ describe("ChatView", () => {
     await until(() => r.lastFrame()!.includes("done"));
     expect(r.lastFrame()).not.toContain("thinking about it");
   });
+
+  // Spec 2026-09-06 §4.1: a flush re-renders only the live rows. The finished
+  // rows memo is keyed on [summary, pinned, expanded, width] — `live` and
+  // `frame` are NOT inputs — so pushing a second live frame re-renders
+  // TranscriptBody (the window changed) but never re-runs renderTranscriptRows
+  // over the history.
+  describe("with JUNCO_RENDER_COUNT=1", () => {
+    const ORIGINAL_FLAG = process.env.JUNCO_RENDER_COUNT;
+    afterEach(() => {
+      if (ORIGINAL_FLAG === undefined) delete process.env.JUNCO_RENDER_COUNT;
+      else process.env.JUNCO_RENDER_COUNT = ORIGINAL_FLAG;
+      resetRenderCounts();
+    });
+
+    it("a second live frame re-renders TranscriptBody but not the finished rows", async () => {
+      process.env.JUNCO_RENDER_COUNT = "1";
+      resetRenderCounts();
+      const summary = summarizeTranscript([
+        metaLine(),
+        chatPrompt(),
+        chatTurnStart(),
+        agentStart(),
+        turnEndFull({ text: "done" }),
+        agentEnd(),
+        chatTurnEnd(),
+        chatPrompt({ text: "more?" }),
+        chatTurnStart(),
+      ]);
+      const expanded = new Set<string>();
+      const live = (text: string, seq: number) => ({
+        turn: "t1",
+        seq,
+        blocks: [{ kind: "text" as const, contentIndex: 0, text }],
+        expanded: new Set<string>(),
+        dropped: 0,
+      });
+      const props = {
+        modelId: "m",
+        chatTodayUsd: null,
+        scroll: 0,
+        height: 20,
+        width: 80,
+        focused: true,
+        onComposerChange: () => {},
+        onComposerSubmit: () => {},
+      };
+      const r = render(
+        <ChatView
+          {...props}
+          state={base({ summary, expanded, streaming: true, live: live("first", 1), frame: 1 })}
+        />,
+      );
+      await until(() => r.lastFrame()!.includes("junco: first"));
+      const bodyBefore = renderCounts().TranscriptBody ?? 0;
+      expect(bodyBefore).toBeGreaterThan(0);
+      expect(renderCounts().FinishedTurns).toBe(1);
+      r.rerender(
+        <ChatView
+          {...props}
+          state={base({
+            summary,
+            expanded,
+            streaming: true,
+            live: live("first and then some more", 2),
+            frame: 2,
+          })}
+        />,
+      );
+      await until(() => r.lastFrame()!.includes("junco: first and then some more"));
+      expect(renderCounts().TranscriptBody).toBeGreaterThan(bodyBefore);
+      expect(renderCounts().FinishedTurns).toBe(1);
+      expect(r.lastFrame()).toContain("junco: done"); // the history is still there
+    });
+
+    it("thinking and tool blocks render as plain dim rows (interim, Tasks 12/15)", async () => {
+      const summary = summarizeTranscript([metaLine(), chatPrompt(), chatTurnStart()]);
+      const r = render(
+        <ChatView
+          state={base({
+            summary,
+            streaming: true,
+            live: {
+              turn: "t1",
+              seq: 3,
+              blocks: [
+                {
+                  kind: "thinking",
+                  contentIndex: 0,
+                  text: "let me see",
+                  done: false,
+                  startedAt: "2026-09-06T00:00:00.000Z",
+                },
+                {
+                  kind: "tool",
+                  id: "c1",
+                  name: "read",
+                  args: { path: "x" },
+                  output: "",
+                  result: null,
+                  isError: false,
+                  truncated: false,
+                  done: false,
+                },
+                { kind: "text", contentIndex: 1, text: "so far" },
+              ],
+              expanded: new Set(),
+              dropped: 0,
+            },
+          })}
+          modelId="m"
+          chatTodayUsd={null}
+          scroll={0}
+          height={20}
+          width={80}
+          focused
+          onComposerChange={() => {}}
+          onComposerSubmit={() => {}}
+        />,
+      );
+      await until(() => r.lastFrame()!.includes("junco: so far"));
+      const f = r.lastFrame()!;
+      expect(f).toContain("· thinking");
+      expect(f).toContain("▸ read");
+    });
+  });
 });
 
 describe("TranscriptBody", () => {
@@ -423,7 +554,7 @@ describe("TranscriptBody", () => {
     ];
     render(
       <TranscriptBody
-        rows={rows}
+        rows={arrayRows(rows)}
         anchors={["c1"]}
         cursor={0}
         follow={false}
@@ -445,7 +576,13 @@ describe("TranscriptBody", () => {
   const FORTY: TranscriptRow[] = Array.from({ length: 40 }, (_, i) =>
     i === 3 ? { text: "card", anchor: "d1" } : { text: `row ${i}` },
   );
-  const base = { rows: FORTY, anchors: ["d1"], cursor: 0, follow: false, visible: 10 };
+  const base = {
+    rows: arrayRows(FORTY),
+    anchors: ["d1"],
+    cursor: 0,
+    follow: false,
+    visible: 10,
+  };
 
   it("bodyWindow nudges onto the cursor's anchor only while a reveal is owed", () => {
     expect(bodyWindow({ ...base, scroll: 20, reveal: false }).start).toBe(20);
@@ -474,5 +611,61 @@ describe("TranscriptBody", () => {
     await until(() => r.lastFrame()!.includes("row 25"));
     expect(r.lastFrame()).not.toContain("card");
     expect(onReveal).toHaveBeenCalledTimes(1);
+  });
+
+  // Spec 2026-09-06 §4.1: the finished rows and the live rows reach the body
+  // as ONE lazy source — no per-frame copy of a thousand finished rows.
+  it("concatRows exposes both halves without copying and finds anchors across the boundary", () => {
+    const a: TranscriptRow[] = [{ text: "a0" }, { text: "a1", anchor: "x" }, { text: "a2" }];
+    const b: TranscriptRow[] = [{ text: "b0", anchor: "y" }, { text: "b1" }];
+    const src = concatRows(a, b);
+    expect(src.length).toBe(5);
+    expect(src.at(0)).toBe(a[0]);
+    expect(src.at(2)).toBe(a[2]);
+    expect(src.at(3)).toBe(b[0]);
+    expect(src.at(4)).toBe(b[1]);
+    expect(src.anchorRow("x")).toBe(1);
+    expect(src.anchorRow("y")).toBe(3);
+    expect(src.anchorRow("nope")).toBe(-1);
+    // The first row carrying an anchor wins, as findIndex did.
+    const dup = concatRows(
+      [
+        { text: "p", anchor: "z" },
+        { text: "q", anchor: "z" },
+      ],
+      [],
+    );
+    expect(dup.anchorRow("z")).toBe(0);
+    // The anchor index is memoized by the finished array's identity: a second
+    // source over the same `a` reuses it (observable only as "still right"
+    // after the live half changes — the index never covers `b`).
+    const src2 = concatRows(a, [{ text: "live", anchor: "w" }]);
+    expect(src2.anchorRow("x")).toBe(1);
+    expect(src2.anchorRow("y")).toBe(-1);
+    expect(src2.anchorRow("w")).toBe(3);
+    expect(src2.length).toBe(4);
+    // arrayRows is the single-array adapter for the other callers.
+    const one = arrayRows(b);
+    expect(one.length).toBe(2);
+    expect(one.at(1)).toBe(b[1]);
+    expect(one.anchorRow("y")).toBe(0);
+  });
+
+  it("bodyWindow reveals an anchor that lives in the live half", () => {
+    const finished: TranscriptRow[] = Array.from({ length: 30 }, (_, i) => ({ text: `f${i}` }));
+    const live: TranscriptRow[] = [{ text: "card", anchor: "d9" }, { text: "tail" }];
+    const rows = concatRows(finished, live);
+    const w = bodyWindow({
+      rows,
+      anchors: ["d9"],
+      cursor: 0,
+      follow: false,
+      reveal: true,
+      scroll: 0,
+      visible: 10,
+    });
+    expect(w.start).toBe(21); // anchor row 30, window of 10 → 21..31
+    expect(w.end).toBe(31);
+    expect(w.anchorId).toBe("d9");
   });
 });
