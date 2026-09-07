@@ -26,6 +26,11 @@ import type {
   RunEndRecord,
   RunStartRecord,
 } from "../../src/agent/transcriptSchema.js";
+import type {
+  ChatDeltaRecord,
+  ChatPartialRecord,
+  ChatToolRecord,
+} from "../../src/chat/liveBlocks.js";
 
 const TS = "2026-08-16T00:00:00.000Z";
 
@@ -35,6 +40,14 @@ export const j = (o: unknown): string => JSON.stringify(o);
 
 export const msgStart = (): string =>
   j({ type: "message_start", message: { role: "assistant", content: [] } });
+
+/** A raw SDK message_update carrying one text or thinking delta (never persisted; session.ts skips it). */
+export const msgUpdate = (
+  kind: "text_delta" | "thinking_delta",
+  delta: string,
+  contentIndex = 0,
+): string =>
+  j({ type: "message_update", assistantMessageEvent: { type: kind, delta, contentIndex } });
 
 /** A whole assistant message with one text block — the rep-guard input a v1 transcript has. */
 export const msgEnd = (text: string): string =>
@@ -172,12 +185,45 @@ export const chatPrompt = (over: Partial<ChatPromptRecord> = {}): string =>
 export const chatTurnStart = (over: Partial<ChatTurnStartRecord> = {}): string =>
   j({
     type: "junco_chat_turn_start",
+    turn: "t1",
     modelId: "local/m1",
     tools: ["read", "grep"],
     timeoutMs: 60_000,
     ts: TS,
     ...over,
   } satisfies ChatTurnStartRecord);
+/** Bus-only (spec 2026-09-06 §1.1): one text/thinking chunk of a live turn; never persisted. */
+export const chatDelta = (over: Partial<ChatDeltaRecord> = {}): string =>
+  j({
+    type: "junco_chat_delta",
+    turn: "t1",
+    seq: 1,
+    kind: "text",
+    contentIndex: 0,
+    delta: "x",
+    ...over,
+  } satisfies ChatDeltaRecord);
+/** Bus-only: one tool lifecycle phase (start/output/end) of a live turn; never persisted. */
+export const chatTool = (over: Partial<ChatToolRecord> = {}): string =>
+  j({
+    type: "junco_chat_tool",
+    turn: "t1",
+    seq: 1,
+    id: "c1",
+    phase: "start",
+    name: "read",
+    args: { path: "a" },
+    ...over,
+  } satisfies ChatToolRecord);
+/** Bus-only: the in-flight turn snapshot sent first on subscribe; never persisted. */
+export const chatPartial = (over: Partial<ChatPartialRecord> = {}): string =>
+  j({
+    type: "junco_chat_partial",
+    turn: "t1",
+    seq: 0,
+    blocks: [],
+    ...over,
+  } satisfies ChatPartialRecord);
 export const chatTurnEnd = (over: Partial<ChatTurnEndRecord> = {}): string =>
   j({
     type: "junco_chat_turn_end",

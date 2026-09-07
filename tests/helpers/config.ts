@@ -150,6 +150,8 @@ export function makeConfig(seams: ConfigSeams, overrides: Partial<Config> = {}):
       turnTimeoutMinutes: null,
       submitTool: true,
       confirmTimeoutMinutes: 10,
+      thinkTags: "auto",
+      maxFps: 60,
     },
     ...overrides,
   };

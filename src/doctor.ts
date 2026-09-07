@@ -1,7 +1,8 @@
 /**
  * `junco doctor` — preflight every external dependency a ticket will need, so
  * failures surface here instead of after a 30-minute agent run.
- * ✓ pass · ⚠ warning (degraded but workable) · ✗ failure (exit 1).
+ * ✓ pass · ℹ hint (advisory, exit code unaffected) · ⚠ warning (degraded but
+ * workable) · ✗ failure (exit 1).
  *
  * The checks live in the `CHECKS` table below, one entry per preflight, and
  * `runDoctor` is the loop that runs them in array order and renders what they
@@ -109,7 +110,7 @@ export interface DoctorDeps {
   checkUpdateFn?: (cfg: Config) => Promise<UpdateInfo | null>;
 }
 
-type Verdict = "ok" | "warn" | "fail";
+type Verdict = "ok" | "info" | "warn" | "fail";
 
 /** One rendered line: `<mark> <label>[ — <detail>]`. A check returns as many
  * as it has to say, or none at all when it has nothing (a disabled feature). */
@@ -120,6 +121,7 @@ export interface Finding {
 }
 
 const ok = (label: string, detail?: string): Finding => ({ v: "ok", label, detail });
+const info = (label: string, detail?: string): Finding => ({ v: "info", label, detail });
 const warn = (label: string, detail?: string): Finding => ({ v: "warn", label, detail });
 const fail = (label: string, detail?: string): Finding => ({ v: "fail", label, detail });
 const verdict = (v: Verdict, label: string, detail?: string): Finding => ({ v, label, detail });
@@ -192,6 +194,27 @@ export interface DoctorCheck {
 /** A check that only means anything once the config loaded. Every entry after
  * `config`/`node` is one of these: the null-config skip lives here rather than
  * being restated at the top of twenty bodies. */
+/**
+ * The server-side knob that moves `<think>` reasoning into `reasoning_content`
+ * (spec 2026-09-06 §2.2), recognized from the resolved base URL's port alone —
+ * llama.cpp's default 8080, LM Studio's default 1234 — so doctor never probes
+ * the endpoint a second time for this. Anything else (an unknown port, or a
+ * string `new URL` rejects) gets the generic wording.
+ */
+export function serverThinkingFlag(baseUrl: string): string {
+  let port = "";
+  try {
+    port = new URL(baseUrl).port;
+  } catch {
+    port = "";
+  }
+  if (port === "8080")
+    return "for a cleaner stream start llama.cpp with --reasoning-format deepseek";
+  if (port === "1234")
+    return "in LM Studio enable 'Reasoning → separate field' for a cleaner stream";
+  return "move reasoning into reasoning_content on the server for a cleaner stream";
+}
+
 function needsConfig(
   id: string,
   body: (ctx: DoctorCtx, cfg: Config) => Finding[] | Promise<Finding[]>,
@@ -898,6 +921,34 @@ export const CHECKS: DoctorCheck[] = [
     return [ok("chat", `enabled · sessions under ${dataTreePaths(cfg).chats}`)];
   }),
 
+  // Chat thinking hint (spec 2026-09-06 §2.2) — an inline-resolved
+  // openai-completions model may stream reasoning as literal `<think>` tags,
+  // which junco's splitter re-tags on the fly; the server can do it cleaner
+  // upstream. Advisory only (`info`, never a warn) and never a network probe:
+  // it reads the same resolution `endpoint-model` already ran, and a resolve
+  // failure is that check's verdict, not this one's. Hosted/catalog providers
+  // carry thinking natively, so they get nothing. The model resolved is the
+  // one the chat session actually uses (chat.modelId → github.plannerModelId →
+  // model.id, chatSession.ts `chatCfgFor`).
+  needsConfig("chat-thinking", async (ctx, cfg) => {
+    if (!cfg.chat.enabled || cfg.chat.thinkTags === "off") return [];
+    const chatModelId = cfg.chat.modelId ?? cfg.github.plannerModelId ?? undefined;
+    let m: ResolvedModelInfo;
+    try {
+      m = await ctx.resolveInfoFn(cfg, chatModelId);
+    } catch {
+      return [];
+    }
+    if (m.api !== "openai-completions") return []; // native thinking on hosted providers
+    const flag = serverThinkingFlag(m.baseUrl);
+    return [
+      info(
+        "chat thinking",
+        `<think> tags are split by junco (chat.thinkTags=${cfg.chat.thinkTags}); ${flag}`,
+      ),
+    ];
+  }),
+
   // Github bridge (only when enabled — disabled setups print nothing)
   needsConfig("github-bridge", async (ctx, cfg) => {
     if (!cfg.github.enabled) return [];
@@ -1112,11 +1163,12 @@ export async function runDoctor(configPath: string, deps: DoctorDeps = {}): Prom
   for (const check of CHECKS) {
     for (const f of await check.run(ctx)) {
       results.push(f);
-      const mark = f.v === "ok" ? "✓" : f.v === "warn" ? "⚠" : "✗";
+      const mark = f.v === "ok" ? "✓" : f.v === "info" ? "ℹ" : f.v === "warn" ? "⚠" : "✗";
       print(`${mark} ${f.label}${f.detail ? ` — ${f.detail}` : ""}\n`);
     }
   }
 
+  // `info` rows count in neither tally: a hint never moves the exit code.
   const fails = results.filter((r) => r.v === "fail").length;
   const warns = results.filter((r) => r.v === "warn").length;
   print(`\n${fails === 0 ? "ready" : "NOT ready"} — ${fails} failure(s), ${warns} warning(s)\n`);

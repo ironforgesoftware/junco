@@ -871,6 +871,27 @@ export const LEVERS: Lever[] = [
     reload: "restart",
     description: "How long a proposed chat submit waits for y/n in the dashboard before expiring.",
   },
+  {
+    path: "chat.thinkTags",
+    type: "enum",
+    enumValues: ["auto", "on", "off"],
+    default: "auto",
+    editable: true,
+    reload: "live",
+    description:
+      "Split inline <think>…</think> spans from the answer into the thinking block; auto skips a turn that already streams native thinking.",
+  },
+  {
+    path: "chat.maxFps",
+    type: "number",
+    default: 60,
+    min: 10,
+    max: 120,
+    editable: true,
+    reload: "restart",
+    description:
+      "Dashboard frame cap while the chat streams (lower on a slow terminal or machine).",
+  },
 
   // --- assess.* ---
   {

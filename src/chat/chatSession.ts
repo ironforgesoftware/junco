@@ -2,8 +2,9 @@
  * One repo's chat session (spec 2026-09-01 §2.3). Owns: meta.json, the
  * transcript (a synchronous best-effort append so every persisted line's
  * end-offset is known at write time — the SSE `id`, §5.2), the in-memory
- * record bus (live fan-out; message_update is bus-only), the lazily built SDK
- * session, and the current turn. Never imports the SDK: the two SDK-touching
+ * record bus (live fan-out; message_update never reaches the bus or the file —
+ * the LiveTurn accumulator re-tags it into slim bus-only records, spec
+ * 2026-09-06 §1.2), the lazily built SDK session, and the current turn. Never imports the SDK: the two SDK-touching
  * helpers come from agent/session.ts through deps.
  */
 import {
@@ -15,6 +16,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Config, Usage } from "../types.js";
 import {
@@ -36,6 +38,7 @@ import { log } from "../logging.js";
 import { chatSlug } from "./chatKey.js";
 import { TurnDeadline, runChatTurn, type ChatTurnResult } from "./chatTurn.js";
 import { buildChatPrompt } from "./chatPrompt.js";
+import { makeLiveTurn, type LiveTurn } from "./liveTurn.js";
 import { findChatDraft } from "./draftStore.js";
 import { runSubmit, type SubmitExecDeps } from "./submitExec.js";
 import {
@@ -104,6 +107,9 @@ export interface ChatSessionDeps {
   /** Test seam for the confirm wait (default
    *  `cfg.chat.confirmTimeoutMinutes` × 60 000). */
   confirmTimeoutMs?: number;
+  /** Mints the per-turn id on `junco_chat_turn_start` (spec 2026-09-06 §1.1);
+   *  default `randomUUID()`, injected so tests get deterministic ids. */
+  turnId?: () => string;
 }
 
 /**
@@ -202,6 +208,11 @@ export class ChatSession {
   /** The running turn's pausable clock (spec 2026-09-03 §3.3), owned here so
    *  a pending confirmation can stop it. */
   private turnDeadline: TurnDeadline | null = null;
+  /** The running prompt turn's accumulator (spec 2026-09-06 §1.2): SDK events
+   *  in, slim bus-only records out, plus the snapshot a late subscriber gets
+   *  first. Null between turns and for steers (no turn of their own). */
+  private liveTurn: LiveTurn | null = null;
+  private readonly turnId: () => string;
   /** The one `junco_submit` awaiting the operator, if any. */
   private pending: { commandId: string; settle: (d: Decision) => void } | null = null;
   private readonly submitDeps: SubmitExecDeps;
@@ -233,6 +244,7 @@ export class ChatSession {
     this.factoryFor = deps.sessionFactoryFor ?? makeChatSessionFactory;
     this.submitDeps = deps.submit ?? {};
     this.confirmTimeoutMs = deps.confirmTimeoutMs ?? opts.cfg.chat.confirmTimeoutMinutes * 60_000;
+    this.turnId = deps.turnId ?? (() => randomUUID());
   }
 
   get streaming(): boolean {
@@ -288,11 +300,24 @@ export class ChatSession {
     this.publish(line, this.persist(line));
   }
 
-  /** SDK event: bus always; file unless message_update (spec §1.3). */
+  /** SDK event: file unless message_update (spec 2026-09-01 §1.3); the bus gets
+   *  the slim re-tagged records from LiveTurn instead of the raw delta
+   *  (spec 2026-09-06 §1.2). Everything that is persisted still fans out as-is. */
   private emitSdk(event: unknown): void {
-    const line = JSON.stringify(event) + "\n";
     const type = (event as { type?: unknown } | null)?.type;
-    this.publish(line, type === "message_update" ? null : this.persist(line));
+    if (this.liveTurn !== null) {
+      for (const rec of this.liveTurn.observe(event))
+        this.publish(JSON.stringify(rec) + "\n", null);
+    }
+    if (type === "message_update") return;
+    const line = JSON.stringify(event) + "\n";
+    this.publish(line, this.persist(line));
+  }
+
+  /** The in-flight turn's `junco_chat_partial` as a bus line (spec 2026-09-06
+   *  §1.1) — what a subscriber attaching mid-turn gets first; null when idle. */
+  partialLine(): string | null {
+    return this.liveTurn === null ? null : JSON.stringify(this.liveTurn.partial()) + "\n";
   }
 
   /** Complete lines from `since`; each offset is the position after its newline. */
@@ -630,8 +655,10 @@ export class ChatSession {
       };
     }
     this.writeRecord({ type: "junco_chat_prompt", text, mode: "prompt", source: opts.source });
+    const turn = this.turnId();
     this.writeRecord({
       type: "junco_chat_turn_start",
+      turn,
       modelId: chatCfg.model.id,
       // The REAL list the session was built with — junco_submit included when
       // it is on (spec 2026-09-03 §3.2).
@@ -646,6 +673,7 @@ export class ChatSession {
     // does its own.
     const deadline = new TurnDeadline(opts.timeoutMs, this.now);
     this.turnDeadline = deadline;
+    this.liveTurn = makeLiveTurn({ turn, now: this.now, thinkTags: this.cfg.chat.thinkTags });
     const run = runChatTurn(sdk, {
       text,
       timeoutMs: opts.timeoutMs,
@@ -668,6 +696,9 @@ export class ChatSession {
       const r = await run;
       this.turns++;
       this.lastActivityAt = this.ts();
+      // The splitter's held tail goes out BEFORE the turn closes, so the
+      // client sees the last thinking chunk while the turn is still current.
+      this.flushLiveTurn();
       if (r.status === "aborted") {
         this.writeRecord({
           type: "junco_chat_turn_aborted",
@@ -692,10 +723,19 @@ export class ChatSession {
       }
       return r;
     } finally {
+      this.flushLiveTurn();
       this.inFlight = null;
       this.turnAbort = null;
       this.turnDeadline = null;
     }
+  }
+
+  /** Publish `finish()`'s tail (bus-only) and drop the accumulator; idempotent. */
+  private flushLiveTurn(): void {
+    const live = this.liveTurn;
+    if (live === null) return;
+    this.liveTurn = null;
+    for (const rec of live.finish()) this.publish(JSON.stringify(rec) + "\n", null);
   }
 
   /**

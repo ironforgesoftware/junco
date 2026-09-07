@@ -157,41 +157,54 @@ const V1_END: RunEnd = {
   usage: null,
 };
 
-export function summarizeTranscript(lines: string[]): TranscriptSummary {
-  const out: TranscriptSummary = {
+interface SummaryReducerState {
+  open: RunSummary | null;
+  /** Opened by junco_run_start → agent_end must not close it. */
+  framed: boolean;
+  provisional: TurnSummary | null;
+  /** Set by junco_chat_prompt, consumed by the NEXT junco_chat_turn_start
+   * (a steer prompt lands on the already-open run instead — spec §1.3). */
+  pendingPrompt: string | null;
+}
+
+/**
+ * The transcript reducer, exposed step-wise (spec 2026-09-06 §3.3): `push`
+ * folds one line into the builder's own `out`/`st`; `result()` derives the
+ * summary the whole-ring `summarizeTranscript` would return for the lines
+ * pushed so far — on a copy, so the live/provisional tail is never written
+ * into the builder's open run, and a summary handed out earlier is never
+ * touched by a later `push`.
+ */
+export class SummaryBuilder {
+  private readonly out: TranscriptSummary = {
     ticketId: null,
     version: null,
     runs: [],
     live: false,
     invalidLines: 0,
   };
-  // Reducer state lives on one object (not `let`s) so the closures below
-  // never trip TS's captured-variable narrowing.
-  const st: {
-    open: RunSummary | null;
-    framed: boolean;
-    provisional: TurnSummary | null;
-    /** Set by junco_chat_prompt, consumed by the NEXT junco_chat_turn_start
-     * (a steer prompt lands on the already-open run instead — spec §1.3). */
-    pendingPrompt: string | null;
-  } = {
+  // Reducer state lives on one object (not fields narrowed per method) so
+  // the helpers below never trip TS's captured-variable narrowing.
+  private readonly st: SummaryReducerState = {
     open: null,
-    framed: false, // opened by junco_run_start → agent_end must not close it
+    framed: false,
     provisional: null,
     pendingPrompt: null,
   };
 
-  const closeRun = (end: RunEnd | null): void => {
+  private closeRun(end: RunEnd | null): void {
+    const st = this.st;
     if (st.open === null) return;
     if (st.provisional !== null) st.open.turns.push(st.provisional);
     st.provisional = null;
     st.open.end = end;
     st.open = null;
-  };
-  const openRun = (start: RunStartRecord | null): RunSummary => {
-    closeRun(null); // a run_start over an open run: the open one is truncated
+  }
+
+  private openRun(start: RunStartRecord | null): RunSummary {
+    this.closeRun(null); // a run_start over an open run: the open one is truncated
     const run: RunSummary = {
-      index: out.runs.length + 1,
+      index: this.out.runs.length + 1,
       flow: start?.flow ?? null,
       modelId: start?.modelId ?? null,
       startedAt: start?.ts ?? null,
@@ -202,46 +215,51 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
       prompt: null,
       notes: [],
     };
-    out.runs.push(run);
-    st.open = run;
-    st.framed = start !== null;
+    this.out.runs.push(run);
+    this.st.open = run;
+    this.st.framed = start !== null;
     return run;
-  };
-  const ensureRun = (): RunSummary => st.open ?? openRun(null);
+  }
+
+  private ensureRun(): RunSummary {
+    return this.st.open ?? this.openRun(null);
+  }
+
   // A note lands on the open run, else on the last run (a draft record
   // follows its turn's end record, spec §3); a note before ANY run gets a
   // prompt-less run that is closed immediately, so it renders and the
   // transcript is not reported live.
-  const noteRun = (): RunSummary => {
-    if (st.open !== null) return st.open;
-    const last = out.runs[out.runs.length - 1];
+  private noteRun(): RunSummary {
+    if (this.st.open !== null) return this.st.open;
+    const last = this.out.runs[this.out.runs.length - 1];
     if (last !== undefined) return last;
-    const run = openRun(null);
+    const run = this.openRun(null);
     run.flow = "chat";
-    closeRun(V1_END);
+    this.closeRun(V1_END);
     return run;
-  };
+  }
 
-  for (const line of lines) {
-    if (line.trim() === "") continue;
+  /** Fold one transcript line in. A blank line is a no-op. */
+  push(line: string): void {
+    if (line.trim() === "") return;
     const p = parseTranscriptLine(line);
     if (p.kind === "invalid") {
-      out.invalidLines++;
-      continue;
+      this.out.invalidLines++;
+      return;
     }
     if (p.kind === "junco") {
       const r = p.record;
       switch (r.type) {
         case "junco_meta":
-          out.ticketId = r.ticketId;
-          out.version = r.version;
+          this.out.ticketId = r.ticketId;
+          this.out.version = r.version;
           break;
         case "junco_run_start":
-          openRun(r);
+          this.openRun(r);
           break;
         case "junco_run_end":
-          ensureRun();
-          closeRun({
+          this.ensureRun();
+          this.closeRun({
             stopReason: r.stopReason,
             errorMessage: r.errorMessage,
             timedOut: r.timedOut,
@@ -251,15 +269,15 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
           });
           break;
         case "junco_guard_decision":
-          ensureRun().guardDecisions.push(r);
+          this.ensureRun().guardDecisions.push(r);
           break;
         case "junco_chat_prompt":
           // A prompt opens the NEXT run's frame; a steer lands on the open one.
-          if (r.mode === "steer" && st.open !== null) break;
-          st.pendingPrompt = r.text;
+          if (r.mode === "steer" && this.st.open !== null) break;
+          this.st.pendingPrompt = r.text;
           break;
         case "junco_chat_turn_start": {
-          const run = openRun({
+          const run = this.openRun({
             type: "junco_run_start",
             flow: "chat",
             body: "",
@@ -270,13 +288,13 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
             guard: { enabled: false },
             ts: r.ts,
           });
-          run.prompt = st.pendingPrompt;
-          st.pendingPrompt = null;
+          run.prompt = this.st.pendingPrompt;
+          this.st.pendingPrompt = null;
           break;
         }
         case "junco_chat_turn_end":
-          ensureRun();
-          closeRun({
+          this.ensureRun();
+          this.closeRun({
             stopReason: r.status === "ok" ? "stop" : "error",
             errorMessage: r.errorMessage,
             timedOut: false,
@@ -286,8 +304,8 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
           });
           break;
         case "junco_chat_turn_aborted":
-          ensureRun();
-          closeRun({
+          this.ensureRun();
+          this.closeRun({
             stopReason: `aborted:${r.reason}`,
             errorMessage: null,
             timedOut: r.reason === "timeout",
@@ -297,10 +315,15 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
           });
           break;
         case "junco_chat_turn_rejected":
-          noteRun().notes.push({ kind: "rejected", reason: r.reason, until: r.until, ts: r.ts });
+          this.noteRun().notes.push({
+            kind: "rejected",
+            reason: r.reason,
+            until: r.until,
+            ts: r.ts,
+          });
           break;
         case "junco_chat_draft":
-          noteRun().notes.push({
+          this.noteRun().notes.push({
             kind: "draft",
             draftId: r.draftId,
             draftKind: r.kind,
@@ -327,7 +350,7 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
           // One row per command: the terminal record replaces the proposed
           // one wherever it sits (the daemon-restart `expired` stamp lands
           // before any new run opens, so the proposal may be in an earlier run).
-          const replaced = out.runs.some((run) => {
+          const replaced = this.out.runs.some((run) => {
             const i = run.notes.findIndex(
               (n) => n.kind === "command" && n.commandId === r.commandId,
             );
@@ -335,39 +358,39 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
             run.notes[i] = note;
             return true;
           });
-          if (!replaced) noteRun().notes.push(note);
+          if (!replaced) this.noteRun().notes.push(note);
           break;
         }
         case "junco_chat_session_reset":
-          noteRun().notes.push({ kind: "reset", reason: r.reason, ts: r.ts });
+          this.noteRun().notes.push({ kind: "reset", reason: r.reason, ts: r.ts });
           break;
         case "junco_chat_transcript_degraded":
-          noteRun().notes.push({ kind: "degraded", ts: r.ts });
+          this.noteRun().notes.push({ kind: "degraded", ts: r.ts });
           break;
         default:
           break; // forward compat: an unknown junco_* record is ignored
       }
-      continue;
+      return;
     }
     const e = p.event;
     switch (e.type) {
       case "agent_start":
-        if (st.open === null) openRun(null);
+        if (this.st.open === null) this.openRun(null);
         break;
       case "agent_end":
-        if (st.open !== null && !st.framed) closeRun(V1_END);
+        if (this.st.open !== null && !this.st.framed) this.closeRun(V1_END);
         break;
       case "compaction_start":
       case "compaction_end":
-        ensureRun().notes.push({
+        this.ensureRun().notes.push({
           kind: "compaction",
           phase: e.type === "compaction_start" ? "start" : "end",
           ts: null,
         });
         break;
       case "tool_execution_start": {
-        const run = ensureRun();
-        st.provisional ??= {
+        const run = this.ensureRun();
+        this.st.provisional ??= {
           index: run.turns.length,
           provisional: true,
           thinking: null,
@@ -375,7 +398,7 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
           toolCalls: [],
           usage: null,
         };
-        st.provisional.toolCalls.push({
+        this.st.provisional.toolCalls.push({
           id: str(e.toolCallId) ?? "",
           name: str(e.toolName) ?? "?",
           args: isRecord(e.args) ? e.args : {},
@@ -385,7 +408,7 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
         break;
       }
       case "tool_execution_end": {
-        const call = st.provisional?.toolCalls.find((c) => c.id === e.toolCallId);
+        const call = this.st.provisional?.toolCalls.find((c) => c.id === e.toolCallId);
         if (call)
           call.result = resultFromContent(
             isRecord(e.result) ? e.result.content : undefined,
@@ -394,7 +417,7 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
         break;
       }
       case "turn_end": {
-        const run = ensureRun();
+        const run = this.ensureRun();
         const msg = isRecord(e.message) ? e.message : {};
         const content = Array.isArray(msg.content) ? msg.content : [];
         const thinking: string[] = [];
@@ -418,9 +441,9 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
           const call = toolCalls.find((c) => c.id === r.toolCallId);
           if (call) call.result = resultFromContent(r.content, r.isError === true);
         }
-        if (st.provisional !== null) {
-          run.toolCallCount -= st.provisional.toolCalls.length;
-          st.provisional = null;
+        if (this.st.provisional !== null) {
+          run.toolCallCount -= this.st.provisional.toolCalls.length;
+          this.st.provisional = null;
         }
         run.toolCallCount += toolCalls.length;
         run.turns.push({
@@ -437,11 +460,56 @@ export function summarizeTranscript(lines: string[]): TranscriptSummary {
         break;
     }
   }
-  if (st.open !== null) {
-    if (st.provisional !== null) st.open.turns.push(st.provisional);
-    out.live = true;
+
+  /**
+   * The summary for everything pushed so far. The open run's provisional turn
+   * and `live` are RE-DERIVED on a copy: `runs` is cloned one level deep (each
+   * run's arrays too — `noteRun` and the non-local command replacement write
+   * into closed runs), and the open run additionally gets `st.provisional`
+   * appended to its `turns`. The builder's own `st.open.turns` is never pushed
+   * to here, so calling `result()` twice does not double the tail.
+   */
+  result(): TranscriptSummary {
+    const { open, provisional } = this.st;
+    const runs = this.out.runs.map((run) => {
+      const turns =
+        run === open && provisional !== null
+          ? [
+              ...run.turns,
+              { ...provisional, toolCalls: provisional.toolCalls.map((c) => ({ ...c })) },
+            ]
+          : [...run.turns];
+      return { ...run, turns, guardDecisions: [...run.guardDecisions], notes: [...run.notes] };
+    });
+    return { ...this.out, runs, live: open !== null };
   }
-  return out;
+}
+
+export function summarizeTranscript(lines: string[]): TranscriptSummary {
+  const b = new SummaryBuilder();
+  for (const line of lines) b.push(line);
+  return b.result();
+}
+
+/** The incremental reducer's carried state — opaque to callers. */
+export type SummaryState = SummaryBuilder;
+
+/**
+ * Incremental counterpart of `summarizeTranscript` (spec 2026-09-06 §3.3):
+ * folds `line` into `state` (a fresh builder when null) and returns the
+ * summary a whole-ring recompute would give — `tests/transcriptSummaryIncremental.test.ts`
+ * pins the equality at every prefix. `state` is authoritative; `_prev` is the
+ * summary the caller holds, accepted so the call site reads as a reducer
+ * (`{summary, state} = extendSummary(summary, state, line)`) and never mutated.
+ */
+export function extendSummary(
+  _prev: TranscriptSummary | null,
+  state: SummaryState | null,
+  line: string,
+): { summary: TranscriptSummary; state: SummaryState } {
+  const b = state ?? new SummaryBuilder();
+  b.push(line);
+  return { summary: b.result(), state: b };
 }
 
 /** Every tool call id in file order — the transcript view's cursor index space. */

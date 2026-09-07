@@ -270,6 +270,7 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     expect(sub.ok).toBe(true);
     if (!sub.ok) return;
     expect(sub.value.replay.map((r) => JSON.parse(r.line).type)).toContain("junco_chat_turn_end");
+    expect(sub.value.partial).toBeNull(); // idle: nothing in flight to snapshot
     const p = await m.prompt("acme/api", "two");
     await vi.waitFor(() => expect(m.status("acme/api")?.streaming).toBe(true));
     expect(await m.abort("acme/api")).toEqual({ ok: true, value: { aborted: true } });
@@ -278,6 +279,37 @@ describe("ChatManager (spec 2026-09-01 §2.4, §4)", () => {
     expect(await m.abort("acme/api")).toEqual({ ok: true, value: { aborted: false } });
     expect(await m.fresh("acme/api")).toEqual({ ok: true, value: null });
     expect(m.status("acme/api")?.turns).toBe(0);
+  });
+
+  it("subscribe mid-turn hands over the junco_chat_partial snapshot with the streamed prefix (spec 2026-09-06 §1.1)", async () => {
+    const { m } = setup({}, [
+      {
+        events: [
+          { type: "message_start", message: { role: "assistant" } },
+          {
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hel" },
+          },
+        ],
+        delayMs: 10_000,
+      },
+    ]);
+    const p = await m.prompt("acme/api", "one");
+    await vi.waitFor(() => expect(m.status("acme/api")?.streaming).toBe(true));
+    const sub = await m.subscribe("acme/api", 0, { onLine: () => {}, onEnd: () => {} });
+    expect(sub.ok).toBe(true);
+    if (!sub.ok) return;
+    expect(sub.value.partial).not.toBeNull();
+    const snap = JSON.parse(sub.value.partial!);
+    expect(snap.type).toBe("junco_chat_partial");
+    expect(snap.blocks[0]).toMatchObject({ kind: "text", contentIndex: 0, text: "hel" });
+    // Bus-only: the replay (the file) never carries it.
+    expect(sub.value.replay.map((r) => JSON.parse(r.line).type)).not.toContain(
+      "junco_chat_partial",
+    );
+    expect(await m.abort("acme/api")).toEqual({ ok: true, value: { aborted: true } });
+    if (p.ok) await p.value.done;
+    sub.value.unsubscribe();
   });
 
   it("note appends a junco_chat_draft record with a server ts", async () => {

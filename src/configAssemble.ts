@@ -245,6 +245,8 @@ export function assembleConfig(
       turnTimeoutMinutes: d.chat.turnTimeoutMinutes ?? null,
       submitTool: d.chat.submitTool,
       confirmTimeoutMinutes: d.chat.confirmTimeoutMinutes,
+      thinkTags: d.chat.thinkTags,
+      maxFps: d.chat.maxFps,
     },
   };
 }

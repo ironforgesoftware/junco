@@ -125,9 +125,9 @@ maxFps: number;
 ```ts
   {
     path: "chat.thinkTags",
-    type: "string",
+    type: "enum",
     default: "auto",
-    values: ["auto", "on", "off"],
+    enumValues: ["auto", "on", "off"],
     editable: true,
     reload: "live",
     description:
@@ -145,7 +145,7 @@ maxFps: number;
   },
 ```
 
-(Match the enum-lever shape the bijection test at `tests/configLevers.test.ts:97` expects — copy an existing `values:` lever, e.g. `sandbox.backend`, for the exact field name.)
+(The bijection test at `tests/configLevers.test.ts:97` expects `type: "enum"` + `enumValues`, as `sandbox.backend` uses. The `FLAT_KEYS` rename map in the same file (~line 327) also needs a row per new leaf.)
 
 `tests/helpers/config.ts` chat ballast: add `thinkTags: "auto", maxFps: 60,`.
 
@@ -166,7 +166,7 @@ Spec §1.1. Additive `turn` on `ChatTurnStartRecord`; a separate `ChatBusRecord`
 **Files:**
 
 - Create: `src/chat/liveBlocks.ts` (types only in this task; the reducer arrives in Task 8)
-- Modify: `src/agent/transcriptSchema.ts` (`ChatTurnStartRecord` 107–113; export a `ChatBusRecord` union next to `ChatRecord` 183–192)
+- Modify: `src/agent/transcriptSchema.ts` (`ChatTurnStartRecord` 107–113 gains `turn?`; `ChatBusRecord` lives ONLY in `src/chat/liveBlocks.ts` — `src/agent/` must not depend on `src/chat/`)
 - Modify: `tests/helpers/transcriptFixtures.ts` (add `chatDelta`, `chatTool`, `chatPartial`, `msgUpdate` builders; `chatTurnStart` gains a default `turn`)
 - Test: `tests/transcriptSchema.test.ts` (parse round-trip), `tests/transcriptFixtures.test.ts` if it exists, else the builders are exercised by later tasks
 
@@ -708,7 +708,7 @@ const CASES: string[][] = [
     chatTurnStart(),
     chatDraft(),
     chatCommand({ status: "proposed" }),
-    chatCommand({ status: "done" }),
+    chatCommand({ status: "ran" }),
   ],
   [
     metaLine({ ticketId: "a" }),

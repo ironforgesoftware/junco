@@ -164,7 +164,10 @@ export function chatScriptText(text: string, costUsd = 0): ChatScript {
   return {
     events: [
       { type: "message_start", message: { role: "assistant" } },
-      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: text } },
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text },
+      },
       {
         type: "turn_end",
         message: {
@@ -177,6 +180,29 @@ export function chatScriptText(text: string, costUsd = 0): ChatScript {
       },
       { type: "agent_end", messages: [], willRetry: false },
       { type: "agent_settled" },
+    ],
+  };
+}
+
+/** Like chatScriptText, but the model reasons natively first: a
+ * `thinking_delta` (content block 0) precedes the `text_delta` (block 1) —
+ * the shape that makes `chat.thinkTags: "auto"` stop splitting `<think>` tags
+ * (spec 2026-09-06 §2.1). */
+export function chatScriptThinking(thinking: string, text: string, costUsd = 0): ChatScript {
+  const base = chatScriptText(text, costUsd);
+  return {
+    events: [
+      base.events[0],
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: thinking },
+      },
+      { type: "message_update", assistantMessageEvent: { type: "thinking_end", contentIndex: 0 } },
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: text },
+      },
+      ...base.events.slice(2),
     ],
   };
 }

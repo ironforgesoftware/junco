@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChatSession, chatCfgFor } from "../src/chat/chatSession.js";
+import { ChatSession, chatCfgFor, type ChatSessionDeps } from "../src/chat/chatSession.js";
 import type {
   ChatSessionLike,
   SessionManagerMode,
@@ -12,7 +12,9 @@ import { makeConfig, READ_ONLY_TOOLS, type ConfigSeams } from "./helpers/config.
 import {
   fakeChatSession,
   chatScriptText,
+  chatScriptThinking,
   chatScriptToolCall,
+  type ChatScript,
   type FakeChatSession,
 } from "./helpers/fakeSession.js";
 import { fakeSpawn } from "./helpers/fakeSpawn.js";
@@ -56,7 +58,11 @@ const fakeSm = async (mode: SessionManagerMode): Promise<{ manager: unknown; fil
   return { manager: { tag: "sm" }, file: mode.open.file };
 };
 
-function makeSession(dir: string, scripts = [chatScriptText("hi", 0.1)]) {
+function makeSession(
+  dir: string,
+  scripts: ChatScript[] = [chatScriptText("hi", 0.1)],
+  deps: Partial<ChatSessionDeps> = {},
+) {
   const factory = fakeChatSession(scripts);
   let last: FakeChatSession | null = null;
   const session = new ChatSession(
@@ -71,6 +77,7 @@ function makeSession(dir: string, scripts = [chatScriptText("hi", 0.1)]) {
     {
       makeSessionManager: fakeSm,
       sessionFactoryFor: () => async () => (last = await factory()),
+      ...deps,
     },
   );
   return { session, sdk: () => last };
@@ -244,11 +251,129 @@ describe("ChatSession (spec 2026-09-01 §2.3, §5.2, §11)", () => {
       "junco_chat_turn_end",
     ]);
     const busTypes = bus.map((b) => b.type);
-    expect(busTypes).toContain("message_update");
-    expect(bus.find((b) => b.type === "message_update")!.offset).toBeNull();
+    expect(busTypes).not.toContain("message_update");
+    const delta = bus.find((b) => b.type === "junco_chat_delta");
+    expect(delta?.offset).toBeNull();
     expect(bus.find((b) => b.type === "turn_end")!.offset).toBeGreaterThan(0);
     expect(session.turns).toBe(1);
     expect(session.streaming).toBe(false);
+  });
+
+  it("turn_start carries the minted turn id; deltas and the partial snapshot cite it (spec 2026-09-06 §1)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root, [chatScriptText("hi", 0.1)], { turnId: () => "turn-A" });
+    const lines: string[] = [];
+    session.subscribe({ onLine: (l) => lines.push(l), onEnd: () => {} });
+    await session.prompt("hello", { source: "operator", timeoutMs: 5_000 });
+    const recs = lines.map((l) => JSON.parse(l));
+    const start = recs.find((r) => r.type === "junco_chat_turn_start");
+    expect(start.turn).toBe("turn-A");
+    const d = recs.find((r) => r.type === "junco_chat_delta");
+    expect(d).toMatchObject({ turn: "turn-A", kind: "text", contentIndex: 0, delta: "hi" });
+    // The persisted turn_start carries the id too; deltas never reach the file.
+    const persisted = readFileSync(session.transcriptPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(persisted.find((r) => r.type === "junco_chat_turn_start").turn).toBe("turn-A");
+    expect(persisted.map((r) => r.type)).not.toContain("junco_chat_delta");
+    expect(session.partialLine()).toBeNull(); // idle
+  });
+
+  it("partialLine() is the junco_chat_partial snapshot mid-turn, and the bus-only tail is flushed before turn_end/aborted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    // A prefix streams, then the run parks until abort() — a subscriber that
+    // attaches now must get the text so far.
+    const { session } = makeSession(
+      root,
+      [
+        {
+          events: [
+            { type: "message_start", message: { role: "assistant" } },
+            {
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "<think>hel" },
+            },
+          ],
+          delayMs: 10_000,
+        },
+      ],
+      { turnId: () => "turn-B" },
+    );
+    const bus: Array<{ type: string; offset: number | null; rec: Record<string, unknown> }> = [];
+    session.subscribe({
+      onLine: (line, offset) => {
+        const rec = JSON.parse(line);
+        bus.push({ type: rec.type, offset, rec });
+      },
+      onEnd: () => {},
+    });
+    // ChatSession.prompt() resolves with the finished turn: hold the promise.
+    const turn = session.prompt("hello", {
+      source: "operator",
+      timeoutMs: 5_000,
+      abortGraceMs: 50,
+    });
+    await until(() => session.streaming && bus.some((b) => b.type === "junco_chat_delta"));
+    const partial = session.partialLine();
+    expect(partial).not.toBeNull();
+    expect(partial!.endsWith("\n")).toBe(true);
+    const snap = JSON.parse(partial!);
+    expect(snap).toMatchObject({ type: "junco_chat_partial", turn: "turn-B" });
+    // The prefix sits behind an open <think> tag under thinkTags=auto: the
+    // splitter has released the safe part as thinking, nothing as text.
+    expect(snap.blocks[0]).toMatchObject({ kind: "thinking", contentIndex: 0 });
+    expect(snap.blocks[0].text.length).toBeGreaterThan(0);
+    expect("hel".startsWith(snap.blocks[0].text)).toBe(true);
+    expect(snap.blocks.every((b: { text?: string }) => (b.text ?? "").indexOf("<think>") < 0)).toBe(
+      true,
+    );
+    await session.abort();
+    expect((await turn).status).toBe("aborted");
+    const types = bus.map((b) => b.type);
+    // finish() releases the splitter's held tail (the rest of "hel") on the
+    // bus before the turn closes — never in the file.
+    const lastDelta = types.lastIndexOf("junco_chat_delta");
+    const closed = types.indexOf("junco_chat_turn_aborted");
+    expect(lastDelta).toBeGreaterThan(-1);
+    expect(lastDelta).toBeLessThan(closed);
+    const thinking = bus
+      .filter((b) => b.type === "junco_chat_delta" && b.rec.kind === "thinking")
+      .map((b) => b.rec.delta)
+      .join("");
+    expect(thinking).toBe("hel");
+    for (const b of bus.filter((x) => x.type === "junco_chat_delta")) expect(b.offset).toBeNull();
+    expect(session.partialLine()).toBeNull();
+    expect(records(session.transcriptPath)).not.toContain("junco_chat_delta");
+  });
+
+  it("<think> tags are split into thinking deltas under thinkTags=auto; native thinking disables the split (spec 2026-09-06 §2.1)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "junco-chat-"));
+    const { session } = makeSession(root, [
+      chatScriptText("<think>plan</think>ok"),
+      chatScriptThinking("n", "<think>x"),
+    ]);
+    const deltas: Array<{ kind: string; delta: string }> = [];
+    session.subscribe({
+      onLine: (line) => {
+        const rec = JSON.parse(line);
+        if (rec.type === "junco_chat_delta") deltas.push({ kind: rec.kind, delta: rec.delta });
+      },
+      onEnd: () => {},
+    });
+    await session.prompt("one", { source: "operator", timeoutMs: 5_000 });
+    const joined = (kind: string) =>
+      deltas
+        .filter((d) => d.kind === kind)
+        .map((d) => d.delta)
+        .join("");
+    expect(joined("thinking")).toBe("plan");
+    expect(joined("text")).toBe("ok");
+    deltas.length = 0;
+    await session.prompt("two", { source: "operator", timeoutMs: 5_000 });
+    // Native reasoning arrived first: the tag in the text is content, not a marker.
+    expect(joined("thinking")).toBe("n");
+    expect(joined("text")).toBe("<think>x");
   });
 
   it("readLines(since) returns complete lines with end-of-line offsets, and resumes exactly after an echoed offset", async () => {

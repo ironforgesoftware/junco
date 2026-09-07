@@ -36,6 +36,10 @@ export interface ChatRoutesDeps {
    *  daemon's configured `healthHost` when it binds loopback under a name
    *  other than those three. Absent → only the three fixed values pass. */
   allowedHost?: string;
+  /** Disable Nagle on the SSE socket (spec 2026-09-06 §1.4): a streamed
+   *  delta is tens of bytes, and a coalescing socket would hold each one
+   *  until the previous ACK. Default `res.socket?.setNoDelay(true)`. */
+  setNoDelay?: (res: ServerResponse) => void;
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -147,6 +151,7 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
   const pingMs = deps.pingMs ?? 15_000;
   const maxTextBytes = deps.maxTextBytes ?? 64 * 1024;
   const allowedHost = deps.allowedHost;
+  const setNoDelay = deps.setNoDelay ?? ((res: ServerResponse) => res.socket?.setNoDelay(true));
 
   const sse = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
     const key = url.searchParams.get("key");
@@ -234,7 +239,13 @@ export function makeChatRoutes(manager: ChatRoutesManager, deps: ChatRoutesDeps 
     // otherwise leave a client's fetch() awaiting a response that never
     // arrives, so flush explicitly.
     res.flushHeaders();
+    setNoDelay(res);
     for (const { offset, line } of r.value.replay) res.write(`id: ${offset}\ndata: ${line}\n\n`);
+    // The in-flight turn's snapshot goes after the file replay and before
+    // anything live (spec 2026-09-06 §1.1): id-less, since it is bus-only
+    // and Last-Event-ID must always name a persisted line. `pending` holds
+    // lines that arrived after subscribe() attached, so they follow it.
+    if (r.value.partial !== null) res.write(`data: ${r.value.partial.replace(/\n$/, "")}\n\n`);
     for (const frame of pending) res.write(frame);
     if (ended) {
       res.end();
