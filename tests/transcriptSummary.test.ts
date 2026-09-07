@@ -12,6 +12,7 @@ import {
   agentStart,
   chatDraft,
   chatPrompt,
+  chatCheckout,
   chatReset,
   chatTurnAborted,
   chatTurnEnd,
@@ -363,6 +364,32 @@ describe("chat records (spec 2026-09-01 §1.3)", () => {
     expect(s.runs).toHaveLength(2);
     expect(s.runs[0]!.prompt).toBe("why is the build slow?");
     expect(s.runs[1]!.prompt).toBe("next");
+  });
+  it("a checkout record attaches as a note naming the commit the chat read (#526)", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatCheckout({ action: "fast_forwarded", from: "a".repeat(40), commits: 18 }),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      agentEnd(),
+      chatTurnEnd(),
+    ]);
+    // R23: it lands before any run, so it parks on the synthetic note run.
+    expect(s.runs).toHaveLength(2);
+    expect(s.runs[0]!.notes).toEqual([
+      {
+        kind: "checkout",
+        action: "fast_forwarded",
+        reason: null,
+        branch: "main",
+        head: "b".repeat(40),
+        from: "a".repeat(40),
+        commits: 18,
+        ts: expect.any(String),
+      },
+    ]);
+    expect(s.runs[1]!.notes).toEqual([]);
   });
   it("session reset and transcript-degraded records attach as notes on the open run", () => {
     const s = summarizeTranscript([

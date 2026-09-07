@@ -18,6 +18,7 @@ import type { Usage } from "./types.js";
 import { splitThinkingText } from "./chat/thinkSplitter.js";
 import {
   parseTranscriptLine,
+  type ChatCheckoutRecord,
   type ChatCommandRecord,
   type ChatDraftRecord,
   type ChatSessionResetRecord,
@@ -89,6 +90,18 @@ type ChatNote =
       exitCode: number | null;
       output: string | null;
       detail: string | null;
+      ts: string;
+    }
+  | {
+      /** #526: what the checkout was doing when the session opened — and, on
+       *  every outcome, the commit the conversation reasons about. */
+      kind: "checkout";
+      action: ChatCheckoutRecord["action"];
+      reason: ChatCheckoutRecord["reason"];
+      branch: string | null;
+      head: string | null;
+      from: string | null;
+      commits: number | null;
       ts: string;
     }
   | { kind: "reset"; reason: ChatSessionResetRecord["reason"]; ts: string }
@@ -362,6 +375,18 @@ export class SummaryBuilder {
           if (!replaced) this.noteRun().notes.push(note);
           break;
         }
+        case "junco_chat_checkout":
+          this.noteRun().notes.push({
+            kind: "checkout",
+            action: r.action,
+            reason: r.reason,
+            branch: r.branch,
+            head: r.head,
+            from: r.from,
+            commits: r.commits,
+            ts: r.ts,
+          });
+          break;
         case "junco_chat_session_reset":
           this.noteRun().notes.push({ kind: "reset", reason: r.reason, ts: r.ts });
           break;
