@@ -230,6 +230,49 @@ describe("runRestartCommand", () => {
     expect(f.prints.join("")).toContain("kick boom");
   });
 
+  // #522: a nonzero kick is not proof of failure. `kickstart -k` races its own
+  // kill against the relaunch, and systemd's --no-block can outlive the exec
+  // budget (#117) — the module's own comment already says the lock poll is what
+  // confirms a relaunch, so the poll has to run before the verdict, not after it.
+  it("a kick that errors but whose daemon comes up is a restart, not a failure", async () => {
+    const f = makeFakes({
+      plists: { "junco.plist": juncoPlist },
+      lockPids: [100, 100, 205],
+      kickFails: true,
+    });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(0);
+    expect(f.prints.join("")).toContain("restarted: pid 100 → 205");
+  });
+
+  // The dangerous case the message used to hide: the unit was stopped and did
+  // not come back, so KeepAlive.SuccessfulExit=false leaves it down forever.
+  it("a failed kick that left the daemon down says so and names the recovery command", async () => {
+    const f = makeFakes({
+      plists: { "junco.plist": juncoPlist },
+      lockPids: [100, null],
+      kickFails: true,
+    });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
+    const out = f.prints.join("");
+    expect(out).toContain("kick boom");
+    expect(out).toContain("is NOT running");
+    expect(out).toContain("launchctl kickstart gui/501/com.edelweiss.junco-worker");
+    expect(out).not.toContain("kickstart -k"); // the recovery must not re-race
+  });
+
+  it("a failed kick that killed nothing reports the old daemon still holding the lock", async () => {
+    const f = makeFakes({
+      plists: { "junco.plist": juncoPlist },
+      lockPids: [100],
+      kickFails: true,
+    });
+    expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
+    const out = f.prints.join("");
+    expect(out).toContain("kick boom");
+    expect(out).toContain("still running");
+    expect(out).not.toContain("is NOT running");
+  });
+
   it("pid never changes → drain warning, exit 1", async () => {
     const f = makeFakes({ plists: { "junco.plist": juncoPlist }, lockPids: [100] });
     expect(await runRestartCommand(CONFIG, f.deps)).toBe(1);
