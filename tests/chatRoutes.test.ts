@@ -50,6 +50,7 @@ function fakeManager(over: Partial<ChatRoutesManager> = {}) {
             { offset: 10, line: '{"type":"junco_meta"}' },
             { offset: 30, line: '{"type":"junco_chat_prompt"}' },
           ].filter((r) => r.offset > since),
+          partial: null,
           unsubscribe: () => subs.delete(sub),
         },
       };
@@ -480,6 +481,7 @@ describe("/chat routes (spec 2026-09-01 §5)", () => {
           ok: true,
           value: {
             replay: [],
+            partial: null,
             unsubscribe: () => {
               unsubscribeCalls++;
             },

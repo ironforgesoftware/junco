@@ -460,16 +460,24 @@ export class ChatManager {
     since: number,
     sub: ChatSubscriber,
   ): Promise<
-    ChatResult<{ replay: Array<{ offset: number; line: string }>; unsubscribe: () => void }>
+    ChatResult<{
+      replay: Array<{ offset: number; line: string }>;
+      /** The in-flight turn's `junco_chat_partial` line (bus-only, no offset),
+       *  or null when idle (spec 2026-09-06 §1.1). */
+      partial: string | null;
+      unsubscribe: () => void;
+    }>
   > {
     const got = await this.get(key);
     if (!got.ok) return got;
     await got.value.ensureMeta();
-    // Replay THEN attach: the sink is synchronous (chatSession.ts), so no line
-    // can land between the read and the subscribe without being in the file.
+    // Replay, snapshot, THEN attach — one synchronous section: the sink is
+    // synchronous (chatSession.ts), so no line can land between the read, the
+    // partial, and the subscribe without being in the file or the snapshot.
     const replay = got.value.readLines(since);
+    const partial = got.value.partialLine();
     const unsubscribe = got.value.subscribe(sub);
-    return { ok: true, value: { replay, unsubscribe } };
+    return { ok: true, value: { replay, partial, unsubscribe } };
   }
 
   status(key: string): ChatStatus | null {
