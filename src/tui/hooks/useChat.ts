@@ -7,7 +7,7 @@ import {
   anchorIds,
   commandAnchor,
   extendSummary,
-  summarizeTranscript,
+  SummaryBuilder,
   type SummaryState,
   type TranscriptSummary,
 } from "../../transcriptSummary.js";
@@ -159,14 +159,31 @@ const LIVE_TYPES: ReadonlySet<string> = new Set([
 ]);
 const isLiveRecord = (rec: JuncoRecord): boolean => LIVE_TYPES.has((rec as { type: string }).type);
 
+/** Lines an overflow splice drops at once (#510): a tenth of the ring, at least one. */
+export const overflowBatch = (ringSize: number): number => Math.max(1, Math.floor(ringSize / 10));
+
+/** `summarizeTranscript(ring)` that hands back the builder instead of only its
+ *  result, so it survives as the carried state after a splice: the next
+ *  `batch - 1` pushes extend it rather than start from an empty one. */
+function rebuildSummary(ring: readonly string[]): SummaryState {
+  const b = new SummaryBuilder();
+  for (const line of ring) b.push(line);
+  return b;
+}
+
 /**
  * chat-view domain (spec 2026-09-01 §8.5). The record ring lives in a ref
  * (`ringSize` persisted lines, default CHAT_RING); the summary is extended
  * one record at a time (`extendSummary`, spec 2026-09-06 §3.3) with the
- * builder state kept in a ref, and recomputed from the whole ring when the
+ * builder state kept in a ref, and rebuilt from the whole ring when the
  * ring overflows — so the invariant is: `summaryState` is null exactly when
- * the ring is empty or has just been spliced, and a whole-ring recompute
- * follows every splice (once the ring is full, every push is one).
+ * the ring is empty, and otherwise is the builder that has seen exactly the
+ * ring's lines (a whole-ring rebuild follows every splice). An overflow splices `overflowBatch(ringSize)`
+ * (`max(1, floor(ringSize / 10))`) oldest lines in one go, not one (#510):
+ * the ring then holds between `ringSize - batch + 1` and `ringSize` lines and
+ * the O(ring) recompute runs once per `batch` records instead of on every
+ * push once the ring is full. `overflowed` is sticky once set and the header
+ * still reads "showing last <ringSize>" (an upper bound, as before).
  *
  * The live turn (spec 2026-09-06 §3.2, §3.4): bus-only records fold into a
  * pending `LiveTurnState` synchronously in the SSE callback (a string
@@ -194,11 +211,17 @@ export function useChat({
   aliveRef,
   ringSize = CHAT_RING,
   resubscribeMs = CHAT_RESUBSCRIBE_MS,
+  onSummaryRebuild,
 }: {
   client: DashboardClient;
   aliveRef: MutableRefObject<boolean>;
   ringSize?: number;
   resubscribeMs?: number;
+  /** Test-only seam (#510): called with the ring's length each time an
+   *  overflow splice triggers the whole-ring `summarizeTranscript` recompute,
+   *  so a test can count rebuilds and bound the ring without reaching into
+   *  the hook's refs. Production callers leave it unset. */
+  onSummaryRebuild?: (ringLength: number) => void;
 }): ChatApi {
   const [chat, setChat] = useState<ChatState | null>(null);
   const ring = useRef<string[]>([]);
@@ -281,10 +304,13 @@ export function useChat({
       let summary: TranscriptSummary;
       ring.current.push(line);
       if (ring.current.length > ringSize) {
-        ring.current.splice(0, ring.current.length - ringSize);
+        // One splice of a batch, so the next `batch - 1` pushes stay
+        // incremental (see the invariant above; #510).
+        ring.current.splice(0, ring.current.length - ringSize + overflowBatch(ringSize) - 1);
         overflowed = true;
-        summaryState.current = null;
-        summary = summarizeTranscript(ring.current);
+        summaryState.current = rebuildSummary(ring.current);
+        summary = summaryState.current.result();
+        onSummaryRebuild?.(ring.current.length);
       } else {
         // The builder is authoritative (`_prev` is documented as unread).
         const r = extendSummary(null, summaryState.current, line);
@@ -404,7 +430,7 @@ export function useChat({
       });
       if (draftsChanged || settledCommand) void reloadDrafts();
     },
-    [scheduleFlush, ringSize, reloadDrafts],
+    [scheduleFlush, ringSize, reloadDrafts, onSummaryRebuild],
   );
 
   // Ruling R21: one subscription attempt. Wraps the raw record/status/end
