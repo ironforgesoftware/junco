@@ -14,8 +14,11 @@ function fakeMetrics() {
   return { snapshot: () => ({ pid: 1, uptimeSeconds: 1 }) as never };
 }
 
-/** A scriptable manager: records calls, lets a test push live lines/ends. */
-function fakeManager(over: Partial<ChatRoutesManager> = {}) {
+/** A scriptable manager: records calls, lets a test push live lines/ends.
+ *  `partial` is what `subscribe` reports as the in-flight snapshot line
+ *  (a full JSON line with its trailing newline, as the manager returns it). */
+function fakeManager(over: Partial<ChatRoutesManager> & { partial?: string | null } = {}) {
+  const { partial = null, ...overrides } = over;
   const calls: unknown[][] = [];
   const subs = new Set<ChatSubscriber>();
   const m: ChatRoutesManager & {
@@ -50,7 +53,7 @@ function fakeManager(over: Partial<ChatRoutesManager> = {}) {
             { offset: 10, line: '{"type":"junco_meta"}' },
             { offset: 30, line: '{"type":"junco_chat_prompt"}' },
           ].filter((r) => r.offset > since),
-          partial: null,
+          partial,
           unsubscribe: () => subs.delete(sub),
         },
       };
@@ -63,7 +66,7 @@ function fakeManager(over: Partial<ChatRoutesManager> = {}) {
       lastActivityAt: null,
       draftsParked: 0,
     }),
-    ...over,
+    ...overrides,
   };
   return m;
 }
@@ -369,15 +372,59 @@ describe("/chat routes (spec 2026-09-01 §5)", () => {
     expect(resp.headers.get("content-type")).toContain("text/event-stream");
     // give the replay a tick, then push live
     await new Promise((r) => setTimeout(r, 20));
-    m.push('{"type":"message_update"}', null);
+    m.push('{"type":"junco_chat_delta"}', null);
     m.push('{"type":"turn_end"}', 55);
     m.end();
     const events = await readSse(resp, 4);
     expect(events[0]).toBe('id: 30\ndata: {"type":"junco_chat_prompt"}');
-    expect(events[1]).toBe('data: {"type":"message_update"}');
+    expect(events[1]).toBe('data: {"type":"junco_chat_delta"}');
     expect(events[2]).toBe('id: 55\ndata: {"type":"turn_end"}');
     expect(events[3]).toBe('event: end\ndata: {"reason":"daemon_stopped"}');
     expect(m.calls[0]).toEqual(["subscribe", "acme/api", 10]);
+  });
+
+  it("GET /chat/events sends the in-flight partial after the replay and before any live frame, id-less (spec 2026-09-06 §1.1)", async () => {
+    const m = fakeManager({ partial: '{"type":"junco_chat_partial","seq":3}\n' });
+    const url = await serve(m, { pingMs: 60_000 });
+    const resp = await fetch(`${url}/chat/events?key=k&since=10`);
+    await new Promise((r) => setTimeout(r, 20));
+    m.push('{"type":"junco_chat_delta"}', null);
+    m.end();
+    const events = await readSse(resp, 4);
+    expect(events).toEqual([
+      'id: 30\ndata: {"type":"junco_chat_prompt"}',
+      'data: {"type":"junco_chat_partial","seq":3}',
+      'data: {"type":"junco_chat_delta"}',
+      'event: end\ndata: {"reason":"daemon_stopped"}',
+    ]);
+  });
+
+  it("GET /chat/events with a partial and an empty replay: the partial is still the first frame", async () => {
+    const m = fakeManager({ partial: '{"type":"junco_chat_partial","seq":1}\n' });
+    const url = await serve(m, { pingMs: 60_000 });
+    const resp = await fetch(`${url}/chat/events?key=k&since=100`);
+    await new Promise((r) => setTimeout(r, 20));
+    m.push('{"type":"turn_end"}', 120);
+    const events = await readSse(resp, 2);
+    expect(events).toEqual([
+      'data: {"type":"junco_chat_partial","seq":1}',
+      'id: 120\ndata: {"type":"turn_end"}',
+    ]);
+  });
+
+  it("GET /chat/events disables Nagle through the injected setNoDelay seam, once per stream (spec 2026-09-06 §1.4)", async () => {
+    const seen: unknown[] = [];
+    const url = await serve(fakeManager(), {
+      pingMs: 60_000,
+      setNoDelay: (res: unknown) => seen.push(res),
+    });
+    const resp = await fetch(`${url}/chat/events?key=k&since=10`);
+    await readSse(resp, 1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ headersSent: true, statusCode: 200 });
+    const resp2 = await fetch(`${url}/chat/events?key=k&since=10`);
+    await readSse(resp2, 1);
+    expect(seen).toHaveLength(2);
   });
 
   it("Last-Event-ID is honored as `since`", async () => {
