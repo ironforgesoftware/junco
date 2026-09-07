@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { runDashboard, INK_RENDER_OPTIONS } from "../src/dashboardCmd.js";
 import { dataTreePaths } from "../src/dataTree.js";
 import type { Config } from "../src/types.js";
+import { makeConfig, READ_ONLY_TOOLS } from "./helpers/config.js";
 
 const cfg = {
   dataDir: "/tmp/junco-dash-test",
@@ -24,6 +25,8 @@ const cfg = {
     plannerModelId: null,
     externalReposRoot: "/tmp/junco-test-external",
   },
+  // Ballast: runDashboard reads chat.maxFps for the Ink render options (D8).
+  chat: { maxFps: 60 },
 } as unknown as Config;
 
 describe("runDashboard", () => {
@@ -262,5 +265,55 @@ describe("INK_RENDER_OPTIONS (Ctrl-C must reach the hosted wizard/App handlers)"
     expect(src).toContain('import("./tui/localSnapshot.js")');
     expect(src).toContain("makeLocalCheapFn");
     expect(src).toContain("makeLocalHeavyFn");
+  });
+});
+
+// Spec 2026-09-06-chat-streaming-design.md §3.4 / D8: the per-frame flush
+// leans on Ink's own throttle, so the host renders at 60 fps by default and
+// `chat.maxFps` is the knob a slow terminal (the Pi 5) uses to drop back. The
+// FTUE path has no config yet, so it gets the constant's default.
+describe("runDashboard maxFps (spec 2026-09-06 §3.4, D8)", () => {
+  const fullCfg = makeConfig({
+    dataDir: "/sbxroot/junco-dash-fps",
+    queueRoot: "/sbxroot/junco-dash-fps/queue",
+    worktreeRoot: "/sbxroot/junco-dash-fps/worktrees",
+    tools: READ_ONLY_TOOLS,
+    criticEnabled: false,
+    planLintEnabled: false,
+    verifyEnabled: false,
+    supervisorEnabled: false,
+    healthEnabled: false,
+    removeWorktreeOnSuccess: false,
+  });
+
+  it("INK_RENDER_OPTIONS defaults to 60 fps", () => {
+    expect(INK_RENDER_OPTIONS.maxFps).toBe(60);
+  });
+
+  it("passes cfg.chat.maxFps through to the render options, keeping the host options", async () => {
+    const c: Config = { ...fullCfg, chat: { ...fullCfg.chat, maxFps: 30 } };
+    let seen: Record<string, unknown> | null = null;
+    const code = await runDashboard(c, "/x/config.json", {
+      isTTY: true,
+      renderFn: (_element, options) => {
+        seen = options;
+        return { waitUntilExit: async () => {} };
+      },
+    });
+    expect(code).toBe(0);
+    expect(seen).toEqual({ ...INK_RENDER_OPTIONS, maxFps: 30 });
+  });
+
+  it("a null config (FTUE) renders at the 60 fps default", async () => {
+    let seen: Record<string, unknown> | null = null;
+    const code = await runDashboard(null, "/x/config.json", {
+      isTTY: true,
+      renderFn: (_element, options) => {
+        seen = options;
+        return { waitUntilExit: async () => {} };
+      },
+    });
+    expect(code).toBe(0);
+    expect(seen).toEqual({ ...INK_RENDER_OPTIONS, maxFps: 60 });
   });
 });

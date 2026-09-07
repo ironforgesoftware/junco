@@ -42,11 +42,23 @@ export const INK_RENDER_OPTIONS = {
   // 2026-09-01-ink-render-perf-design.md, tier 2). Safe with useSuspend's
   // blank-frame handoff: tests/useSuspendTty.test.tsx pins the full repaint.
   incrementalRendering: true,
+  // Ink's own throttle bounds the paint rate; the chat's per-frame flush leans
+  // on it instead of a trailing timer, so 60 keeps the added latency ≤ 16 ms
+  // (spec 2026-09-06-chat-streaming-design.md §3.4, D8). `chat.maxFps` is the
+  // config knob to drop back on a slow terminal — merged in at render time.
+  maxFps: 60,
 } as const;
+
+/** The options object the host hands Ink: INK_RENDER_OPTIONS with `maxFps` widened to the config's. */
+export type InkRenderOptions = Omit<typeof INK_RENDER_OPTIONS, "maxFps"> & { maxFps: number };
 
 export interface DashboardDeps {
   isTTY?: boolean;
-  renderFn?: (element: React.ReactElement) => { waitUntilExit: () => Promise<void> };
+  /** Ink render seam; the second argument is what `ink.render` would receive (tests observe maxFps). */
+  renderFn?: (
+    element: React.ReactElement,
+    options: InkRenderOptions,
+  ) => { waitUntilExit: () => Promise<void> };
   printErr?: (s: string) => void;
   /** Config reload after the wizard writes one (FTUE handoff). Default: loadConfig. */
   loadConfigFn?: (p: string) => Config;
@@ -135,9 +147,15 @@ export async function runDashboard(
   ]);
   // INK_RENDER_OPTIONS is the single source of truth for the host options
   // (exitOnCtrlC:false is load-bearing — see the constant's doc); a no-op when
-  // non-interactive, and the TTY guard exits before this anyway.
+  // non-interactive, and the TTY guard exits before this anyway. Only maxFps
+  // varies: the config's `chat.maxFps` (D8), or the constant's default on the
+  // FTUE path where no config exists yet.
+  const renderOptions: InkRenderOptions = {
+    ...INK_RENDER_OPTIONS,
+    maxFps: cfg === null ? INK_RENDER_OPTIONS.maxFps : cfg.chat.maxFps,
+  };
   const renderFn =
-    deps.renderFn ?? ((el: React.ReactElement) => ink.render(el, INK_RENDER_OPTIONS));
+    deps.renderFn ?? ((el: React.ReactElement, opts: InkRenderOptions) => ink.render(el, opts));
 
   // The exact prop assembly that used to live inline — now per-config so the
   // FTUE handoff (and future config re-runs) rebuild the client stack fresh.
@@ -207,6 +225,7 @@ export async function runDashboard(
           },
         }),
       ),
+      renderOptions,
     );
     await instance.waitUntilExit();
     if (exitCode === 130) {
