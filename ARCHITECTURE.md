@@ -175,6 +175,16 @@ persists `message_update` (bus-only, like `runAgent`); `summarizeTranscript` fra
 as runs with `flow: "chat"`, and `extendSummary` folds one more line into a carried builder so
 the dashboard never re-reduces the ring per record.
 
+Freshness (#526): the session's cwd is a checked-out **working tree**, and nothing used to
+advance it — the chat could plan against a clone weeks behind the `origin/<base>` every ticket
+worktree is cut from (`worktree.ts:292`). `chat/chatCheckout.ts` fast-forwards on session OPEN
+only (`ChatManager.create`/`reopen` — never `reconcile()`, never mid-turn): `merge --ff-only`
+after a bounded fetch, refused outright for any path outside the clone roots junco owns (the
+`unwatchCmd.classifyClone` notion, re-asserted at the mutation the way `externalRepo.ts` guards
+its hard reset), and skipped on a dirty/detached/non-default/diverged tree. Every outcome —
+including every skip and `chat.fastForward: false` — is a `junco_chat_checkout` record naming
+the branch and HEAD, so the transcript states which commit the conversation reasoned about.
+
 Streaming (spec 2026-09-06): the raw `message_update` never reaches the bus either. Each turn
 owns a `LiveTurn` accumulator (`chat/liveTurn.ts`) that turns SDK events into three **bus-only**
 records — `junco_chat_delta` (one text/thinking chunk, tagged with the SDK's `contentIndex` and a
