@@ -33,12 +33,18 @@ describe("chat prompt (spec 2026-09-01 §6.5)", () => {
     expect(p).not.toContain("```junco-plan");
     expect(p).toMatch(/never claim/i);
   });
-  it("tells the model HOW a parked draft is submitted, so it points the operator at the card", () => {
+  it("tells the model HOW a parked draft is submitted, and names the route that works from the composer", () => {
     // Without this the model invents a workflow ("copy the fence into a file
     // and run junco submit") for a draft the dashboard already holds.
     const p = buildChatPrompt({ cwd: "/repo", nwo: "acme/api", planSetsEnabled: false });
-    expect(p).toMatch(/draft card[\s\S]*`s` submits/);
+    expect(p).toMatch(/draft card[\s\S]*`\/submit`/);
     expect(p).toMatch(/never tell them to copy/i);
+    // #524: it used to say "`s` submits", and the model repeated it — "press
+    // `s` on the draft card" is wrong from the state the operator reads the
+    // answer in, because the focused composer takes `s` as text. The card
+    // keys are still named, but only with what it takes to reach them.
+    expect(p).not.toMatch(/`s` submits/);
+    expect(p).toMatch(/`esc` first/);
   });
   it("teaches the junco-plan fence only when plan sets are on; a local session names its path", () => {
     const on = buildChatPrompt({ cwd: "/repo", nwo: null, planSetsEnabled: true });

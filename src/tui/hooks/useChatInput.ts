@@ -136,11 +136,19 @@ export function useChatInput({
   }, [closeChat, setView]);
 
   const chatHandlers = useMemo((): Record<string, () => void> => {
-    // The four draft verbs act on the card under the cursor; anywhere else in
-    // the transcript there is nothing to act on, so they say so rather than
-    // silently no-op (the review row's copies guard the same way).
+    // The four draft verbs act on the card under the cursor — or, when
+    // exactly ONE draft is parked, on that one wherever the cursor sits
+    // (#525): the cursor starts on no anchor, so `esc` then `s` used to toast
+    // and the `tab` in between was the least discoverable key in the
+    // sequence. This is `/submit`'s own resolution rule
+    // (draftStore.resolveDraftRef) with the cursor as a first choice: two or
+    // more parked and the cursor is the only thing that says which, so the
+    // toast stands and now carries real information. The junco_submit gate is
+    // untouched — while a card waits, the `chatConfirm` context's keymap is
+    // empty and no verb reaches this handler at all (spec 2026-09-03 §4.3).
+    const parked = chat?.drafts ?? [];
     const onDraft = (fn: (d: PendingDraft) => Promise<void>) => (): void => {
-      const d = selectedDraft();
+      const d = selectedDraft() ?? (parked.length === 1 ? parked[0]! : null);
       if (d) void fn(d);
       else showToast("info", "no draft under the cursor");
     };

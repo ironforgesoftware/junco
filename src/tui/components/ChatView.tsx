@@ -142,6 +142,10 @@ export const ChatView = React.memo(function ChatView(p: ChatViewProps): React.JS
     textWidth,
     p.highlight,
     state.key,
+    // #524: a parked draft card's verbs are inert while the composer holds
+    // the keys, so its action row follows the focus. Cheap as a memo input —
+    // focus changes on `i`/`esc`, never per keystroke or per stream flush.
+    state.composerFocused,
   );
   const liveRows = useLiveRows(state.live, textWidth, state.thinking.pinned, p.highlight);
   const rows = useMemo(() => concatRows(finished, liveRows), [finished, liveRows]);

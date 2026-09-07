@@ -64,6 +64,13 @@ export interface RenderOpts {
   markdown?: boolean;
   /** Code-fence highlighter for `markdown`; null/absent shows raw fences. */
   highlight?: HighlightFn | null;
+  /** The chat view's composer holds the keyboard (#524). A parked draft
+   * card's verbs are only reachable when it does NOT: focused, every one of
+   * them is swallowed as text by design (useChatInput's `composerFocused`
+   * branch), so a card that advertised `s submit` had the operator typing an
+   * `s`. Set, the card names the route that works from there instead.
+   * Absent/false — `junco transcript` and a blurred chat — keeps the keys. */
+  composerFocused?: boolean;
   /** Per-turn `MdCache`s keyed by `mdCacheKey(runIdx, turnIdx)`, owned by
    * the caller across renders so an unchanged finished turn is not re-typeset
    * on every call. Entries are dropped/revalidated by renderMarkdown itself
@@ -574,11 +581,21 @@ export function renderTranscriptRows(s: TranscriptSummary, o: RenderOpts): Trans
           break;
         case "draft": {
           const what = `${n.draftKind} · ${n.ids.join(", ") || n.draftId}`;
+          // #524: the card's action row says what is reachable from where the
+          // operator IS. Blurred, that is the four verbs. Focused, the ONLY
+          // route that needs no blur is the composer's own `/submit`; the
+          // rest are one `esc` away (and since #525 no `tab` after it while a
+          // single draft is parked). A lint-failed draft cannot be submitted
+          // at all, so neither of its rows offers the command.
+          const parkedKeys = o.composerFocused
+            ? "/submit · esc then s/e/r/D"
+            : "s submit · e edit · r route · D discard";
+          const lintKeys = o.composerFocused ? "esc then e/D" : "e edit · D discard";
           const text =
             n.status === "parked"
-              ? `   ▣ draft parked · ${what} — s submit · e edit · r route · D discard`
+              ? `   ▣ draft parked · ${what} — ${parkedKeys}`
               : n.status === "lint_failed"
-                ? `   ▣ draft parked (lint failed) · ${what} — e edit · D discard`
+                ? `   ▣ draft parked (lint failed) · ${what} — ${lintKeys}`
                 : n.status === "submitted"
                   ? `   ▣ draft submitted → ${n.destination ?? "?"} · ${what}`
                   : `   ▣ draft discarded · ${what}`;

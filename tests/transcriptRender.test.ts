@@ -30,10 +30,18 @@ import {
   v2RunLines as v2Lines,
 } from "./helpers/transcriptFixtures.js";
 
-const opts = (over: { width?: number; pinned?: boolean; expanded?: Set<string> } = {}) => ({
+const opts = (
+  over: {
+    width?: number;
+    pinned?: boolean;
+    expanded?: Set<string>;
+    composerFocused?: boolean;
+  } = {},
+) => ({
   width: over.width ?? 80,
   pinned: over.pinned ?? false,
   expanded: over.expanded ?? new Set<string>(),
+  ...(over.composerFocused === undefined ? {} : { composerFocused: over.composerFocused }),
 });
 
 const run = (over: Partial<RunSummary> = {}): RunSummary => ({
@@ -592,6 +600,41 @@ describe("chat rows (spec 2026-09-01 §1.3)", () => {
     expect(rows[0]!.text).toContain("turn rejected: rate limited");
     expect(rows.some((r) => r.text.startsWith("── run"))).toBe(false);
   });
+  // #524: the card advertised `s submit · e edit · r route · D discard`
+  // unconditionally, but while the composer holds the keys every one of them
+  // is swallowed as text — pressing `s` typed an `s`. The row now names the
+  // route that works from where the operator actually is.
+  it("a parked card names the composer's route while the composer holds the keys", () => {
+    const s = summarizeTranscript([
+      metaLine(),
+      chatPrompt(),
+      chatTurnStart(),
+      agentStart(),
+      agentEnd(),
+      chatTurnEnd(),
+      chatDraft(),
+      chatDraft({ draftId: "d2", status: "lint_failed" }),
+    ]);
+    const blurred = renderTranscriptRows(s, opts({ width: 100 })).filter((r) =>
+      r.anchor?.startsWith("draft:"),
+    );
+    expect(blurred[0]!.text).toContain("— s submit · e edit · r route · D discard");
+    expect(blurred[1]!.text).toContain("— e edit · D discard");
+    const focused = renderTranscriptRows(s, opts({ width: 100, composerFocused: true })).filter(
+      (r) => r.anchor?.startsWith("draft:"),
+    );
+    // `/submit` is the one route that works WITHOUT leaving the composer;
+    // everything else is `esc` away. A lint-failed draft cannot be submitted
+    // at all, so its row never offers the command.
+    expect(focused[0]!.text).toContain("— /submit · esc then s/e/r/D");
+    expect(focused[0]!.text).not.toContain("s submit");
+    expect(focused[1]!.text).toContain("— esc then e/D");
+    expect(focused[1]!.text).not.toContain("/submit");
+    // The identity half of the card is untouched, and so is every other note.
+    expect(focused[0]!.text).toContain("draft parked · ticket · add-cache");
+    expect(focused[1]!.tone).toBe("warn");
+  });
+
   it("draft note text and tone vary by status; destination shown once submitted", () => {
     const s = summarizeTranscript([
       metaLine(),
