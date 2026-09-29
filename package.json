@@ -59,7 +59,7 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.99.1",
     "ink": "7.1.1",
     "react": "19.2.8",
     "yaml": "2.9.0",
